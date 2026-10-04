@@ -287,13 +287,12 @@ This project is a Rust workspace plus a Tauri manager and a Vite/React frontend.
 ### Install Dependencies
 
 ```bash
-npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 ```
 
-Each package installs its own dependencies; use `npm ci` when a matching lockfile exists. CI currently uses `npm install --package-lock=false`.
+Use `npm ci` when a matching lockfile exists. CI currently uses `npm install --package-lock=false`.
 
-The manager's `vite:build` and `dev` scripts first run the in-repo workflow package's `check`, `test`, and `build`, then start the Vite build or Tauri; `build` goes through `vite:build` via Tauri's `beforeBuildCommand`. Browser-only `vite:dev` stays independent. Normal builds never install dependencies over the network. The workflow uses vendored in-repo source and does not depend on an external Multica checkout. **Before running Cargo build or test directly, run the manager's `vite:build`** to generate `apps/codex-workflow-surface/dist/codex-workflow-surface.js` and `.css`, which core embeds with `include_str!`.
+The manager's `vite:build` first runs `renderer:test` (tests for the injected Codex page-host probe) and then the Vite build; `dev` starts Tauri directly; `build` goes through `vite:build` via Tauri's `beforeBuildCommand`. Browser-only `vite:dev` stays independent. Normal builds never install dependencies over the network.
 
 ### Start Local Development
 
@@ -311,7 +310,6 @@ Before committing:
 
 ```bash
 node scripts/release/verify-release-workflow.js
-node --test scripts/release/stage-multica-notices.test.mjs
 npm --prefix apps/claude-codex-pro-manager run check
 npm --prefix apps/claude-codex-pro-manager run vite:build
 cargo fmt --check
@@ -341,7 +339,6 @@ The main artifact is `target/release/claude-codex-pro.exe` (no `.exe` suffix on 
 ### Windows Installer
 
 ```powershell
-npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run check
 npm --prefix apps/claude-codex-pro-manager run vite:build
@@ -350,7 +347,6 @@ cargo build --release
 
 New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
 
 $version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -360,19 +356,16 @@ Push-Location scripts/installer/windows
 Pop-Location
 ```
 
-Output: `dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe`. The ZIP / NSIS staging directory contains `resources/third-party/multica/LICENSE` and `NOTICE`, byte-for-byte identical to `docs/third-party/multica/`. The MSI uses `scripts/installer/windows/tauri-msi.conf.json` to map the same license files and keep Leila resources; run this in the manager directory:
+Output: `dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe`. The MSI uses `scripts/installer/windows/tauri-msi.conf.json` to keep the Leila resources; run this in the manager directory:
 
 ```bash
 npm exec tauri build -- --bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json
 ```
 
-Shipping the license files does not replace upstream commercial licensing requirements.
-
 ### macOS DMG
 
 ```bash
 # Apple Silicon
-npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add aarch64-apple-darwin
@@ -382,7 +375,7 @@ BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/mac
 # Intel Mac: replace aarch64-apple-darwin with x86_64-apple-darwin and the last argument with x64
 ```
 
-Output: `dist/macos/claude-codex-pro-0.12-macos-arm64.dmg` (`-macos-x64.dmg` for Intel). The local script uses ad-hoc codesign and does not do Apple Developer ID signing or notarization, so a local DMG may trigger Gatekeeper; allow it manually as described in the FAQ. Before signing, the DMG script places the complete Multica `LICENSE` / `NOTICE` under `.app/Contents/Resources/third-party/multica/` and verifies they match the originals after signing.
+Output: `dist/macos/claude-codex-pro-0.12-macos-arm64.dmg` (`-macos-x64.dmg` for Intel). The local script uses ad-hoc codesign and does not do Apple Developer ID signing or notarization, so a local DMG may trigger Gatekeeper; allow it manually as described in the FAQ.
 
 ### GitHub Actions
 
@@ -398,7 +391,6 @@ Automatic release: push to `main` -> `scripts/release/next-release-tag.js` reads
 apps/
   claude-codex-pro-launcher/          internal launcher library
   claude-codex-pro-manager/           unified Tauri app and manager (React/Vite frontend + Rust backend)
-  codex-workflow-surface/             source of the Codex embedded workflow pages
 assets/inject/
   renderer-inject.js                  Codex enhancement script
   claude-chinese-inject.js            Claude Chinese wrapper window script

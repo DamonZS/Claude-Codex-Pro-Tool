@@ -1,12 +1,12 @@
-pub mod types;
+pub mod actions;
 pub mod backend;
 pub mod find;
-pub mod actions;
 pub mod keyboard;
+pub mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use types::*;
 pub use backend::*;
 pub use find::*;
+pub use types::*;

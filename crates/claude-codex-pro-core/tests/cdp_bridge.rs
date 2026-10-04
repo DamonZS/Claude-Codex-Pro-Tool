@@ -269,8 +269,6 @@ fn injection_script_exposes_contact_tab_with_qq_groups_and_wechat_qr() {
     assert!(script.contains("data-claude-codex-pro-setting"));
     assert!(script.contains("data-codex-backend-status"));
     assert!(script.contains("data-codex-backend-repair"));
-    assert!(script.contains("codex_native_projects"));
-    assert!(script.contains("isCodexNativeProjectsRoute"));
 }
 
 #[test]

@@ -287,13 +287,12 @@ sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ 管理工�
 ### 安装依赖
 
 ```bash
-npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 ```
 
-两个包分别安装依赖；存在匹配的 lockfile 时可使用 `npm ci`，CI 目前使用 `npm install --package-lock=false`。
+存在匹配的 lockfile 时可使用 `npm ci`，CI 目前使用 `npm install --package-lock=false`。
 
-管理器的 `vite:build` 和 `dev` 会先运行仓库内 workflow 包的 `check`、`test`、`build`，再启动 Vite 构建或 Tauri；`build` 经 Tauri 的 `beforeBuildCommand` 走 `vite:build`。纯浏览器预览的 `vite:dev` 保持独立。普通构建不自动联网安装依赖。workflow 使用仓库内 vendored 源码，不依赖外部 Multica checkout。**直接运行 Cargo 编译或测试前，先运行管理器的 `vite:build`**，生成 core 通过 `include_str!` 嵌入的 `apps/codex-workflow-surface/dist/codex-workflow-surface.js` 和 `.css`。
+管理器的 `vite:build` 会先运行 `renderer:test`（Codex 页面宿主探测的注入脚本测试），再执行 Vite 构建；`dev` 直接启动 Tauri；`build` 经 Tauri 的 `beforeBuildCommand` 走 `vite:build`。纯浏览器预览的 `vite:dev` 保持独立。普通构建不自动联网安装依赖。
 
 ### 本地开发启动
 
@@ -311,7 +310,6 @@ npm run vite:dev   # 只调试前端页面
 
 ```bash
 node scripts/release/verify-release-workflow.js
-node --test scripts/release/stage-multica-notices.test.mjs
 npm --prefix apps/claude-codex-pro-manager run check
 npm --prefix apps/claude-codex-pro-manager run vite:build
 cargo fmt --check
@@ -341,7 +339,6 @@ cargo build --release
 ### Windows 安装包
 
 ```powershell
-npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run check
 npm --prefix apps/claude-codex-pro-manager run vite:build
@@ -350,7 +347,6 @@ cargo build --release
 
 New-Item -ItemType Directory -Force dist/windows/app | Out-Null
 Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
 
 $version = "0.12"
 $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -360,19 +356,16 @@ Push-Location scripts/installer/windows
 Pop-Location
 ```
 
-输出 `dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe`。ZIP / NSIS 的暂存目录包含 `resources/third-party/multica/LICENSE` 与 `NOTICE`，内容与 `docs/third-party/multica/` 原文逐字节一致。MSI 使用 `scripts/installer/windows/tauri-msi.conf.json` 映射相同许可文件并保留 Leila 资源，在管理器目录运行：
+输出 `dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe`。MSI 使用 `scripts/installer/windows/tauri-msi.conf.json` 保留 Leila 资源，在管理器目录运行：
 
 ```bash
 npm exec tauri build -- --bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json
 ```
 
-许可文件随包提供不替代上游商业许可要求。
-
 ### macOS DMG
 
 ```bash
 # Apple Silicon
-npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add aarch64-apple-darwin
@@ -382,7 +375,7 @@ BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/mac
 # Intel Mac：把 aarch64-apple-darwin 换成 x86_64-apple-darwin，最后一个参数换成 x64
 ```
 
-输出 `dist/macos/claude-codex-pro-0.12-macos-arm64.dmg`（Intel 为 `-macos-x64.dmg`）。本地脚本使用 ad-hoc codesign，不做 Apple Developer ID 签名或公证，本地 DMG 可能被 Gatekeeper 提示，按上文常见问题手动允许。DMG 脚本在签名前将完整 Multica `LICENSE` / `NOTICE` 放入 `.app/Contents/Resources/third-party/multica/`，并在签名后校验原文一致。
+输出 `dist/macos/claude-codex-pro-0.12-macos-arm64.dmg`（Intel 为 `-macos-x64.dmg`）。本地脚本使用 ad-hoc codesign，不做 Apple Developer ID 签名或公证，本地 DMG 可能被 Gatekeeper 提示，按上文常见问题手动允许。
 
 ### GitHub Actions
 
@@ -398,7 +391,6 @@ BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/mac
 apps/
   claude-codex-pro-launcher/          内部 launcher 库
   claude-codex-pro-manager/           统一 Tauri 主程序与管理工具（React/Vite 前端 + Rust 后端）
-  codex-workflow-surface/             Codex 内嵌工作流页面源码
 assets/inject/
   renderer-inject.js                  Codex 增强脚本
   claude-chinese-inject.js            Claude 中文包装窗口脚本

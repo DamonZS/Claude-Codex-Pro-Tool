@@ -4,45 +4,44 @@
 //! interface for element discovery, interaction, and screenshot capture.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 
 #[cfg(target_os = "windows")]
-use windows::core::BSTR;
-#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 #[cfg(target_os = "windows")]
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoIncrementMTAUsage, CoInitializeEx, CoUninitialize,
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, SAFEARRAY,
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoIncrementMTAUsage,
+    CoInitializeEx, CoUninitialize, SAFEARRAY,
 };
 use windows::Win32::System::Ole::{
-    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound,
-    SafeArrayGetUBound,
+    SafeArrayDestroy, SafeArrayGetDim, SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
 };
 use windows::Win32::System::Variant::VariantToInt32Array;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_Full, CUIAutomation, CUIAutomation8, IUIAutomation,
-    IUIAutomationCacheRequest, IUIAutomationElement,
-    TreeScope, TreeScope_Subtree, UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
-    UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_RuntimeIdPropertyId, UIA_PROPERTY_ID,
+    IUIAutomationCacheRequest, IUIAutomationElement, TreeScope, TreeScope_Subtree,
+    UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ControlTypePropertyId,
+    UIA_NamePropertyId, UIA_PROPERTY_ID, UIA_RuntimeIdPropertyId,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::HiDpi::{
-    SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
     IsWindowVisible,
 };
+#[cfg(target_os = "windows")]
+use windows::core::BSTR;
 
 use super::types::*;
 
@@ -124,7 +123,7 @@ fn is_foreground_window(hwnd: HWND) -> bool {
 
 #[cfg(target_os = "windows")]
 fn focus_window_impl(hwnd: HWND) -> Result<()> {
-    use windows::Win32::UI::WindowsAndMessaging::{SetForegroundWindow, ShowWindow, SW_RESTORE};
+    use windows::Win32::UI::WindowsAndMessaging::{SW_RESTORE, SetForegroundWindow, ShowWindow};
 
     unsafe {
         // Restore if minimized
@@ -520,18 +519,16 @@ impl WindowsUiaBackend {
         }
     }
 
-    pub fn find_elements(
-        &self,
-        hwnd: usize,
-        params: &FindParams,
-    ) -> Result<Vec<UiElement>> {
+    pub fn find_elements(&self, hwnd: usize, params: &FindParams) -> Result<Vec<UiElement>> {
         #[cfg(target_os = "windows")]
         {
             ensure_com();
 
             // Get the tree and search in-memory
             let tree = self.get_tree(hwnd)?;
-            Ok(crate::claude_desktop_computer_use::uia::find::find_in_tree(&tree, params, 100))
+            Ok(crate::claude_desktop_computer_use::uia::find::find_in_tree(
+                &tree, params, 100,
+            ))
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -539,7 +536,6 @@ impl WindowsUiaBackend {
             Err(anyhow!("Windows UIA backend is only available on Windows"))
         }
     }
-
 
     pub fn focus_window(&self, hwnd: usize) -> Result<()> {
         #[cfg(target_os = "windows")]

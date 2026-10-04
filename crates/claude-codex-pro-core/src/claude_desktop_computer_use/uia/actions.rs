@@ -6,21 +6,20 @@
 //! - Send keyboard input
 //! - Toggle/expand/select operations
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
-#[cfg(target_os = "windows")]
-use windows::core::BSTR;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Accessibility::{
-    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
-    IUIAutomationRangeValuePattern, IUIAutomationSelectionItemPattern,
-    IUIAutomationTogglePattern, IUIAutomationValuePattern, UIA_ExpandCollapsePatternId,
-    UIA_InvokePatternId, UIA_RangeValuePatternId, UIA_SelectionItemPatternId,
-    UIA_TogglePatternId, UIA_ValuePatternId,
+    IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern, IUIAutomationRangeValuePattern,
+    IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
+    UIA_ExpandCollapsePatternId, UIA_InvokePatternId, UIA_RangeValuePatternId,
+    UIA_SelectionItemPatternId, UIA_TogglePatternId, UIA_ValuePatternId,
 };
+#[cfg(target_os = "windows")]
+use windows::core::BSTR;
 
 use super::backend::WindowsUiaBackend;
-use super::keyboard::{clear_text_field, send_unicode_text, KeyboardTiming};
+use super::keyboard::{KeyboardTiming, clear_text_field, send_unicode_text};
 
 impl WindowsUiaBackend {
     /// Click an element using InvokePattern
@@ -68,7 +67,9 @@ impl WindowsUiaBackend {
 
             // Fallback to keyboard input
             unsafe {
-                element.SetFocus().context("Failed to focus element for keyboard input")?;
+                element
+                    .SetFocus()
+                    .context("Failed to focus element for keyboard input")?;
             }
 
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -199,7 +200,9 @@ impl WindowsUiaBackend {
                 let pattern: IUIAutomationRangeValuePattern = element
                     .GetCurrentPatternAs(UIA_RangeValuePatternId)
                     .context("Element does not support RangeValue pattern")?;
-                pattern.SetValue(value).context("Failed to set range value")?;
+                pattern
+                    .SetValue(value)
+                    .context("Failed to set range value")?;
             }
             Ok(())
         }
@@ -236,7 +239,9 @@ mod tests {
         let tree = backend.get_tree(hwnd_usize).unwrap();
 
         // Find File menu (usually first MenuItem)
-        let menu_item = tree.children.iter()
+        let menu_item = tree
+            .children
+            .iter()
             .find(|c| matches!(c.element_type, super::super::types::ElementType::MenuItem))
             .expect("No MenuItem found");
 
@@ -271,7 +276,9 @@ mod tests {
         let hwnd_usize = notepad_window.hwnd;
         let tree = backend.get_tree(hwnd_usize).unwrap();
 
-        let edit = tree.children.iter()
+        let edit = tree
+            .children
+            .iter()
             .find(|c| matches!(c.element_type, super::super::types::ElementType::Edit))
             .expect("No Edit found");
 
@@ -282,7 +289,9 @@ mod tests {
 
         // Re-fetch tree to verify
         let tree2 = backend.get_tree(hwnd_usize).unwrap();
-        let edit2 = tree2.children.iter()
+        let edit2 = tree2
+            .children
+            .iter()
             .find(|c| matches!(c.element_type, super::super::types::ElementType::Edit))
             .unwrap();
 

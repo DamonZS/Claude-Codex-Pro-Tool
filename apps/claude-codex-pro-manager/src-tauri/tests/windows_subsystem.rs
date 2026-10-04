@@ -85,25 +85,6 @@ fn codex_launcher_reuses_existing_manager_helper_before_binding() {
     assert!(launcher[reuse..return_ok].contains("helper.reused_existing_listener"));
 }
 
-#[test]
-fn multica_saved_issue_views_have_local_cache_fallback_and_validation() {
-    let renderer = include_str!("../../../../assets/inject/renderer-inject.js");
-    assert!(renderer.contains("ccp.multica.issue-views.v1"));
-    assert!(renderer.contains("multicaWorkspaceNormalizeSavedIssueView"));
-    assert!(renderer.contains("JSON.parse(window.localStorage.getItem(multicaWorkspaceSavedIssueViewsStorageKey) || \"[]\")"));
-    assert!(renderer.contains("控制面未连接"));
-    assert!(renderer.contains("已保存到本机缓存"));
-    assert!(renderer.contains("multicaWorkspaceLoadSavedIssueViewsFromCache();"));
-    assert!(renderer.contains(
-        "multicaWorkspaceWriteSavedIssueViewsCache(multicaWorkspaceState.savedIssueViews)"
-    ));
-    assert!(renderer.contains("multicaWorkspaceWriteSavedIssueViewsCache(mergedViews)"));
-    assert!(renderer.contains("const controlPlaneViews = items.map"));
-    assert!(renderer.contains("const cachedViews = multicaWorkspaceReadSavedIssueViewsCache();"));
-    assert!(renderer.contains("view.id === cached.id || view.name === cached.name"));
-    assert!(renderer.contains("本机视图缓存不可写，任务仍可正常查看和编辑"));
-}
-
 /// 读取拆分后某个前端源文件的完整内容（相对 `src/`），用于结构化断言。
 fn normalize_source(source: String) -> String {
     source.replace("\r\n", "\n").replace('\r', "\n")
@@ -175,42 +156,6 @@ fn manager_startup_does_not_launch_claude_desktop_proxy() {
     assert!(!setup.contains("ensure_claude_desktop_proxy_on_startup"));
     assert!(commands.contains("pub async fn open_claude_desktop"));
     assert!(commands.contains("ensure_claude_desktop_proxy_helper().await"));
-}
-
-#[test]
-fn manager_startup_restores_only_user_configured_multica_sidecars() {
-    let lib = include_str!("../src/lib.rs");
-    let setup = source_section(lib, ".setup(move |app| {", ".on_window_event");
-
-    let compact_setup = setup
-        .split_whitespace()
-        .collect::<String>()
-        .replace(",)", ")");
-    assert!(compact_setup.contains("ensure_detached_helper(commands::DEFAULT_HELPER_PORT).await"));
-    assert!(setup.contains("manager.helper.detached_ready"));
-    assert!(setup.contains("manager.helper.detached_failed"));
-    assert!(setup.contains("start_auto_start_sidecars"));
-    assert!(!setup.contains("ensure_managed_runtime_async"));
-    assert!(!setup.contains("start_managed_runtime_supervision_if_enabled"));
-    assert!(!setup.contains("managed_runtime_install_is_startable"));
-}
-
-#[test]
-fn manager_navigation_hides_legacy_multica_runtime_page() {
-    let routes = read_frontend_file("lib/routes.ts");
-    let app = read_frontend_file("App.tsx");
-    let screens = read_screens_with_supplier();
-    let visible_routes = source_section(
-        &routes,
-        "export const routes: RouteItem[] = [",
-        "export const compatibilityRoutes",
-    );
-
-    assert!(!visible_routes.contains("id: \"multica\""));
-    assert!(routes.contains("value === \"logs\" || value === \"multica\""));
-    assert!(!app.contains("route === \"multica\""));
-    assert!(!app.contains("<MulticaRuntimeScreen"));
-    assert!(!screens.contains("[\"本地工作流\", \"multicaWorkspaceEnabled\"]"));
 }
 
 #[test]
@@ -743,9 +688,12 @@ fn github_auto_release_workflow_builds_installers_with_v0_tags() {
     assert!(workflow.contains("cargo build --release --target \"${{ matrix.target }}\""));
     assert!(pr_build.contains("run: npm run check"));
     assert!(pr_build.contains("run: npm run vite:build"));
-    assert!(pr_build.contains("cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open"));
+    assert!(
+        pr_build
+            .contains("cargo test -p claude-codex-pro-core --test cdp_bridge --test bridge_routes")
+    );
     assert!(!pr_build.contains("cargo test --workspace"));
-    assert!(pr_build.contains("stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica"));
+    assert!(!pr_build.contains("multica"));
     assert!(pr_build.contains("run: cargo build --release"));
     assert!(pr_build.contains("cargo build --release --target \"${{ matrix.target }}\""));
     assert!(workflow.contains("Copy-Item target/release/claude-codex-pro.exe"));
@@ -4131,7 +4079,6 @@ fn audit_remediation_frontend_contracts_are_locked_down() {
     assert!(screens.contains("value={visibleHeaderOverride}"));
     assert!(screens.contains("value={visibleBodyOverride}"));
     assert!(screens.contains("readOnly={!showSupplierApiKey}"));
-    assert!(screens.contains("role=\"alert\""));
 }
 
 #[test]
@@ -4973,7 +4920,6 @@ fn settings_and_tools_route_keep_full_ops_controls() {
     assert!(app_tsx.contains("诊断日志：${logPath}"));
     assert!(app_tsx.contains("ops-form-field"));
     assert!(app_tsx.contains("ToggleSwitch"));
-    assert!(app_tsx.contains("ops-toggle-line"));
     assert!(app_tsx.contains("ops-textarea"));
 
     assert!(styles.contains(".ops-two-column"));
@@ -5224,92 +5170,4 @@ fn credential_environment_ui_describes_platform_scope_and_external_source_bounda
     assert!(screens.contains("不会删除 auth.json 凭据"));
     assert!(screens.contains("用户会话环境暂不可访问"));
     assert!(screens.contains("CCP 外部启动环境，需在原设置来源中清理"));
-}
-
-#[test]
-fn multica_runtime_adapter_keeps_its_ipc_boundary_isolated_and_task_views_read_only() {
-    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let manager_lib = read_source_file(&manifest_dir.join("src/lib.rs"));
-    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
-    let screens = read_screens_with_supplier();
-    let command_registration = source_section(&manager_lib, "tauri::generate_handler![", "])");
-    let multica_commands = source_section(
-        &commands,
-        "#[tauri::command]\npub async fn list_multica_connections",
-        "#[tauri::command]\npub async fn list_local_sessions",
-    );
-
-    let managed_registered = [
-        "commands::get_multica_managed_runtime",
-        "commands::ensure_multica_runtime",
-        "commands::cancel_multica_runtime_install",
-        "commands::rollback_multica_runtime",
-        "commands::login_multica_managed",
-        "commands::logout_multica_managed",
-        "commands::set_multica_managed_enabled",
-        "commands::save_multica_managed_connection",
-        "commands::check_multica_managed_runtime",
-        "commands::start_multica_managed_runtime",
-        "commands::stop_multica_managed_runtime",
-        "commands::restart_multica_managed_runtime",
-    ];
-    let manual_registered = [
-        "commands::list_multica_connections",
-        "commands::save_multica_connection",
-        "commands::delete_multica_connection",
-        "commands::check_multica_connection",
-        "commands::get_multica_snapshot",
-        "commands::start_multica_sidecar",
-        "commands::stop_multica_sidecar",
-        "commands::restart_multica_sidecar",
-    ];
-    for command in managed_registered.into_iter().chain(manual_registered) {
-        assert_eq!(
-            command_registration.matches(command).count(),
-            1,
-            "Multica IPC command must be registered exactly once: {command}"
-        );
-    }
-    assert_eq!(
-        command_registration
-            .lines()
-            .filter(|line| line.contains("commands::") && line.contains("multica_"))
-            .count(),
-        20,
-        "only the approved managed and manual Multica IPC commands may be registered"
-    );
-
-    for forbidden in [
-        "switch_relay_profile",
-        "switch_supplier_profile",
-        "save_settings",
-        "config.toml",
-        "auth.json",
-        "launch_claude_codex_pro",
-        "restart_claude_codex_pro",
-        "launch_claude_desktop",
-        "127.0.0.1:57321",
-        "127.0.0.1:57331",
-    ] {
-        assert!(
-            !multica_commands.contains(forbidden),
-            "Multica command boundary must not reach CCP relay, supplier, client, or proxy state: {forbidden}"
-        );
-    }
-
-    assert!(screens.contains("export function MulticaRuntimeScreen"));
-    assert!(screens.contains("只读显示最近一次外部状态"));
-    assert!(screens.contains("不影响供应商、代理、Codex、Claude"));
-    for forbidden in [
-        "create_multica_task",
-        "cancel_multica_task",
-        "retry_multica_task",
-        "update_multica_task",
-        "delete_multica_task",
-    ] {
-        assert!(
-            !screens.contains(forbidden),
-            "Multica Runtime must not expose a Task write operation: {forbidden}"
-        );
-    }
 }

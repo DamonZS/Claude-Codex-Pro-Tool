@@ -26,7 +26,6 @@ indexing_slicing = "warn"
 [workspace.dependencies]
 anyhow = "1"
 base64 = "0.22"
-croner = "4.0"
 chrono-tz = "0.10"
 directories = "6"
 fs2 = "0.4"

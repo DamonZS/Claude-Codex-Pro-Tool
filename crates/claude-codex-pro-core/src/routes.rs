@@ -336,14 +336,7 @@ pub async fn handle_bridge_request(
         }
     };
 
-    let mut response = result.unwrap_or_else(|error| failed_from_error(&payload, error));
-    if path == "/multica/workspace/query"
-        && response.get("status").and_then(Value::as_str).is_none()
-    {
-        if let Some(object) = response.as_object_mut() {
-            object.insert("status".to_string(), json!("ok"));
-        }
-    }
+    let response = result.unwrap_or_else(|error| failed_from_error(&payload, error));
     if ctx.diagnostics_enabled {
         let _ = crate::diagnostic_log::append_diagnostic_log(
             "bridge.response",
@@ -355,20 +348,6 @@ pub async fn handle_bridge_request(
         );
     }
     response
-}
-
-pub const NATIVE_CONTINUE_PROMPT: &str =
-    "继续完成当前任务，检查剩余工作并完成验证；若已全部完成，简要确认结果。";
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct NativeExecutionIntentRequest {
-    pub workspace_id: String,
-    pub thread_id: String,
-    pub intent: String,
-    pub idempotency_key: String,
-    #[serde(default)]
-    pub prompt: Option<String>,
 }
 
 #[derive(Default)]
@@ -465,9 +444,9 @@ impl CoreRuntimeService {
         self
     }
 
-    /// Attach the current Codex page's native execution adapter used by the
-    /// Multica workspace. The bridge never registers or starts a Codex
-    /// runtime; production callers must provide the already-open page host.
+    /// Attach the current Codex page's native execution adapter. The bridge
+    /// never registers or starts a Codex runtime; production callers must
+    /// provide the already-open page host.
     pub fn with_codex_execution_service(mut self, service: Arc<dyn CodexExecutionService>) -> Self {
         self.codex_execution = Some(service);
         self
