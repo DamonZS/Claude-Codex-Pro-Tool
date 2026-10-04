@@ -49,7 +49,7 @@
 
 **适合你，如果你：**
 
-- 同时用 Codex、Claude Code、Claude Desktop、Cursor 等多个 AI 编程工具，想知道钱和 Token 去哪了。
+- 同时用 Codex、Claude Code、Claude Desktop、Workbuddy、Cursor 等多个 AI 编程工具，想知道钱和 Token 去哪了。
 - 要在多个 API 中转或兼容 OpenAI / Anthropic 协议的供应商之间来回切换。
 - 想把反复踩的坑和成熟流程沉淀成 Skill，而不是每次重新解释。
 - 希望功能真实可验证，不想要“按钮看起来有、实际没实现”。
@@ -109,7 +109,7 @@ experimental_bearer_token = "sk-..."
 
 ### 蒸馏工作台：把会话变成资产
 
-从本机 Codex 与 Claude 的历史会话里提炼可复用的东西，交互与处理逻辑对齐 AITracker 的蒸馏模块（已获版权方授权），界面使用 CCP 液态玻璃风格。
+从本机 Codex 与 Claude 的历史会话里提炼可复用的东西，交互与处理逻辑对齐 AITracker 的蒸馏模块（Copyright (C) 2026 AITracker contributors，已获版权方授权），界面使用 CCP 液态玻璃风格。
 
 - **选素材**：快速模式按会话或按项目勾选，可按今天 / 近 7 天 / 近 30 天 / 全部过滤；高级模式在素材库里跨会话框选消息区间。
 - **读真实对话**：选中整场会话或整个项目时，模型读到的是对话正文（不含推理块），不是只有标题和轮数。
@@ -204,27 +204,7 @@ experimental_bearer_token = "sk-..."
 
 ## 界面预览
 
-管理工具的全部页面：概览（总览 / Agent 概览）、供应商与路由、蒸馏工作台、主题中心、系统提示词、会话、插件 Skills 与 MCP、设置（含 Computer Use）。上方已展示最新的四个页面，其余页面如下，个别截图可能早于最近的界面更新。
-
-<details>
-<summary>展开更多页面截图</summary>
-
-<table>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="供应商与路由" width="100%"></a><br><sub>供应商与路由</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/clients.png"><img src="docs/screenshots/clients.png" alt="客户端与增强" width="100%"></a><br><sub>客户端与增强</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/themes.png"><img src="docs/screenshots/themes.png" alt="主题中心" width="100%"></a><br><sub>主题中心</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="系统提示词" width="100%"></a><br><sub>系统提示词</sub></td>
-  </tr>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话管理" width="100%"></a><br><sub>会话管理</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="插件、Skills 与 MCP" width="100%"></a><br><sub>插件、Skills 与 MCP</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="维护与诊断" width="100%"></a><br><sub>维护与诊断</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="设置" width="100%"></a><br><sub>设置</sub></td>
-  </tr>
-</table>
-
-</details>
+上方四张图分别是总览、Agent 概览、蒸馏工作台、插件 Skills 与 MCP。完整页面包括：概览（总览 / Agent 概览）、供应商与路由、蒸馏工作台、主题中心、系统提示词、会话、插件 Skills 与 MCP、设置（含 Computer Use）。
 
 ## 安全与隐私
 
@@ -259,12 +239,6 @@ experimental_bearer_token = "sk-..."
 | 蒸馏任务与候选 | `~/.claude-codex-pro/aitracker/` |
 | Provider Sync 备份 | `~/.codex/backups_state/provider-sync` |
 
-## 第三方组件说明
-
-本仓库仍随附 Multica 上游的“我的任务”“自动化”“智能体”三个页面的源码、本地控制面和 Codex 页面 Host 适配层，但这三个入口目前**不再注入** Codex 侧边栏（见提交 `fbed6fc`）。保留的代码仅通过 Codex 原生 task/thread/subagent 工作，不启动 Multica server/daemon/CLI，也不注册第二个 Codex Runtime 或模型执行器。派生 UI 保留 Multica 产品名、Logo、版权及归属信息；完整 [`LICENSE`](docs/third-party/multica/LICENSE) 和 [`NOTICE`](docs/third-party/multica/NOTICE) 随发行物提供。上游版本、来源和集成边界见 [`docs/multica-attribution.md`](docs/multica-attribution.md) 与 [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md)；保留品牌和归属不替代上游商业许可要求。
-
-蒸馏工作台的交互与处理逻辑参考 AITracker（Copyright (C) 2026 AITracker contributors，已获授权使用）。Ponytail 来自 [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)。
-
 ## 常见问题
 
 ### Codex 里没有看到增强标识
@@ -284,9 +258,6 @@ Codex 模型菜单、可见模型和当前选择均由 Codex 原生客户端管�
 
 ### 插件安装失败
 先打开安装预览确认类型：Claude 官方插件需要 `claude` CLI；Claude Desktop MCP 需要写入 `claude_desktop_config.json`；Claude Desktop 本地组织插件需要开发模式和目录写入权限；Codex 插件需要 `codex` CLI；Ponytail hooks 需要单独审查和信任；社区 MCP 和 Skill 需要结构可识别。
-
-### 为什么一个提交会出现两个 Actions？
-有两个 workflow 监听 `main` push：`Auto release installers` 构建并发布安装包，`PR build artifacts` 做日常构建校验。这不是发布两个版本。
 
 ### Release 里为什么只有 Source code？
 安装包构建 job 成功但发布 job 失败时，GitHub 页面只会显示自动生成的源码压缩包。查看 `Auto release installers` 的 `Publish release and latest.json` 步骤即可。

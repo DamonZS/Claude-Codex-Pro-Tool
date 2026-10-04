@@ -49,7 +49,7 @@
 
 **CCP is for you if you:**
 
-- Use Codex, Claude Code, Claude Desktop, Cursor, or other AI coding tools together and want to know where your tokens and money go.
+- Use Codex, Claude Code, Claude Desktop,Workbuddy, Cursor, or other AI coding tools together and want to know where your tokens and money go.
 - Switch between API relays or OpenAI/Anthropic-compatible providers.
 - Want to turn repeated lessons and proven workflows into Skills instead of re-explaining them.
 - Expect features to be observable and verifiable, not decorative buttons.
@@ -109,7 +109,7 @@ experimental_bearer_token = "sk-..."
 
 ### Distillation Workbench: Turn Sessions into Assets
 
-Extracts reusable assets from local Codex and Claude sessions. Interaction and processing logic follow AITracker's distillation module (used with the copyright holder's permission), with CCP's liquid-glass styling.
+Extracts reusable assets from local Codex and Claude sessions. Interaction and processing logic follow AITracker's distillation module (Copyright (C) 2026 AITracker contributors, used with the copyright holder's permission), with CCP's liquid-glass styling.
 
 - **Pick material:** quick mode selects by session or by project with Today / 7 d / 30 d / All filters; advanced mode lets you select message ranges across sessions in the material library.
 - **Reads the real conversation:** selecting a whole session or project sends the model the conversation body (reasoning blocks excluded), not just a title and turn count.
@@ -204,27 +204,7 @@ Launches Codex through an external launcher, handles CDP / helper connections au
 
 ## Screenshots
 
-Manager pages: Overview (total / per-agent), Providers & Routing, Distillation Workbench, Theme Center, System Prompts, Sessions, Plugins/Skills/MCP, and Settings (including Computer Use). The four newest pages are shown above; the rest are below, and some may predate recent UI updates.
-
-<details>
-<summary>Show more page screenshots</summary>
-
-<table>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="API providers and routing" width="100%"></a><br><sub>Providers &amp; Routing</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/clients.png"><img src="docs/screenshots/clients.png" alt="Codex and Claude clients" width="100%"></a><br><sub>Clients &amp; Enhancements</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/themes.png"><img src="docs/screenshots/themes.png" alt="Codex theme center" width="100%"></a><br><sub>Theme Center</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="Codex system prompt manager" width="100%"></a><br><sub>System Prompts</sub></td>
-  </tr>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="Session management" width="100%"></a><br><sub>Sessions</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="Plugins Skills and MCP manager" width="100%"></a><br><sub>Plugins, Skills &amp; MCP</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="Maintenance and diagnostics" width="100%"></a><br><sub>Maintenance &amp; Diagnostics</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="CCP settings" width="100%"></a><br><sub>Settings</sub></td>
-  </tr>
-</table>
-
-</details>
+The four images above show the Overview, the Agent overview, the Distillation Workbench, and Plugins/Skills/MCP. The full set of pages is: Overview (total / per-agent), Providers & Routing, Distillation Workbench, Theme Center, System Prompts, Sessions, Plugins/Skills/MCP, and Settings (including Computer Use).
 
 ## Safety and Privacy
 
@@ -259,12 +239,6 @@ Manager pages: Overview (total / per-agent), Providers & Routing, Distillation W
 | Distillation tasks and candidates | `~/.claude-codex-pro/aitracker/` |
 | Provider Sync backups | `~/.codex/backups_state/provider-sync` |
 
-## Third-Party Components
-
-This repository still ships the upstream Multica **My Issues**, **Autopilots**, and **Agents** page source, CCP's local control plane, and the Codex Host adapter, but those three entries are **no longer injected** into the Codex sidebar (commit `fbed6fc`). The retained code uses only native Codex task/thread/subagent capabilities; the integration does not start the Multica server/daemon/CLI or register a second Codex runtime or model executor. The derived UI retains the Multica product name, logo, copyright, and attribution; the complete [`LICENSE`](docs/third-party/multica/LICENSE) and [`NOTICE`](docs/third-party/multica/NOTICE) accompany distributions. See [`docs/multica-attribution.md`](docs/multica-attribution.md) and [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md) for the upstream revision, provenance, and integration boundary. Retaining branding and attribution does not replace upstream commercial licensing requirements.
-
-The distillation workbench's interaction and processing logic is based on AITracker (Copyright (C) 2026 AITracker contributors, used with permission). Ponytail comes from [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail).
-
 ## FAQ
 
 ### The Codex enhancement badge does not appear
@@ -284,9 +258,6 @@ The switch only writes the MCP entry into Claude Desktop's config. After it is w
 
 ### Plugin installation failed
 Open the install preview and confirm the type: official Claude plugins need the `claude` CLI; Claude Desktop MCP needs to write `claude_desktop_config.json`; Claude Desktop local organization plugins need developer mode and directory write access; Codex plugins need the `codex` CLI; Ponytail hooks need separate review and trust; community MCP and Skills need a recognizable structure.
-
-### Why does one commit trigger two GitHub Actions runs?
-Two workflows listen to pushes on `main`: `Auto release installers` builds and publishes installers, and `PR build artifacts` does routine build verification. It does not publish two versions.
 
 ### Why does a Release contain only source-code archives?
 If the installer build job succeeds but the publish job fails, GitHub shows only the auto-generated source archives. Check the `Publish release and latest.json` step of `Auto release installers`.
