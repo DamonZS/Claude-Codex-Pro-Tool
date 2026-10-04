@@ -2877,6 +2877,33 @@ Haiku (claude-haiku-4-5): claude-opus-4-7 -> claude-opus-4-7 [1M]";
     }
 
     #[test]
+    fn settings_store_loads_and_updates_with_a_legacy_multica_key_present() {
+        // `update` merges into the raw JSON object and keeps unknown keys on
+        // purpose (other tools and older versions write them). The leftover
+        // key is therefore inert, never an error, and never changes behavior.
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"multicaWorkspaceEnabled":true,"providerSyncEnabled":true,"enhancementsEnabled":true}"#,
+        )
+        .unwrap();
+        let store = SettingsStore::new(path.clone());
+
+        let loaded = store.load().unwrap();
+        assert!(loaded.provider_sync_enabled);
+        assert!(loaded.enhancements_enabled);
+
+        let updated = store.update(json!({"enhancementsEnabled": false})).unwrap();
+        assert!(!updated.enhancements_enabled);
+        assert!(!store.load().unwrap().enhancements_enabled);
+
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["enhancementsEnabled"], json!(false));
+        assert_eq!(saved["providerSyncEnabled"], json!(true));
+    }
+
+    #[test]
     fn settings_deserialize_uses_existing_json_keys() {
         let settings: BackendSettings = serde_json::from_str(
             r#"{"codexAppPath":"C:\\Portable\\Codex\\app","providerSyncEnabled":true,"codexGoalsEnabled":true,"cliWrapperEnabled":true,"cliWrapperBaseUrl":"https://example.test","cliWrapperApiKey":"sk-test","cliWrapperApiKeyEnv":""}"#,
