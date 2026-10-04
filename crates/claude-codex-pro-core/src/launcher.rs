@@ -110,7 +110,6 @@ pub fn codex_frontend_injection_enabled(settings: &BackendSettings) -> bool {
         || settings.codex_app_native_menu_placement
         || settings.codex_app_service_tier_controls
         || settings.codex_app_image_overlay_enabled
-        || settings.multica_workspace_enabled
 }
 
 #[derive(Clone)]
@@ -1139,47 +1138,11 @@ impl LaunchHooks for DefaultLaunchHooks {
     }
 }
 
-#[cfg(test)]
-#[path = "multica_webhooks_http_tests.rs"]
-mod multica_webhooks_http_tests;
-
 async fn handle_helper_connection(
-    stream: tokio::net::TcpStream,
-    remote_addr: Option<SocketAddr>,
-) -> anyhow::Result<()> {
-    handle_helper_connection_with_webhooks(
-        stream,
-        remote_addr,
-        crate::multica_webhooks::http::WebhookIngress::default(),
-    )
-    .await
-}
-
-async fn handle_helper_connection_with_webhooks(
     mut stream: tokio::net::TcpStream,
     remote_addr: Option<SocketAddr>,
-    webhooks: crate::multica_webhooks::http::WebhookIngress,
 ) -> anyhow::Result<()> {
-    use crate::multica_webhooks::http;
-    let request_bytes = match read_http_request(&mut stream).await {
-        Ok(bytes) => bytes,
-        Err(error) => match error.downcast::<http::IngressError>() {
-            Ok(error) => return http::write_response(&mut stream, Err(error)).await,
-            Err(error) => return Err(error),
-        },
-    };
-    // Handle even malformed webhook paths before lossy decoding and request logs.
-    if http::is_candidate(&request_bytes) {
-        let response = tokio::task::spawn_blocking(move || webhooks.receive(&request_bytes))
-            .await
-            .unwrap_or_else(|_| {
-                Err(http::IngressError {
-                    status: "503 Service Unavailable",
-                    code: "webhook_ingress_unavailable",
-                })
-            });
-        return http::write_response(&mut stream, response).await;
-    }
+    let request_bytes = read_http_request(&mut stream).await?;
     let request = String::from_utf8_lossy(&request_bytes);
     let request_line = request.lines().next().unwrap_or_default();
     let mut parts = request_line.split_whitespace();
@@ -2639,47 +2602,25 @@ mod computer_use_tests {
 }
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> anyhow::Result<Vec<u8>> {
-    use crate::multica_webhooks::http;
     let mut buffer = Vec::new();
     let mut chunk = vec![0_u8; 4096];
     let mut header_end = None;
     let mut content_length = 0_usize;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
 
     loop {
-        let read = if http::is_candidate(&buffer) {
-            tokio::time::timeout_at(deadline, stream.read(&mut chunk))
-                .await
-                .map_err(|_| http::timeout())??
-        } else {
-            stream.read(&mut chunk).await?
-        };
+        let read = stream.read(&mut chunk).await?;
         if read == 0 {
-            if http::is_candidate(&buffer) {
-                anyhow::bail!(http::incomplete());
-            }
             break;
         }
         buffer.extend_from_slice(&chunk[..read]);
         if header_end.is_none() {
             header_end = find_header_end(&buffer);
             if let Some(end) = header_end {
-                content_length = if http::is_candidate(&buffer) {
-                    http::parse_head(&buffer[..end])?.content_length
-                } else {
-                    content_length_from_headers(&buffer[..end]).unwrap_or(0)
-                };
-            } else if http::is_candidate(&buffer)
-                && buffer.len() > crate::multica_webhooks::MAX_WEBHOOK_HEADER_BYTES
-            {
-                anyhow::bail!(http::too_large());
+                content_length = content_length_from_headers(&buffer[..end]).unwrap_or(0);
             }
         }
         if let Some(end) = header_end {
             if buffer.len() >= end + 4 + content_length {
-                if http::is_candidate(&buffer) && buffer.len() != end + 4 + content_length {
-                    anyhow::bail!(http::incomplete());
-                }
                 break;
             }
         }
@@ -3132,9 +3073,6 @@ async fn try_inject(debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
     let (codex_execution, page_transport) =
         crate::codex_execution::codex_page_execution_service(websocket_state)?;
     let runtime = crate::routes::CoreRuntimeService::new(debug_port, StatusStore::default())
-        .with_multica_webhook_store(
-            crate::multica_webhooks::MulticaWebhookStore::default().with_helper_port(helper_port),
-        )
         .with_codex_execution_service(codex_execution)
         .with_codex_page_transport(Arc::new(page_transport));
     let ctx = crate::routes::BridgeContext::core(Arc::new(runtime));
@@ -3638,7 +3576,6 @@ mod tests {
         assert!(injection.contains("let (codex_execution, page_transport) ="));
         assert!(injection.contains(".with_codex_execution_service(codex_execution)"));
         assert!(injection.contains(".with_codex_page_transport(Arc::new(page_transport))"));
-        assert!(injection.contains("MulticaWebhookStore::default().with_helper_port(helper_port)"));
         assert!(!injection.contains("CodexPageHostTransport::new"));
     }
 
@@ -3656,7 +3593,6 @@ mod tests {
         settings.codex_app_native_menu_placement = false;
         settings.codex_app_service_tier_controls = false;
         settings.codex_app_image_overlay_enabled = false;
-        settings.multica_workspace_enabled = false;
 
         let mut session_delete = settings.clone();
         session_delete.codex_app_session_delete = true;

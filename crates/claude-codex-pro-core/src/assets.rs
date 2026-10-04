@@ -8,10 +8,6 @@ use std::sync::OnceLock;
 use crate::settings::BackendSettings;
 
 const RENDERER_SCRIPT: &str = include_str!("../../../assets/inject/renderer-inject.js");
-const WORKFLOW_SCRIPT: &str =
-    include_str!("../../../apps/codex-workflow-surface/dist/codex-workflow-surface.js");
-const WORKFLOW_STYLE: &str =
-    include_str!("../../../apps/codex-workflow-surface/dist/codex-workflow-surface.css");
 const CLAUDE_CHINESE_INJECT_SCRIPT: &str =
     include_str!("../../../assets/inject/claude-chinese-inject.js");
 const CODEX_THEME_LOADER_SCRIPT: &str =
@@ -35,8 +31,6 @@ pub fn renderer_fingerprint() -> &'static str {
     FINGERPRINT.get_or_init(|| {
         let mut digest = Sha256::new();
         digest.update(RENDERER_SCRIPT.as_bytes());
-        digest.update(WORKFLOW_SCRIPT.as_bytes());
-        digest.update(WORKFLOW_STYLE.as_bytes());
         format!("sha256:{:x}", digest.finalize())
     })
 }
@@ -88,12 +82,7 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
         serde_json::to_string(&announcement).expect("announcement config should serialize"),
         serde_json::to_string(&plugin_marketplaces)
             .expect("plugin marketplace config should serialize"),
-        format!(
-            "try {{ window.__claudeCodexProMulticaWorkspaceCleanup?.(); }} catch (_) {{}}\nwindow.__CODEX_WORKFLOW_STYLES__ = {};\ntry {{\n{}\n}} catch (_) {{\n  try {{ window.__CODEX_WORKFLOW_SURFACE__?.dispose?.(); }} catch (_) {{}}\n  delete window.__CODEX_WORKFLOW_SURFACE__;\n}}\n{}",
-            serde_json::to_string(WORKFLOW_STYLE).expect("workflow styles should serialize"),
-            WORKFLOW_SCRIPT,
-            renderer_script(),
-        ),
+        renderer_script(),
     )
 }
 
