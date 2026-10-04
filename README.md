@@ -16,11 +16,11 @@
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
 
-**一个窗口管好你所有的 AI 编程 Agent：看清每个 Agent 花了多少 Token，一处切换第三方 API，把聊过的会话蒸馏成可复用的 Skill 和记忆，还能让 API 模式的 Claude Desktop 也用上 Computer Use。**
+**一个窗口管好你所有的 AI 编程 Agent：看清每个 Agent 的 Token 花在哪，一处切换第三方 API，把聊过的会话蒸馏成可复用的 Skill 和记忆，让 Claude Desktop（含 API 模式）也能用上 Computer Use。**
 
-> 面向 Windows 与 macOS 的 Codex App、Claude Desktop 和 Claude Code 本地 AI 运维控制台，Rust + Tauri 实现，数据只在本机。
+> Windows / macOS 本地 AI 运维控制台，面向 Codex App、Claude Desktop、Claude Code，内置 36 种主流 Agent 工具的识别清单。Rust + Tauri 实现，数据只在本机。
 >
-> English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**. See token usage across your AI coding agents, switch third-party API providers (OpenAI Responses, Chat Completions, Anthropic Messages), manage MCP and Skills in one place, distill past sessions into reusable Skills and memory, and give API-mode Claude Desktop a built-in **Computer Use MCP**. A cc-switch-style provider switcher with a usage dashboard.
+> English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**: a token-usage dashboard across AI coding agents, a cc-switch-style third-party API provider switcher, a session-to-Skill distillation workbench, and a built-in **Computer Use MCP** for Claude Desktop.
 
 <table>
   <tr>
@@ -33,188 +33,68 @@
   </tr>
 </table>
 
+**目录：** [为什么用 CCP](#为什么用-ccp) · [快速开始](#快速开始) · [核心功能](#核心功能) · [界面预览](#界面预览) · [安全与隐私](#安全与隐私) · [常见问题](#常见问题) · [构建与开发](#构建与开发)
+
 ## 为什么用 CCP
 
-- **看清每个 Agent 的 Token 去哪了。** 本地只读采集，内置 36 种主流 Agent 工具的识别清单（Claude Code、Codex、Cursor、Kiro、Gemini CLI、OpenCode、Hermes、GitHub Copilot、Zed 等），其中 35 种声明了用量采集路径；你本机有记录的，就能看到消耗趋势、缓存命中率、模型与项目排行、会话场次和 Skill 覆盖。总览可看 24 小时 / 7 天 / 30 天，Agent 概览还支持全部和自定义区间；费用在没有价格来源时明确显示“未计价”，不编数字。
-- **一处切换第三方 API。** Codex、Claude、Claude Desktop 三个目标各自记录当前供应商，互不影响；支持 OpenAI Responses、Chat Completions、Anthropic Messages，模型映射、本地代理、故障转移，并能从本机 cc-switch 数据库导入已有供应商配置。
-- **把聊过的会话变成资产。** 蒸馏工作台可以蒸馏单个会话、整个项目，产出 Skill、工作流、Prompt、用户画像、任务记忆；超长对话按模型上下文窗口自动分批，不会被截断成半截。
-- **API 模式的 Claude Desktop 也能 Computer Use。** CCP 自带本地 MCP，让 Claude Desktop 截图、点击、拖拽、输入，带急停保护，默认关闭。
-- **Skills / MCP / 插件一张清单。** Claude 与 Codex 的资产合并显示，一行一个，点应用图标只改对应应用。
-- **会话管理。** Codex 风格的按项目分组会话列表，点开看完整上下文；Codex 与 Claude 各用各的真实数据源，并能修复切换供应商后看不到历史会话的问题。
+| 你遇到的问题 | CCP 怎么解决 |
+| --- | --- |
+| 用了好几个 AI 编程工具，不知道 Token 都花哪了 | 本地只读采集，一个看板看所有 Agent 的消耗趋势、缓存命中率、模型与项目排行 |
+| 第三方 API 经常换，每个工具都要改一遍配置 | Codex、Claude、Claude Desktop 各自记录当前供应商，一处切换，互不影响 |
+| 聊过的好方案散落在历史会话里，下次又从头讲 | 蒸馏工作台把会话或整个项目提炼成 Skill、Prompt、用户画像、任务记忆 |
+| 长对话超出上下文后被拆成一串会话文件 | 自动识别“续接”，合并成一行，蒸馏时按时间顺序读整条 |
+| Claude Desktop 不能像 Codex 那样操作电脑 | 自带 Computer Use MCP：截图、点击、拖拽、输入，带急停，默认关闭 |
+| Skills、MCP、插件分散在各个工具里 | Claude 与 Codex 的资产合并成一张清单，点应用图标只改对应应用 |
+| 切换供应商后历史会话“消失”了 | Provider Sync 修复历史会话可见性 |
 
-本地优先：配置、日志、备份都在本机，只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
+**适合你，如果你：**
 
-项目仓库唯一地址：
+- 同时用 Codex、Claude Code、Claude Desktop、Cursor 等多个 AI 编程工具，想知道钱和 Token 去哪了。
+- 要在多个 API 中转或兼容 OpenAI / Anthropic 协议的供应商之间来回切换。
+- 想把反复踩的坑和成熟流程沉淀成 Skill，而不是每次重新解释。
+- 希望功能真实可验证，不想要“按钮看起来有、实际没实现”。
 
-<https://github.com/DamonZS/Claude-Codex-Pro-Tool>
+## 快速开始
 
-> **Codex 模型选择由 Codex 原生逻辑负责。** CCP 不向 Codex 模型选择器注入候选项、不修改模型白名单或请求中的模型字段，也不通过前端增强显示特定模型。供应商页面仍可管理模型目录和路由配置；Codex 能否显示或调用某个模型取决于 Codex 自身版本、登录状态、配置和上游 API 能力。
-
-## 一眼看懂 CCP
-
-- **数据与概览**：本地只读采集多 Agent 用量，总览与 Agent 概览两种视角，含 Token 趋势、缓存命中率、模型 / 项目排行与活跃日历。
-- **供应商与路由**：统一管理 Base URL、API Key、Header、Body、模型发现、协议转换、本地代理、优先级和故障转移，覆盖 Codex、Claude、Claude Desktop 三个切换目标。
-- **Codex 与 Claude 增强**：启动、重启、状态监控、Claude 一键汉化、Codex 注入、主题和客户端维护。
-- **蒸馏工作台**：从本地 Codex / Claude 会话里选素材，用自己配置的模型蒸馏成 Skill、工作流、Prompt、画像或任务记忆；续接的长对话合并成一行。
-- **Agent 扩展中心**：集中管理 Codex / Claude 插件、Skills、MCP、脚本和依赖状态。
-- **会话管理**：按项目分组、点开看上下文、修复和迁移本地会话、导出历史。
-- **Claude Desktop Computer Use**：开启后，Claude Desktop 可通过 CCP 自带的本地 MCP 截图并操作鼠标键盘，含 `drag_path` 一笔拖拽和急停保护；开启时也会写入 API（3P）模式的 Claude Desktop 配置。
-- **Claude Desktop 直连模式**：第三方 Anthropic 兼容供应商可直接使用其 `/v1/models` 返回的模型 ID，不必强制模型映射。
-- **系统提示词**：管理 Markdown 指令模板、外部同步、启用模式、配置备份和 DeepSeek 组合使用教程。
-
-**快速导航：** [下载](#下载) · [界面预览](#管理工具界面) · [功能总览](#功能总览) · [常见问题](#常见问题) · [构建与开发](#构建与开发)
-
-## 适合谁
-
-- 想让 Codex App 有更完整本地增强能力的人。
-- 需要在多个 API 中转、兼容 OpenAI 协议供应商之间切换的人。
-- 想把 Claude Desktop、Claude Code、Codex、MCP、Skills、插件放进同一个管理界面的人。
-- 经常修会话、导出历史、切换项目、管理脚本和插件的人。
-- 希望功能真实可验证，不想要“按钮看起来有、实际没实现”的人。
-
-## 核心原则
-
-- 本地优先：配置、插件记录、日志和备份都优先落在本机。
-- 可审查：安装插件、写入 MCP、信任 hooks、修改配置前展示命令或 diff。
-- 可回退：写入关键配置前尽量备份，Claude 中文资源补丁提供还原入口。
-- 不静默信任第三方：Ponytail / Codex hooks 需要单独审查和信任。
-- 不伪装能力：无法自动安装或需要人工确认的功能会明确标记为需审查。
-
-## 工作流集成说明
-
-本仓库仍随附 Multica 上游的“我的任务”“自动化”“智能体”三个页面的源码、本地控制面和 Codex 页面 Host 适配层，但这三个入口目前**不再注入** Codex 侧边栏（见提交 `fbed6fc`）。保留的代码仅通过 Codex 原生 task/thread/subagent 工作，不启动 Multica server/daemon/CLI，也不注册第二个 Codex Runtime 或模型执行器。派生 UI 保留 Multica 产品名、Logo、版权及归属信息；完整 [`LICENSE`](docs/third-party/multica/LICENSE) 和 [`NOTICE`](docs/third-party/multica/NOTICE) 随发行物提供。上游版本、来源和集成边界见 [`docs/multica-attribution.md`](docs/multica-attribution.md) 与 [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md)；保留品牌和归属不替代上游商业许可要求。
-
-## 下载
-
-从 [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 下载最新版：
-
-- Windows：`claude-codex-pro-*-windows-x64-setup.exe`、`claude-codex-pro-*-windows-x64.msi`
-- macOS Intel：`claude-codex-pro-*-macos-x64.dmg`
-- macOS Apple Silicon：`claude-codex-pro-*-macos-arm64.dmg`
+1. 从 [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 下载并安装：
+   - Windows：`claude-codex-pro-*-windows-x64-setup.exe` 或 `claude-codex-pro-*-windows-x64.msi`
+   - macOS Intel：`claude-codex-pro-*-macos-x64.dmg`
+   - macOS Apple Silicon：`claude-codex-pro-*-macos-arm64.dmg`
+2. 打开 **Claude Codex Pro 管理工具**，在「供应商与路由」里新增供应商，或从本机 cc-switch 数据库导入已有配置。
+3. 用管理工具顶部的「启动/重启 Codex」「启动/重启 Claude」启动客户端（不要直接启动原始 Codex，否则没有增强）。
+4. 打开「概览」查看各 Agent 的 Token 用量；需要时再开启 Computer Use、蒸馏会话、安装 Skills。
 
 安装后有两个入口：
 
 - `Claude Codex Pro`：统一桌面程序；默认打开管理工具，内部以 `--launcher` 启动独立后台进程并加载 Codex 增强能力。
-- `Claude Codex Pro 管理工具`：运维控制台，用来管理 Codex、Claude、供应商、插件、脚本、日志、安装维护和更新。
+- `Claude Codex Pro 管理工具`：运维控制台，管理 Codex、Claude、供应商、插件、脚本、日志、安装维护和更新。
 
-Windows 安装包会创建桌面和开始菜单快捷方式。macOS DMG 会包含 `Claude Codex Pro.app` 与 `Claude Codex Pro 管理工具.app`。
+Windows 安装包会创建桌面和开始菜单快捷方式；macOS DMG 包含 `Claude Codex Pro.app` 与 `Claude Codex Pro 管理工具.app`。
 
-## 管理工具界面
+> **Codex 模型选择由 Codex 原生逻辑负责。** CCP 不向 Codex 模型选择器注入候选项、不修改模型白名单或请求中的模型字段，也不通过前端增强显示特定模型。供应商页面仍可管理模型目录和路由配置；Codex 能否显示或调用某个模型取决于 Codex 自身版本、登录状态、配置和上游 API 能力。
 
-<table>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/overview.png"><img src="docs/screenshots/overview.png" alt="概览" width="100%"></a><br><sub>概览</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="供应商与路由" width="100%"></a><br><sub>供应商与路由</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/clients.png"><img src="docs/screenshots/clients.png" alt="客户端与增强" width="100%"></a><br><sub>客户端与增强</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/themes.png"><img src="docs/screenshots/themes.png" alt="主题中心" width="100%"></a><br><sub>主题中心</sub></td>
-  </tr>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="系统提示词" width="100%"></a><br><sub>系统提示词</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话管理" width="100%"></a><br><sub>会话管理</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="插件、Skills 与 MCP" width="100%"></a><br><sub>插件、Skills 与 MCP</sub></td>
-    <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="维护与诊断" width="100%"></a><br><sub>维护与诊断</sub></td>
-  </tr>
-  <tr>
-    <td width="25%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="设置" width="100%"></a><br><sub>设置</sub></td>
-    <td width="25%"></td>
-    <td width="25%"></td>
-    <td width="25%"></td>
-  </tr>
-</table>
+项目仓库唯一地址：<https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
-## 功能总览
+## 核心功能
 
-### Claude Desktop Computer Use（MCP）
+### 多 Agent 用量看板
 
-让 Claude Desktop 拥有类似 Codex 的“看屏幕、动鼠标键盘”能力。CCP 自带一个本地 stdio MCP 服务（`claude-codex-pro.exe --mcp-computer-use`，不新增独立可执行文件），在 Claude Desktop 配置里注册为 `claude-codex-pro-computer-use`。
+本地只读采集，内置 36 种主流 Agent 工具的识别清单（Claude Code、Codex、Cursor、Kiro、Gemini CLI、OpenCode、OpenClaw、Hermes、GitHub Copilot、Zed、Cline、Roo Code、Goose、WorkBuddy 等），其中 35 种声明了用量采集路径。你本机有记录的 Agent 才会出数据，没有记录的不会编造。
 
-- **工具**：`screenshot`、`click`、`move_mouse`、`drag`、`drag_path`、`scroll`、`type_text`、`press_keys`、`cursor_position`、`wait`。
-- **一笔拖拽**：`drag_path` 按住左键依次经过 2~200 个点后只松开一次，适合画曲线、圆和签名；`drag` 与 `drag_path` 中途出错也会先松开左键，不会卡键。
-- **截图**：仅主显示器，缩放到不超过 1280×800 的 JPEG；所有坐标使用截图像素，服务内部换算为真实屏幕坐标，越界坐标会被拒绝。
-- **安全**：总开关默认关闭，每次调用前重新读取；把鼠标甩到主屏左上角会触发**急停**，下次动作被拒绝并自动关闭开关；诊断日志记录工具名和坐标，`type_text` 只记录字数。
-- **注册范围**：开启时写入所有常规 Claude Desktop 配置，以及已存在的 `Claude-3p`（开发模式 / 3P）配置，写前备份；无法解析的配置会拒绝覆盖。切换开关后需要完全退出并重启 Claude Desktop。
-- **位置**：管理工具「设置」页的独立 **Computer Use** 标签，含开关、注册状态和最近调用记录。
-- **平台**：Windows（SendInput + GDI 截图）与 macOS（CoreGraphics）。macOS 路径目前只做过编译级检查，未在真机上验证。
-- **会移动真实鼠标**，截图可能包含屏幕上的敏感信息，使用前请整理好窗口。
+- **总览**：Agent 覆盖、蒸馏资产、今日消耗；Token 消耗、费用估算、会话总数、缓存命中率、Agent 活跃数；Token 趋势图（缓存读取 / 输入 / 输出，对比上一区间）、按模型的消耗排行、项目消耗总览和近 12 个月活跃日历。时间范围 24 小时 / 7 天 / 30 天。
+- **Agent 概览**：选一个 Agent 看它自己的消耗趋势、上下文构成（对话消息、推理过程、缓存命中）、按模型或按项目的消耗明细、会话场次和 Skill 覆盖。时间范围支持今天 / 近 7 天 / 近 30 天 / 全部 / 自定义区间。
+- **诚实的数字**：没有价格来源时费用显示“未计价”；采集不到的指标显示“未采集”；会话 ID 匿名化，不读取正文。
 
-实验性：`claude_desktop_computer_use::uia` 模块提供 Windows UI Automation 的元素查找、Pattern 操作和键盘输入，目前仅供内部测试使用，**尚未接入上述 MCP 工具**。
+### 供应商与路由
 
-### 蒸馏工作台
+- **三个独立目标**：Codex、Claude、Claude Desktop 各自记录当前供应商，切换一个不会改动另外两个；切换成功提示会明确是哪个目标。
+- **三种协议**：OpenAI Responses、Chat Completions、Anthropic Messages，并支持兼容渠道的模型映射与协议转换。
+- **Profile 管理**：Base URL、API Key、Header、Body、User-Agent、模型目录、上下文窗口、自动压缩阈值、优先级和故障转移；可测试连通性、拖拽排序。
+- **Codex 模式**：官方模式、官方混合 API 模式、纯 API 模式；可从当前 `~/.codex/config.toml` 与 `auth.json` 回填配置，也可清除 API 模式回到官方登录。
+- **Claude Desktop 直连**：第三方 Anthropic 兼容供应商可直接使用其 `/v1/models` 返回的模型 ID，不必强制模型映射；也可选模型映射或手动模型列表。关闭映射时使用供应商真实 URL，而不是本地代理。
+- **一键导入**：从本机 cc-switch 数据库导入已有的 Codex / Claude / Claude Desktop 供应商配置，保留原有路由与 API 格式。
 
-从本机的 Codex 与 Claude 会话里提炼可复用资产，交互与处理逻辑对齐 AITracker 的蒸馏模块（已获版权方授权），界面使用 CCP 液态玻璃风格。
-
-- **选素材**：快速模式按会话或按项目勾选，可按今天 / 近 7 天 / 近 30 天 / 全部过滤；高级模式在素材库里跨会话框选消息区间。
-- **项目与标题**：Claude 与 Codex 的“项目”都取项目文件夹（git 仓库根）名，git worktree 一律归并到主仓库名；会话行显示各客户端的真实会话标题。
-- **产物**：能力资产（Skill、工作流、Prompt，保存到 Skill 库并可安装到所选 Agent）与记忆资产（画像、任务记忆，写入记忆库）。
-- **模型**：使用你在“供应商与路由”里已配置的模型，支持 OpenAI Chat Completions、Responses 和 Anthropic Messages 三种协议，也可选“离线回退（确定性）”。
-- **质量与任务**：Skill / 工作流 / Prompt 自动质检并最多重试 2 次；任务进度持久化，重新打开页面继续轮询，可取消。
-- **失败原因**：失败会在历史里显示带稳定编码的中文原因，如 `ai.provider-network`（连不上）、`ai.provider-unavailable`（服务 5xx）、`ai.provider-auth`（鉴权失败）。
-
-### Claude Desktop 供应商直连模式
-
-- Claude Desktop 供应商可选“直连模式”，直接使用供应商 `/v1/models` 返回的模型 ID，不再强制开启模型映射或手动指定列表；对齐 cc-switch 的行为。
-- 关闭模型映射时使用供应商真实 URL，而不是本地代理；保存后重新打开不会变回模型映射。
-- 与“模型映射模式”“手动指定模型列表”并存，Anthropic 官方预设行为不变。
-
-### Codex 主题系统
-
-- 提供独立一级导航，以三列主题卡片集中展示已安装主题；Codex 默认主题固定为第一项。
-- 外观中心将“CCP 外观”和“Codex 主题”分为两个独立视图；CCP 背景图库可保存、切换和删除多张本地高清背景，恢复默认不会清空图库。
-- 支持无代码 DIY 工作台，可视化调整玻璃透光度、模糊、圆角、字号和本地背景图；明暗模式、配色与界面密度自动生成，并支持实时预览、保存和再次编辑。
-- 支持从官方 GitHub 主题库按需下载、导入、预览、应用、删除未启用主题和恢复默认主题；精选主题包与高级制作指南位于 [`Theme/`](Theme/)。
-- 安装主题时先在临时目录验证，再原子替换正式版本并保留上一版本，降低资源损坏和更新中断风险。
-- Renderer 视觉注入与汉化、模型标识注入相互隔离，避免主题脚本污染输入框、下拉菜单和原生交互。
-- 选择主题后给出明确状态反馈，重启 Codex 后加载生效。
-
-### 系统提示词与指令模板管理
-
-- 提供独立一级导航，以紧凑卡片管理通用、破甲、逆向分析等系统指令模板。
-- 内置五套 Markdown 模板，资源位于 [`assets/system-prompts/`](assets/system-prompts/)。
-- 支持新增、编辑、删除、导入 Markdown，以及通过 URL 或 GitHub 地址同步模板。
-- 支持“保留原提示词”和“替换原提示词”两种启用方式，并清楚显示当前生效状态。
-- 写入 `~/.codex/config.toml` 前自动备份；检测外部修改，避免静默覆盖其他工具或用户手工更新的配置。
-- 页面内置“使用方式”教程弹窗，教程源文件位于 [`apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md`](apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md)。
-
-### 1. Codex 启动与增强
-
-- 通过外部启动器启动 Codex。
-- 自动处理 CDP / helper 连接。
-- 在 Codex 页面注入顶部状态标识。
-- 支持 Codex 插件入口解锁和插件市场入口解锁。
-- 支持 Codex 插件安装通道适配，包括新版 `vscode://codex/list-plugins`、`vscode://codex/plugin/install` 等请求。
-- 支持服务等级控制入口。
-- 支持图片覆盖配置。
-- 支持会话滚动位置恢复。
-- 支持会话时间线和会话视图增强。
-- 支持原生菜单位置调整。
-- 支持 Codex Goals 配置写入。
-- 支持 Computer Use Guard，减少危险自动化误触。
-
-### 2. Codex 会话管理与修复
-
-- 列出本地 Codex 会话。
-- 删除本地会话。
-- 导出 Markdown。
-- 移动项目归属。
-- 查看会话数据库位置。
-- 检测新版 `~/.codex/sqlite/*.db` 和旧版 `~/.codex/state_5.sqlite`。
-- Provider Sync：切换供应商后修复历史会话可见性。
-- 支持从当前配置回填供应商配置，避免切换时覆盖旧配置。
-
-### 3. 供应商与中转配置
-
-- 支持官方模式、官方混合 API 模式、纯 API 模式。
-- 支持 Responses 与 Chat Completions 协议。
-- 支持多个供应商 Profile。
-- 支持 Base URL、API Key、模型、User-Agent、上下文窗口、自动压缩阈值。
-- 支持公共配置与上下文配置拆分。
-- 支持 MCP / Skills / Plugins 上下文选择。
-- 支持从当前 `~/.codex/config.toml` 和 `auth.json` 回填配置。
-- 支持测试供应商连通性。
-- 支持清除 API 模式，回到官方登录配置。
-- 支持兼容 API / 中转站配置，例如自建服务或第三方中转。
-
-示例配置会写入 `~/.codex/config.toml`：
+示例，Codex 自定义供应商会写入 `~/.codex/config.toml`：
 
 ```toml
 model_provider = "custom"
@@ -227,222 +107,192 @@ base_url = "https://example.com/v1"
 experimental_bearer_token = "sk-..."
 ```
 
-### 4. Claude Desktop 管理
+### 蒸馏工作台：把会话变成资产
 
-- 启动官方 Claude Desktop。
-- 聚焦 Claude Desktop 窗口。
-- 打开 Claude Desktop DevTools。
-- 新建 Claude Desktop 对话。
-- 向 Claude Desktop 粘贴草稿。
-- 向 Claude Desktop 提交文本。
-- 检测 Claude Desktop 安装位置、进程状态和完整性状态。
-- 展示官方 MSIX / CDP 阻断诊断，不伪装成已注入。
+从本机 Codex 与 Claude 的历史会话里提炼可复用的东西，交互与处理逻辑对齐 AITracker 的蒸馏模块（已获版权方授权），界面使用 CCP 液态玻璃风格。
 
-### 5. Claude 中文能力
+- **选素材**：快速模式按会话或按项目勾选，可按今天 / 近 7 天 / 近 30 天 / 全部过滤；高级模式在素材库里跨会话框选消息区间。
+- **读真实对话**：选中整场会话或整个项目时，模型读到的是对话正文（不含推理块），不是只有标题和轮数。
+- **产物**：能力资产（Skill、工作流、Prompt，保存到 Skill 库并可安装到所选 Agent）与记忆资产（用户画像、任务记忆，写入记忆库）。
+- **长对话不截断**：输入预算随所选供应商的 `contextWindow` 放大（单次最多用窗口的 60%）；超出就按时间顺序分批提取要点，再合并成最终产物，最多 12 批，可随时取消。
+- **续接合并**：Claude 对话超出上下文后会新建会话文件，CCP 把同项目、同标题、首条消息为续接提示且时间紧贴的会话合并成一行，Token 累加，副标题显示“N 段续接”。
+- **项目口径**：Claude 与 Codex 的“项目”都取项目文件夹（git 仓库根）的名字，git worktree 归并到主仓库。
+- **质检与追溯**：Skill / 工作流 / Prompt 自动质检并最多重试 2 次；失败会显示带稳定编码的中文原因，如 `ai.provider-network`、`ai.provider-unavailable`、`ai.provider-auth`。
+- **你的模型，你的数据**：使用你在“供应商与路由”里配置的模型；蒸馏时选中的会话内容会发送给该供应商，请确认你信任它。也可选“离线回退”，此时不读取正文、不联网。
 
-项目提供两类中文化路径，适合不同风险偏好：
+### Claude Desktop Computer Use（MCP）
 
-- Claude 中文包装窗口：独立 WebView 加载 `https://claude.ai/new`，在创建阶段注入中文覆盖脚本和顶部状态标识。推荐优先使用这个方式，不改官方安装文件。
-- Claude Desktop 中文资源补丁：可选的本机资源补丁，参考 `Jyy1529/claude-desktop_win-zh_cn` 的公开资源，写入 `zh-CN.json`、locale 配置和必要的前端语言支持补丁。执行前会备份，管理工具提供还原入口。
+让 Claude Desktop 拥有类似 Codex 的“看屏幕、动鼠标键盘”能力。CCP 自带一个本地 stdio MCP 服务（`claude-codex-pro.exe --mcp-computer-use`，不新增独立可执行文件），在 Claude Desktop 配置里注册为 `claude-codex-pro-computer-use`。
 
-注意：官方 Claude Desktop 的 MSIX、签名和完整性机制可能限制直接 DOM 注入或文件补丁。包装窗口是低风险方案；资源补丁是用户明确选择后的本机修改方案。
+- **10 个工具**：`screenshot`、`click`、`move_mouse`、`drag`、`drag_path`、`scroll`、`type_text`、`press_keys`、`cursor_position`、`wait`。
+- **一笔拖拽**：`drag_path` 按住左键依次经过 2~200 个点后只松开一次，适合画曲线、圆和签名；`drag` 与 `drag_path` 中途出错也会先松开左键，不会卡键。
+- **截图**：仅主显示器，缩放到不超过 1280×800 的 JPEG；所有坐标使用截图像素，服务内部换算为真实屏幕坐标，越界坐标会被拒绝。
+- **安全**：总开关默认关闭，每次调用前重新读取；把鼠标甩到主屏左上角触发**急停**，下次动作被拒绝并自动关闭开关；诊断日志记录工具名和坐标，`type_text` 只记录字数。
+- **配置写入**：开启时写入所有常规 Claude Desktop 配置，以及已存在的 `Claude-3p`（API / 开发模式）配置，写前备份；无法解析的配置拒绝覆盖。切换开关后需要完全退出并重启 Claude Desktop。
+- **入口**：管理工具「设置」页的独立 **Computer Use** 标签，含开关、注册状态和最近调用记录。
+- **平台**：Windows（SendInput + GDI 截图）与 macOS（CoreGraphics）。macOS 路径目前只做过编译级检查，未在真机上验证。
+- **注意**：会移动真实鼠标，截图可能包含屏幕上的敏感信息，使用前请整理好窗口。
 
-### 6. 插件中心
+实验性：`uia` 模块提供 Windows UI Automation 的元素查找、Pattern 操作和键盘输入，目前仅供内部测试，**尚未接入上述 MCP 工具**。
 
-插件中心把多个来源统一成一个目录视图：
+### 插件、Skills 与 MCP 统一清单
 
-- Claude 官方插件市场。
-- Claude Desktop MCP 配置项。
-- GitHub MCP Registry。
-- Awesome Claude Code 资源。
-- OpenAI Codex Plugins 仓库。
-- Ponytail 多工具插件。
-- 可识别的 Skill bundle。
-- 社区资源链接。
+- **一行一个资产**：Claude 与 Codex 的 MCP、Skills、插件合并成一张清单，同一资产只显示一行，行尾的应用图标表示它在哪个应用里启用，点击只改对应应用。
+- **完整发现**：不只显示 CCP 自己管理的条目，而是检测本机能解析到的全部资产，并给出“已启用”计数和来源路径。
+- **新增 MCP / Skill**：新增 MCP 会同步写入 Claude 配置与 `~/.codex/config.toml`；Skill 描述按 YAML frontmatter 解析。
 
-每个条目会展示：
+### 插件中心与 Ponytail
 
-- 来源、分类、作者、许可证。
-- 安装状态。
-- 风险提示。
-- 依赖要求。
-- 安装命令预览。
-- 配置 diff。
-- 安装、卸载、打开来源等操作。
+插件中心把多个来源统一成一个目录视图：Claude 官方插件市场、Claude Desktop MCP 配置项、GitHub MCP Registry、Awesome Claude Code、OpenAI Codex Plugins 仓库、Ponytail 多工具插件和可识别的 Skill bundle。每个条目展示来源、分类、作者、许可证、安装状态、风险提示、依赖要求、安装命令预览和配置 diff。
 
-安装策略：
-
-- 官方 Claude 插件通过 `claude plugin marketplace add/install`。
+- 官方 Claude 插件通过 `claude plugin marketplace add/install`；Codex 插件通过 `codex plugin marketplace add/list/add`。
 - Claude Desktop MCP 写入 `claude_desktop_config.json`，写入前备份。
-- Codex 插件通过 `codex plugin marketplace add/list/add`。
-- Skill bundle 只有识别到结构时才安装。
-- 未知社区 MCP 默认只展示，不自动执行脚本。
+- 未知社区 MCP 默认只展示，不自动执行脚本；Skill bundle 只有识别到结构时才安装。
+- 已集成 [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)（Codex 中为 `ponytail@ponytail`）：支持 Codex、Claude Code、GitHub Copilot CLI、Claude Desktop MCP / 组织插件 / MCPB（`.mcpb` 安装包，交给 Claude Desktop 官方确认流程）；Ponytail 的 Codex hooks 需要预览后单独确认才写入信任状态。
+- 可下载 OpenAI 官方 `openai/plugins` 仓库，限制体积、安全解压（防 zip path traversal），校验 `.agents/plugins/marketplace.json` 与每个插件目录的 `.codex-plugin/plugin.json` 后再注册到 `[marketplaces.openai-curated]`。
 
-### 7. Ponytail 集成
+### 会话管理
 
-已集成 [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)，支持多工具安装：
+- **按项目分组**：Codex 风格的项目 / 会话列表，点开查看完整上下文（分页加载，长消息自然撑开）。
+- **数据源隔离**：Codex 读本地 SQLite / rollout，Claude 读 `~/.claude/projects` 等真实数据源，互不混用。
+- **修复与迁移**：Provider Sync 在切换供应商后修复历史会话可见性；支持删除会话、导出 Markdown、移动项目归属；同时识别新版 `~/.codex/sqlite/*.db` 与旧版 `state_5.sqlite`。
 
-- Ponytail for Codex：调用 Codex CLI 添加 marketplace、安装 `ponytail@ponytail`。
-- Ponytail Codex hooks：可预览待信任 hooks，用户确认后才写入信任状态。
-- Ponytail Skills for Codex：复制 Ponytail Skills 到 Codex skills 目录，覆盖前备份。
-- Ponytail for Claude Code：通过 Claude Code CLI 安装。
-- Ponytail MCP for Claude Desktop：写入 Claude Desktop MCP 配置。
-- Ponytail Organization Plugin for Claude Desktop：写入 Claude Desktop 开发模式可读取的组织插件目录。
-- Ponytail MCPB：生成 `.mcpb` 安装包并交给 Claude Desktop 官方确认流程。
-- Ponytail for GitHub Copilot CLI：通过 Copilot CLI 插件系统安装。
+### Codex 启动与增强
 
-Claude Desktop 的本地插件包流程不会要求 Claude CLI 登录：它配置开发模式、写入 Codex/Ponytail MCP，并复制 Ponytail skills 到组织插件目录。
+通过外部启动器启动 Codex，自动处理 CDP / helper 连接，并在 Codex 页面注入顶部状态标识。不修改 Codex 官方安装文件。
 
-### 8. Codex OpenAI 插件仓库
+- 插件入口与插件市场入口解锁；适配新版插件安装通道（`vscode://codex/list-plugins`、`vscode://codex/plugin/install`）。
+- 服务等级控制入口、图片覆盖配置、Codex Goals 配置写入。
+- 会话滚动位置恢复、会话时间线与会话视图增强、原生菜单位置调整。
+- Computer Use Guard：减少危险自动化误触。
 
-- 下载 OpenAI 官方 `openai/plugins` 仓库 zip。
-- 限制下载体积。
-- 安全解压，防止 zip path traversal。
-- 校验 `.agents/plugins/marketplace.json`。
-- 校验每个插件目录的 `.codex-plugin/plugin.json`。
-- 注册到 `~/.codex/config.toml` 的 `[marketplaces.openai-curated]`。
-- 出错时展示具体失败原因，不把坏仓库注册成成功。
+### Claude Desktop 管理与中文
 
-### 9. 脚本市场与用户脚本
+- 启动 / 聚焦官方 Claude Desktop，打开 DevTools，新建对话，向其粘贴草稿或提交文本。
+- 检测安装位置、进程状态和完整性；官方 MSIX / CDP 被阻断时如实展示诊断，不伪装成已注入。
+- **两条中文路径**：
+  - **Claude 中文包装窗口**：独立 WebView 加载 `https://claude.ai/new`，创建阶段注入中文覆盖脚本，不改官方安装文件，推荐优先使用。
+  - **一键汉化（资源补丁）**：可选的本机补丁，参考 `Jyy1529/claude-desktop_win-zh_cn` 的公开资源，写入 `zh-CN.json`、locale 配置和必要的前端语言支持；执行前备份，提供还原入口，需要你明确触发。
 
-- 刷新脚本市场。
-- 下载并安装脚本。
-- 管理本地用户脚本。
-- 启用/禁用单个脚本。
-- 删除用户脚本。
-- 构建已启用脚本 bundle。
-- 通过 Codex 注入脚本扩展前端能力。
+### 主题与外观
 
-### 10. Zed Remote
+- 独立一级导航，三列主题卡片展示已安装主题，Codex 默认主题固定第一项；“CCP 外观”和“Codex 主题”是两个独立视图。
+- 无代码 DIY 工作台：可视化调整玻璃透光度、模糊、圆角、字号和本地背景图，实时预览、保存、再次编辑。
+- 从官方 GitHub 主题库按需下载、导入、预览、应用、删除和恢复默认；精选主题包与制作指南见 [`Theme/`](Theme/)。
+- 安装主题时先在临时目录验证，再原子替换并保留上一版本；视觉注入与汉化、模型标识注入相互隔离。
+- CCP 背景图库可保存、切换、删除多张本地高清背景，恢复默认不会清空图库。
 
-- 识别 Zed 安装路径。
-- 解析 SSH host、user、port。
-- 从 Codex global state 和线程上下文解析远程项目。
-- 维护最近远程项目注册表。
-- 构造 `zed://ssh/...` 远程打开链接。
-- 支持默认打开、复用窗口、新窗口、追加到当前窗口等策略。
-- 支持忘记远程项目。
+### 系统提示词与指令模板
 
-### 11. Upstream Worktree
+- 独立一级导航，紧凑卡片管理通用、破甲、逆向分析等指令模板；内置五套 Markdown 模板，位于 [`assets/system-prompts/`](assets/system-prompts/)。
+- 新增、编辑、删除、导入 Markdown，或通过 URL / GitHub 地址同步。
+- “保留原提示词”和“替换原提示词”两种启用方式，清楚显示当前生效状态。
+- 写入 `~/.codex/config.toml` 前自动备份，并检测外部修改，避免静默覆盖其他工具或你手工更新的配置。
+- 内置“使用方式”教程，源文件为 [`ccp-deepseek-guide.md`](apps/claude-codex-pro-manager/src/content/ccp-deepseek-guide.md)。
 
-- 读取 Git remote、branch、worktree 列表。
-- 从最新远程跟踪分支创建 worktree。
-- 支持本地项目和远程项目。
-- 校验分支名和 base branch。
-- 避免从过期本地 HEAD 派生任务分支。
+### 脚本、Zed Remote、Worktree 与自恢复
 
-### 12. Watcher 与自恢复
+- **脚本市场**：刷新、下载安装、启用 / 禁用、删除用户脚本，构建已启用脚本 bundle，通过 Codex 注入扩展前端能力。
+- **Zed Remote**：识别 Zed 安装与 SSH host / user / port，从 Codex 的全局状态和线程上下文解析远程项目，构造 `zed://ssh/...` 链接，支持默认 / 复用窗口 / 新窗口 / 追加到当前窗口。
+- **Upstream Worktree**：读取 remote、branch、worktree 列表，从最新远程跟踪分支创建 worktree，校验分支名和 base branch，避免从过期本地 HEAD 派生任务分支。
+- **Watcher 与自恢复**（Windows）：检测 Codex 进程与 CDP 端口，恢复失效 launcher，可启用、禁用、安装、卸载。
 
-- Windows 下可安装 watcher。
-- 检测 Codex 进程与 CDP 端口状态。
-- 恢复失效 launcher。
-- 支持启用、禁用、安装、卸载。
-- 支持停止 launcher / Codex 相关进程。
+### 安装维护与自动发布
 
-### 13. 安装维护与更新
+- 安装 / 卸载入口、修复快捷方式与后端配置、检查更新、下载 Release 资产并启动安装器、读取最新日志、复制诊断信息、重置设置。
+- **自动发布**：`Auto release installers` 在 `main` push 或手动触发后自动计算 `V0.01` 系列版本、创建 tag、构建 Windows 安装包与 macOS x64 / arm64 DMG，并上传 `latest.json`；Release 的“更新内容”会自动列出本次包含的提交摘要。版本按 `V0.01 → V0.02 → … → V0.99 → V1.00` 递增。
 
-- 安装入口。
-- 卸载入口。
-- 修复快捷方式。
-- 修复后端配置。
-- 检查更新。
-- 下载 Release 资产。
-- 启动安装器。
-- 读取最新日志。
-- 复制诊断信息。
-- 重置设置。
-- 重置图片覆盖设置。
+## 界面预览
 
-### 14. 自动构建与 Release
+管理工具的全部页面：概览（总览 / Agent 概览）、供应商与路由、蒸馏工作台、主题中心、系统提示词、会话、插件 Skills 与 MCP、设置（含 Computer Use）。上方已展示最新的四个页面，其余页面如下，个别截图可能早于最近的界面更新。
 
-- `Auto release installers`：main push 或手动触发后自动计算 `V0.01` 系列版本、创建 tag、构建 Windows 安装包、macOS x64 DMG、macOS arm64 DMG，并上传 `latest.json`。
-- `PR build artifacts`：用于 PR 和日常构建校验。
-- `release-assets`：保留给手动 GitHub Release 使用。
+<details>
+<summary>展开更多页面截图</summary>
 
-自动版本递增规则：
+<table>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="供应商与路由" width="100%"></a><br><sub>供应商与路由</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/clients.png"><img src="docs/screenshots/clients.png" alt="客户端与增强" width="100%"></a><br><sub>客户端与增强</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/themes.png"><img src="docs/screenshots/themes.png" alt="主题中心" width="100%"></a><br><sub>主题中心</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="系统提示词" width="100%"></a><br><sub>系统提示词</sub></td>
+  </tr>
+  <tr>
+    <td width="25%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话管理" width="100%"></a><br><sub>会话管理</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/extensions.png"><img src="docs/screenshots/extensions.png" alt="插件、Skills 与 MCP" width="100%"></a><br><sub>插件、Skills 与 MCP</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/maintenance.png"><img src="docs/screenshots/maintenance.png" alt="维护与诊断" width="100%"></a><br><sub>维护与诊断</sub></td>
+    <td width="25%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="设置" width="100%"></a><br><sub>设置</sub></td>
+  </tr>
+</table>
 
-```text
-V0.01 -> V0.02 -> ... -> V0.99 -> V1.00
-```
+</details>
 
-## 管理工具页面
+## 安全与隐私
 
-- 概览：服务健康、当前供应商、代理状态、异常与近期操作。
-- 供应商与路由：Codex、Claude 和 Claude Desktop 的 API Profile、模型目录、路由与故障转移。
-- 客户端与增强：Codex / Claude 启动维护、注入、汉化、脚本和本机状态。
-- 主题中心：Codex 主题预览、导入、应用、回滚和恢复默认。
-- 系统提示词：Markdown 指令模板、同步、启用方式和使用教程。
-- 蒸馏工作台：从本地会话选素材，蒸馏成 Skill、工作流、Prompt、画像或任务记忆。
-- 会话管理：历史会话修复、Codex / Claude 会话管理。
-- 插件、Skills 与 MCP：多 Agent 扩展资产、来源、依赖、风险和安装状态。
-- 维护与诊断：日志、Watcher、安装入口、路径检测、修复与更新。
-- 设置：运行开关、启动参数、增强矩阵、本地路径和外观偏好；独立的 **Computer Use** 标签管理 Claude Desktop 的截图与键鼠 MCP。
+**原则**
 
-## 安全边界
+- **本地优先**：配置、插件记录、日志和备份都优先落在本机；用量采集只读，会话 ID 匿名化。
+- **可审查**：安装插件、写入 MCP、信任 hooks、修改配置前展示命令或 diff。
+- **可回退**：写入关键配置前尽量备份；Claude 中文资源补丁提供还原入口。
+- **不静默信任第三方**：Ponytail / Codex hooks 需要单独审查和信任。
+- **不伪装能力**：无法自动安装或需要人工确认的功能会明确标记。
+
+**边界**
 
 - Computer Use 默认关闭；会移动真实鼠标和键盘，鼠标甩到主屏左上角即可急停。
-- 不静默修改 Claude Desktop 私有插件库。
-- 不静默信任第三方 hooks。
-- 不自动执行未知社区 MCP 安装脚本。
+- 不静默修改 Claude Desktop 私有插件库；不自动执行未知社区 MCP 安装脚本；不把第三方 GitHub 内容默认当作可信代码执行。
 - 不把 API key、Bearer token 或完整鉴权配置写入普通日志。
-- 不把第三方 GitHub 内容默认当作可信代码执行。
-- Claude 中文包装窗口不修改官方 Claude Desktop 文件。
-- Claude Desktop 中文资源补丁属于用户明确触发的本机补丁，执行前备份，可还原。
+- Claude 中文包装窗口不修改官方 Claude Desktop 文件；一键汉化是你明确触发的本机补丁，执行前备份，可还原。
+- CCP 只管理本机配置与第三方 API，不接管官方账号、订阅或支付。
+
+**数据会发往哪里**：用量看板不联网。只有你主动使用蒸馏、连通性测试、下载主题 / 插件 / 更新时，才会向你配置的供应商或对应来源发起请求；蒸馏时选中的会话内容会发送给你所选的模型供应商。
 
 ## 数据位置
 
-- Codex 配置：`~/.codex/config.toml`
-- Codex 登录状态：`~/.codex/auth.json`
-- Codex 数据库：优先 `~/.codex/sqlite/*.db`，回退到旧版 `~/.codex/state_5.sqlite`
-- Codex 插件仓库缓存：`~/.codex/.tmp/plugins`
-- Codex skills：`~/.codex/skills`
-- Claude Desktop MCP 配置：Windows 通常为 `%APPDATA%\Claude\claude_desktop_config.json`
-- Claude Desktop 3P 配置：Windows 通常为 `%LOCALAPPDATA%\Claude-3p`（MSIX 版在 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude-3p`）
-- 蒸馏任务与候选：`~/.claude-codex-pro/aitracker/`
-- Claude Codex Pro 状态：`~/.claude-codex-pro/`
-- Provider Sync 备份：`~/.codex/backups_state/provider-sync`
+| 内容 | 位置 |
+| --- | --- |
+| Codex 配置 / 登录状态 | `~/.codex/config.toml`、`~/.codex/auth.json` |
+| Codex 数据库 | 优先 `~/.codex/sqlite/*.db`，回退旧版 `~/.codex/state_5.sqlite` |
+| Codex 插件仓库缓存 / skills | `~/.codex/.tmp/plugins`、`~/.codex/skills` |
+| Claude Desktop MCP 配置 | Windows 通常为 `%APPDATA%\Claude\claude_desktop_config.json` |
+| Claude Desktop 3P（API）配置 | Windows 通常为 `%LOCALAPPDATA%\Claude-3p`；MSIX 版在 `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude-3p` |
+| CCP 状态 | `~/.claude-codex-pro/` |
+| 蒸馏任务与候选 | `~/.claude-codex-pro/aitracker/` |
+| Provider Sync 备份 | `~/.codex/backups_state/provider-sync` |
+
+## 第三方组件说明
+
+本仓库仍随附 Multica 上游的“我的任务”“自动化”“智能体”三个页面的源码、本地控制面和 Codex 页面 Host 适配层，但这三个入口目前**不再注入** Codex 侧边栏（见提交 `fbed6fc`）。保留的代码仅通过 Codex 原生 task/thread/subagent 工作，不启动 Multica server/daemon/CLI，也不注册第二个 Codex Runtime 或模型执行器。派生 UI 保留 Multica 产品名、Logo、版权及归属信息；完整 [`LICENSE`](docs/third-party/multica/LICENSE) 和 [`NOTICE`](docs/third-party/multica/NOTICE) 随发行物提供。上游版本、来源和集成边界见 [`docs/multica-attribution.md`](docs/multica-attribution.md) 与 [`SOURCE_MANIFEST.md`](docs/third-party/multica/SOURCE_MANIFEST.md)；保留品牌和归属不替代上游商业许可要求。
+
+蒸馏工作台的交互与处理逻辑参考 AITracker（Copyright (C) 2026 AITracker contributors，已获授权使用）。Ponytail 来自 [DietrichGebert/ponytail](https://github.com/DietrichGebert/ponytail)。
 
 ## 常见问题
 
-### 为什么一个提交会出现两个 Actions？
-
-因为当前仓库有两个 workflow 监听 `main` push：
-
-- `Auto release installers`：构建并发布安装包。
-- `PR build artifacts`：日常构建校验。
-
-这不是发布两个版本，只是同一个提交触发了两条流水线。
-
-### Release 里为什么只有 Source code？
-
-如果安装包构建 job 成功但发布 job 失败，GitHub 页面会只显示自动生成的源码 zip/tar.gz。需要查看 `Auto release installers` 的 `Publish release and latest.json` 步骤。当前 workflow 会先发布 draft release，再生成并上传 `latest.json`，避免 draft release 无法按 tag 查询导致失败。
-
 ### Codex 里没有看到增强标识
-
 确认是从 `Claude Codex Pro` 入口启动 Codex，而不是直接启动原始 Codex。仍然没有显示时，打开管理工具查看诊断和日志，重点检查 helper 端口、CDP 连接和 `renderer.script_loaded` 记录。
 
 ### Codex 模型菜单由谁负责？
-
-Codex 模型菜单、可见模型和当前选择均由 Codex 原生客户端管理。CCP 不注入模型候选、不追加“CCP 模型增强”组，也不覆盖 Codex 请求中的 `model`、`model_slug` 或 `modelId`。如果模型没有显示，请在 Codex 自身的登录状态、版本和配置，以及供应商上游模型目录中排查；CCP 的供应商模型列表仅用于配置和路由管理，不承诺改变原生菜单。
+Codex 模型菜单、可见模型和当前选择均由 Codex 原生客户端管理。CCP 不注入模型候选、不追加“CCP 模型增强”组，也不覆盖请求中的 `model`、`model_slug` 或 `modelId`。模型没有显示时，请在 Codex 自身的登录状态、版本和配置，以及供应商上游模型目录中排查；CCP 的供应商模型列表仅用于配置和路由管理。
 
 ### Claude 没有变成中文
+优先使用 `打开 Claude 中文窗口`，它是独立 WebView 包装窗口，不是官方 Claude Desktop 原窗口。若使用资源补丁，请确认 Claude Desktop 已完全退出、安装目录可写，失败时查看补丁状态或执行还原。
 
-优先使用 `打开 Claude 中文窗口`。这是独立 WebView 包装窗口，不是官方 Claude Desktop 原窗口。若使用资源补丁，请确认 Claude Desktop 已完全退出、安装目录可写，并在失败时查看补丁状态或执行还原。
+### 蒸馏失败了怎么办？
+历史里会显示带稳定编码的原因：`ai.provider-network` 表示连不上（检查 Base URL 与网络），`ai.provider-unavailable` 表示上游 5xx（稍后重试或换模型），`ai.provider-auth` 表示鉴权失败（检查 API Key），`ai.provider-invalid-response` 表示模型只返回了推理内容或空内容（换模型）。素材很长时会分批处理，任务详情会显示“已处理 x / n 批”。
+
+### Computer Use 开了但 Claude Desktop 里看不到工具
+开关只负责把 MCP 写进 Claude Desktop 的配置。写完后需要**完全退出**并重启 Claude Desktop（含托盘）。API（3P）模式的配置只有在 `Claude-3p` 配置文件已存在时才会被写入；仍看不到时，检查设置页「Computer Use」标签里的注册状态列出了哪些配置路径。
 
 ### 插件安装失败
+先打开安装预览确认类型：Claude 官方插件需要 `claude` CLI；Claude Desktop MCP 需要写入 `claude_desktop_config.json`；Claude Desktop 本地组织插件需要开发模式和目录写入权限；Codex 插件需要 `codex` CLI；Ponytail hooks 需要单独审查和信任；社区 MCP 和 Skill 需要结构可识别。
 
-先打开安装预览，确认安装类型：
+### 为什么一个提交会出现两个 Actions？
+有两个 workflow 监听 `main` push：`Auto release installers` 构建并发布安装包，`PR build artifacts` 做日常构建校验。这不是发布两个版本。
 
-- Claude 官方插件需要 `claude` CLI。
-- Claude Desktop MCP 需要写入 `claude_desktop_config.json`。
-- Claude Desktop 本地组织插件需要开发模式和目录写入权限。
-- Codex 插件需要 `codex` CLI。
-- Ponytail hooks 需要单独审查和信任。
-- 社区 MCP 和 Skill 需要结构可识别。
+### Release 里为什么只有 Source code？
+安装包构建 job 成功但发布 job 失败时，GitHub 页面只会显示自动生成的源码压缩包。查看 `Auto release installers` 的 `Publish release and latest.json` 步骤即可。
 
 ### macOS 提示应用无法打开或已损坏
-
-未签名或未公证的构建可能被 Gatekeeper 拦截。可以在“系统设置 -> 隐私与安全性”中允许打开。若仍提示已损坏，可执行：
+未签名或未公证的构建可能被 Gatekeeper 拦截。可在“系统设置 → 隐私与安全性”中允许打开；若仍提示已损坏：
 
 ```bash
 sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro.app
@@ -450,8 +300,7 @@ sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ 管理工�
 ```
 
 ### 是否支持 Intel Mac？
-
-支持。Release 会分别提供 `macos-x64.dmg` 和 `macos-arm64.dmg`。Intel Mac 使用 x64 包，Apple Silicon 使用 arm64 包。
+支持。Release 分别提供 `macos-x64.dmg` 和 `macos-arm64.dmg`，Intel Mac 用 x64，Apple Silicon 用 arm64。
 
 ## 构建与开发
 
@@ -459,30 +308,10 @@ sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ 管理工�
 
 ### 环境要求
 
-- Git。
-- Node.js 22 或更高版本。
-- npm。
+- Git、Node.js 22 或更高版本、npm。
 - Rust stable toolchain，包含 `cargo`、`rustc`、`rustfmt`。
-- Windows 构建需要 Visual Studio Build Tools / MSVC C++ 工具链。
-- Windows 打安装包需要 NSIS。
-- Windows MSI 打包需要 WiX Toolset（Release 工作流会自动安装）。
-- macOS 构建需要 Xcode Command Line Tools。
-- macOS 打 DMG 会使用系统自带的 `sips`、`iconutil`、`codesign`、`hdiutil`。
-
-Windows 安装 NSIS 示例：
-
-```powershell
-choco install nsis -y
-```
-
-Release 工作流会额外生成独立的 Windows MSI 资产；默认 Tauri 配置仍关闭 bundle，避免本地开发构建额外打包。
-
-macOS 安装 Rust 目标示例：
-
-```bash
-rustup target add x86_64-apple-darwin
-rustup target add aarch64-apple-darwin
-```
+- Windows：Visual Studio Build Tools / MSVC C++ 工具链；打安装包需要 NSIS（`choco install nsis -y`）；MSI 需要 WiX Toolset（Release 工作流会自动安装）。
+- macOS：Xcode Command Line Tools；打 DMG 使用系统自带的 `sips`、`iconutil`、`codesign`、`hdiutil`；需要 `rustup target add x86_64-apple-darwin aarch64-apple-darwin`。
 
 ### 安装依赖
 
@@ -491,31 +320,19 @@ npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 ```
 
-两个包分别安装依赖；存在匹配的 lockfile 时可使用 `npm ci`。CI 目前使用 `npm install --package-lock=false`。
+两个包分别安装依赖；存在匹配的 lockfile 时可使用 `npm ci`，CI 目前使用 `npm install --package-lock=false`。
 
-管理器的 `vite:build` 和 `dev` 会先运行仓库内 workflow 包的 `check`、`test`、`build`，再启动 Vite 构建或 Tauri；`build` 经 Tauri 的 `beforeBuildCommand` 走 `vite:build`。纯浏览器预览的 `vite:dev` 保持独立。普通构建不自动联网安装依赖。workflow 使用仓库内 vendored 源码，不依赖外部 Multica checkout。直接运行 Cargo 编译或测试前，先运行管理器的 `vite:build`，生成 core 通过 `include_str!` 嵌入的 `apps/codex-workflow-surface/dist/codex-workflow-surface.js` 和 `.css`。
+管理器的 `vite:build` 和 `dev` 会先运行仓库内 workflow 包的 `check`、`test`、`build`，再启动 Vite 构建或 Tauri；`build` 经 Tauri 的 `beforeBuildCommand` 走 `vite:build`。纯浏览器预览的 `vite:dev` 保持独立。普通构建不自动联网安装依赖。workflow 使用仓库内 vendored 源码，不依赖外部 Multica checkout。**直接运行 Cargo 编译或测试前，先运行管理器的 `vite:build`**，生成 core 通过 `include_str!` 嵌入的 `apps/codex-workflow-surface/dist/codex-workflow-surface.js` 和 `.css`。
 
 ### 本地开发启动
 
 ```bash
 cd apps/claude-codex-pro-manager
-npm run dev
+npm run dev        # 由 Tauri CLI 启动管理工具并自动运行 Vite（http://localhost:1420）
+npm run vite:dev   # 只调试前端页面
 ```
 
-该命令会由 Tauri CLI 启动管理工具，并自动运行 Vite 开发服务器。Vite 默认监听：
-
-```text
-http://localhost:1420
-```
-
-只调试前端页面时可以运行：
-
-```bash
-cd apps/claude-codex-pro-manager
-npm run vite:dev
-```
-
-普通浏览器预览没有 Tauri 后端，涉及系统配置、进程、插件安装、Claude 汉化等按钮会返回预览或无法执行；真实功能请用 `npm run dev` 启动 Tauri 应用验证。
+普通浏览器预览没有 Tauri 后端，涉及系统配置、进程、插件安装、Claude 汉化等按钮会返回预览或无法执行；真实功能请用 `npm run dev` 验证。
 
 ### 本地验证
 
@@ -537,6 +354,8 @@ cargo build --release
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml plugin_hub -- --nocapture
 cargo test -p claude-codex-pro-core --manifest-path Cargo.toml relay_config -- --nocapture
 cargo test -p claude-codex-pro-manager --manifest-path Cargo.toml --test windows_subsystem -- --nocapture
+cargo test -p claude-codex-pro-manager --lib distill_pipeline     # 蒸馏流水线与分批
+cargo test -p claude-codex-pro-core --lib claude_session_chain    # 续接链识别
 ```
 
 ### 生产二进制
@@ -546,26 +365,7 @@ npm --prefix apps/claude-codex-pro-manager run vite:build
 cargo build --release
 ```
 
-主要产物：
-
-```text
-target/release/claude-codex-pro.exe
-```
-
-macOS 或 Linux 上没有 `.exe` 后缀：
-
-```text
-target/release/claude-codex-pro
-```
-
-也可以在管理工具目录运行：
-
-```bash
-cd apps/claude-codex-pro-manager
-npm run build
-```
-
-该脚本构建统一桌面程序。正式安装包仍以仓库里的 NSIS / DMG 脚本为准。
+产物为 `target/release/claude-codex-pro.exe`（macOS / Linux 无 `.exe` 后缀）。也可在管理工具目录运行 `npm run build` 构建统一桌面程序；正式安装包仍以仓库里的 NSIS / DMG 脚本为准。
 
 ### Windows 安装包
 
@@ -589,97 +389,56 @@ Push-Location scripts/installer/windows
 Pop-Location
 ```
 
-输出：
+输出 `dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe`。ZIP / NSIS 的暂存目录包含 `resources/third-party/multica/LICENSE` 与 `NOTICE`，内容与 `docs/third-party/multica/` 原文逐字节一致。MSI 使用 `scripts/installer/windows/tauri-msi.conf.json` 映射相同许可文件并保留 Leila 资源，在管理器目录运行：
 
-```text
-dist/windows/claude-codex-pro-0.12-windows-x64-setup.exe
+```bash
+npm exec tauri build -- --bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json
 ```
 
-ZIP/NSIS 的暂存目录包含 `resources/third-party/multica/LICENSE` 与 `NOTICE`，内容与 `docs/third-party/multica/` 原文逐字节一致。MSI 使用 `scripts/installer/windows/tauri-msi.conf.json` 映射相同许可文件并保留 Leila 资源；在管理器目录运行 `npm exec tauri build -- --bundles msi --config ../../scripts/installer/windows/tauri-msi.conf.json`。许可文件随包提供不替代上游商业许可要求。
+许可文件随包提供不替代上游商业许可要求。
 
 ### macOS DMG
 
-Apple Silicon：
-
 ```bash
+# Apple Silicon
 npm --prefix apps/codex-workflow-surface install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager install --package-lock=false
 npm --prefix apps/claude-codex-pro-manager run vite:build
 rustup target add aarch64-apple-darwin
 cargo build --release --target aarch64-apple-darwin
 BINARY_DIR="$PWD/target/aarch64-apple-darwin/release" bash scripts/installer/macos/package-dmg.sh 0.12 arm64
+
+# Intel Mac：把 aarch64-apple-darwin 换成 x86_64-apple-darwin，最后一个参数换成 x64
 ```
 
-Intel Mac：
+输出 `dist/macos/claude-codex-pro-0.12-macos-arm64.dmg`（Intel 为 `-macos-x64.dmg`）。本地脚本使用 ad-hoc codesign，不做 Apple Developer ID 签名或公证，本地 DMG 可能被 Gatekeeper 提示，按上文常见问题手动允许。DMG 脚本在签名前将完整 Multica `LICENSE` / `NOTICE` 放入 `.app/Contents/Resources/third-party/multica/`，并在签名后校验原文一致。
 
-```bash
-npm --prefix apps/codex-workflow-surface install --package-lock=false
-npm --prefix apps/claude-codex-pro-manager install --package-lock=false
-npm --prefix apps/claude-codex-pro-manager run vite:build
-rustup target add x86_64-apple-darwin
-cargo build --release --target x86_64-apple-darwin
-BINARY_DIR="$PWD/target/x86_64-apple-darwin/release" bash scripts/installer/macos/package-dmg.sh 0.12 x64
-```
+### GitHub Actions
 
-输出：
-
-```text
-dist/macos/claude-codex-pro-0.12-macos-arm64.dmg
-dist/macos/claude-codex-pro-0.12-macos-x64.dmg
-```
-
-本地脚本使用 ad-hoc codesign，不做 Apple Developer ID 签名或公证。因此本地 DMG 可能被 Gatekeeper 提示，需要按上文 macOS 常见问题手动允许。
-
-DMG 脚本在签名前将完整 Multica `LICENSE` / `NOTICE` 放入 `.app/Contents/Resources/third-party/multica/`，并在签名后校验原文一致；macOS ZIP 从同一 `.app` 暂存目录打包。
-
-## GitHub Actions
-
-主要工作流：
-
-- `.github/workflows/auto-release-installers.yml`：main push 或手动触发后自动发版。
-- `.github/workflows/pr-build.yml`：PR、main push、手动触发时构建验证产物。
+- `.github/workflows/auto-release-installers.yml`：`main` push 或手动触发后自动发版。
+- `.github/workflows/pr-build.yml`：PR、`main` push、手动触发时构建验证产物。
 - `.github/workflows/release-assets.yml`：保留给手动 GitHub Release 使用。
 
-自动发版流程：
-
-1. 推送到 `main` 或手动运行 `Auto release installers`。
-2. `scripts/release/next-release-tag.js` 读取现有 tag。
-3. 生成下一版 `V0.01` 系列 tag。
-4. 创建 tag 和 draft Release。
-5. Windows runner 构建 `.exe` 安装包。
-6. macOS Intel runner 构建 x64 DMG。
-7. macOS Apple Silicon runner 构建 arm64 DMG。
-8. 上传安装包。
-9. 发布 Release。
-10. 生成并上传 `latest.json`。
-
-自动发版产物示例：
-
-```text
-claude-codex-pro-0.01-windows-x64-setup.exe
-claude-codex-pro-0.01-macos-x64.dmg
-claude-codex-pro-0.01-macos-arm64.dmg
-latest.json
-```
+自动发版：推送到 `main` → `scripts/release/next-release-tag.js` 读取现有 tag 并生成下一版 → 创建 tag 和 draft Release → Windows、macOS Intel、macOS Apple Silicon 三个 runner 分别构建 → 上传安装包 → 发布 Release → 生成并上传 `latest.json`。
 
 ## 项目结构
 
 ```text
 apps/
   claude-codex-pro-launcher/          内部 launcher 库
-  claude-codex-pro-manager/           统一 Tauri 主程序与管理工具
+  claude-codex-pro-manager/           统一 Tauri 主程序与管理工具（React/Vite 前端 + Rust 后端）
+  codex-workflow-surface/             Codex 内嵌工作流页面源码
 assets/inject/
   renderer-inject.js                  Codex 增强脚本
   claude-chinese-inject.js            Claude 中文包装窗口脚本
 crates/
-  claude-codex-pro-core/              启动、注入、配置、插件、更新、安装、bridge
-  claude-codex-pro-data/              会话数据、导出、Provider Sync
+  claude-codex-pro-core/              启动、注入、配置、供应商、插件、Computer Use、更新、安装、bridge
+  claude-codex-pro-data/              会话数据、用量采集、导出、Provider Sync
 scripts/installer/
   windows/ClaudeCodexPro.nsi          Windows NSIS 安装器
   macos/package-dmg.sh                macOS DMG 打包脚本
-docs/
-  code-knowledge-graph.md             代码知识图谱
-  full-code-review.md                 全量代码评审记录
+spec/ acceptance/                     任务规格与验收标准
+docs/                                 架构、评审与截图
 ```
 
 ## 反馈
@@ -700,3 +459,4 @@ docs/
 ## 说明
 
 Claude Codex Pro Tool 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。官方应用更新后，如果页面结构、协议、CLI、插件格式或配置路径变化，本项目的注入脚本和适配逻辑可能需要同步更新。
+
