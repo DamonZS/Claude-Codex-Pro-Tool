@@ -18,9 +18,12 @@
         "width": 1180,
         "height": 820,
         "minWidth": 960,
-        "minHeight": 640
+        "minHeight": 640,
+        "hiddenTitle": true,
+        "titleBarStyle": "Overlay"
       }
     ],
+    "withGlobalTauri": true,
     "security": {
       "csp": null
     }
