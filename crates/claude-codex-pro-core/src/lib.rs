@@ -15,7 +15,6 @@ pub mod claude_session_chain;
 pub mod claude_sessions;
 pub mod claude_zh_patch;
 pub mod client_deploy;
-pub mod codex_execution;
 pub mod codex_plugin_marketplace;
 pub mod codex_sqlite;
 pub mod codex_theme;

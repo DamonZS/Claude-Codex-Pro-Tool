@@ -1,7 +1,4 @@
 use anyhow::{Context, Result};
-use claude_codex_pro_core::codex_execution::{
-    CodexPageHostTransport, codex_page_execution_service,
-};
 use claude_codex_pro_core::launcher::{
     DefaultLaunchHooks, LaunchHooks, LaunchOptions, launch_and_inject_with_hooks,
 };
@@ -701,20 +698,15 @@ impl LauncherDataService {
 struct LauncherRuntimeService {
     debug_port: Mutex<u16>,
     websocket_url: Arc<Mutex<Option<String>>>,
-    codex_page_host: CodexPageHostTransport,
     user_scripts: UserScriptManager,
 }
 
 impl LauncherRuntimeService {
     fn new(debug_port: u16, user_scripts: UserScriptManager) -> Self {
         let websocket_url = Arc::new(Mutex::new(None));
-        let (_codex_execution, codex_page_host) =
-            codex_page_execution_service(Arc::clone(&websocket_url))
-                .expect("static Codex page host binding must be valid");
         Self {
             debug_port: Mutex::new(debug_port),
             websocket_url,
-            codex_page_host,
             user_scripts,
         }
     }
@@ -724,7 +716,7 @@ impl LauncherRuntimeService {
     }
 
     fn set_websocket_url(&self, websocket_url: &str) {
-        let _ = self.codex_page_host.set_websocket_url(websocket_url);
+        *self.websocket_url.lock().unwrap() = Some(websocket_url.to_string());
     }
 }
 
@@ -967,7 +959,6 @@ async fn try_inject_with_context(
         .web_socket_debugger_url
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("selected CDP target has no websocket URL"))?;
-    runtime.set_websocket_url(websocket_url);
     let settings = claude_codex_pro_core::settings::SettingsStore::default()
         .load()
         .unwrap_or_default();

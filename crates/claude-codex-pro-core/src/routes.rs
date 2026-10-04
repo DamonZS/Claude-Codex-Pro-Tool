@@ -3,10 +3,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::codex_execution::{CodexExecutionService, CodexPageHostRequestTransport};
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
 use crate::settings::{BackendSettings, SettingsStore};
 use crate::status::StatusStore;
@@ -400,8 +398,6 @@ pub struct CoreRuntimeService {
     user_script_evaluator: Option<UserScriptEvaluator>,
     devtools_opener: Option<DevtoolsOpener>,
     devtools_target_id: Option<String>,
-    codex_execution: Option<Arc<dyn CodexExecutionService>>,
-    codex_page_transport: Option<Arc<dyn CodexPageHostRequestTransport>>,
 }
 
 impl CoreRuntimeService {
@@ -414,8 +410,6 @@ impl CoreRuntimeService {
             user_script_evaluator: None,
             devtools_opener: None,
             devtools_target_id: None,
-            codex_execution: None,
-            codex_page_transport: None,
         }
     }
 
@@ -444,22 +438,6 @@ impl CoreRuntimeService {
         self
     }
 
-    /// Attach the current Codex page's native execution adapter. The bridge
-    /// never registers or starts a Codex runtime; production callers must
-    /// provide the already-open page host.
-    pub fn with_codex_execution_service(mut self, service: Arc<dyn CodexExecutionService>) -> Self {
-        self.codex_execution = Some(service);
-        self
-    }
-
-    /// Must be the same current-page transport backing the execution service.
-    pub fn with_codex_page_transport(
-        mut self,
-        transport: Arc<dyn CodexPageHostRequestTransport>,
-    ) -> Self {
-        self.codex_page_transport = Some(transport);
-        self
-    }
 }
 
 #[async_trait]

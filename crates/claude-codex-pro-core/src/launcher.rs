@@ -3069,12 +3069,7 @@ async fn try_inject(debug_port: u16, helper_port: u16) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("selected CDP target has no websocket URL"))?;
     let settings = SettingsStore::default().load().unwrap_or_default();
     let script = crate::assets::injection_script_with_settings(helper_port, &settings);
-    let websocket_state = Arc::new(std::sync::Mutex::new(Some(websocket_url.to_string())));
-    let (codex_execution, page_transport) =
-        crate::codex_execution::codex_page_execution_service(websocket_state)?;
-    let runtime = crate::routes::CoreRuntimeService::new(debug_port, StatusStore::default())
-        .with_codex_execution_service(codex_execution)
-        .with_codex_page_transport(Arc::new(page_transport));
+    let runtime = crate::routes::CoreRuntimeService::new(debug_port, StatusStore::default());
     let ctx = crate::routes::BridgeContext::core(Arc::new(runtime));
     crate::bridge::install_bridge(
         websocket_url,
@@ -3573,10 +3568,6 @@ mod tests {
             injection.matches("codex_page_execution_service(").count(),
             1
         );
-        assert!(injection.contains("let (codex_execution, page_transport) ="));
-        assert!(injection.contains(".with_codex_execution_service(codex_execution)"));
-        assert!(injection.contains(".with_codex_page_transport(Arc::new(page_transport))"));
-        assert!(!injection.contains("CodexPageHostTransport::new"));
     }
 
     #[test]
