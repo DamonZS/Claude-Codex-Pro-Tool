@@ -42,15 +42,8 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm ci
 
-      - name: Install workflow dependencies
-        working-directory: apps/codex-workflow-surface
-        run: npm ci
-
       - name: Verify release wiring
         run: node scripts/release/verify-release-workflow.js
-
-      - name: Test Multica notice staging
-        run: node --test scripts/release/stage-multica-notices.test.mjs
 
       - name: Type-check Manager
         working-directory: apps/claude-codex-pro-manager
@@ -61,7 +54,7 @@ jobs:
         run: npm run vite:build
 
       - name: Test workflow core integration
-        run: cargo test -p claude-codex-pro-core --lib multica_workspace --test cdp_bridge --test bridge_routes --test multica_workspace_fail_open
+        run: cargo test -p claude-codex-pro-core --test cdp_bridge --test bridge_routes
 
       - name: Build release binaries
         run: cargo build --release
@@ -71,24 +64,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
-
-      - name: Stage Multica notices
-        run: node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
-
-      - name: Stage Multica runtime
-        if: ${{ false }}
-        run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
-
-      - name: Verify staged Multica runtime
-        if: ${{ false }}
-        shell: pwsh
-        run: |
-          $runtimeDir = "dist/windows/app/resources/multica"
-          $archives = @(Get-ChildItem -LiteralPath $runtimeDir -File -ErrorAction SilentlyContinue)
-          if ($archives.Count -eq 0) {
-            throw "Multica runtime staging produced no archive in $runtimeDir"
-          }
-          Write-Host "Staged runtime archive: $($archives[0].Name) ($($archives[0].Length) bytes)"
 
       - name: Build Windows installer
         if: ${{ false }}
@@ -153,15 +128,8 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm ci
 
-      - name: Install workflow dependencies
-        working-directory: apps/codex-workflow-surface
-        run: npm ci
-
       - name: Verify release wiring
         run: node scripts/release/verify-release-workflow.js
-
-      - name: Test Multica notice staging
-        run: node --test scripts/release/stage-multica-notices.test.mjs
 
       - name: Type-check Manager
         working-directory: apps/claude-codex-pro-manager

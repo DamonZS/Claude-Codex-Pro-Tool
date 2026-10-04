@@ -7,7 +7,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 DIST="$ROOT/dist/macos"
 STAGE="$DIST/stage"
 BINARY_DIR="${BINARY_DIR:-$ROOT/target/release}"
-MULTICA_RESOURCE_DIR="${MULTICA_RESOURCE_DIR:-}"
 LEILA_RESOURCE_DIR="${LEILA_RESOURCE_DIR:-}"
 DMG="$DIST/claude-codex-pro-${VERSION}-macos-${ARCH}.dmg"
 ICON_SOURCE="$ROOT/apps/claude-codex-pro-manager/src-tauri/icons/icon.png"
@@ -51,15 +50,6 @@ create_app() {
 
   rm -rf "$app_dir"
   mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
-  node "$ROOT/scripts/release/stage-multica-notices.mjs" "$app_dir/Contents/Resources/third-party/multica"
-  if [ -n "$MULTICA_RESOURCE_DIR" ]; then
-    if [ ! -d "$MULTICA_RESOURCE_DIR" ]; then
-      echo "error: Multica resource directory not found: $MULTICA_RESOURCE_DIR" >&2
-      return 1
-    fi
-    mkdir -p "$app_dir/Contents/Resources/multica"
-    cp -R "$MULTICA_RESOURCE_DIR/." "$app_dir/Contents/Resources/multica/"
-  fi
   if [ -n "$LEILA_RESOURCE_DIR" ]; then
     if [ ! -f "$LEILA_RESOURCE_DIR/manifest.json" ]; then
       echo "error: Leila resource manifest not found: $LEILA_RESOURCE_DIR/manifest.json" >&2
@@ -143,7 +133,6 @@ sign_app() {
 
 verify_app() {
   local app_dir="$1"
-  node "$ROOT/scripts/release/stage-multica-notices.mjs" "$app_dir/Contents/Resources/third-party/multica" --verify
   local plist="$app_dir/Contents/Info.plist"
   local plutil_bin
   plutil_bin="$(command -v plutil || true)"

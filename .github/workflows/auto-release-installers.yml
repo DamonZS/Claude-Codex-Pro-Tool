@@ -178,15 +178,8 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm ci
 
-      - name: Install workflow dependencies
-        working-directory: apps/codex-workflow-surface
-        run: npm ci
-
       - name: Verify release wiring
         run: node scripts/release/verify-release-workflow.js
-
-      - name: Test Multica notice staging
-        run: node --test scripts/release/stage-multica-notices.test.mjs
 
       - name: Type-check Manager
         working-directory: apps/claude-codex-pro-manager
@@ -205,9 +198,6 @@ jobs:
           New-Item -ItemType Directory -Force dist/windows/app | Out-Null
           Copy-Item target/release/claude-codex-pro.exe dist/windows/app/
 
-      - name: Stage Multica notices
-        run: node scripts/release/stage-multica-notices.mjs dist/windows/app/resources/third-party/multica
-
       - name: Stage Leila resources
         shell: pwsh
         run: |
@@ -224,19 +214,6 @@ jobs:
           if (-not (Test-Path $manifest)) { throw "Leila 1.0.7 manifest was not staged" }
           $data = Get-Content $manifest -Raw | ConvertFrom-Json
           if ($data.version -ne "1.0.7") { throw "Unexpected Leila resource version: $($data.version)" }
-
-      - name: Stage Multica runtime
-        run: node scripts/release/stage-multica-runtime.mjs --target x86_64-pc-windows-msvc --destination dist/windows/app/resources/multica
-
-      - name: Verify staged Multica runtime
-        shell: pwsh
-        run: |
-          $runtimeDir = "dist/windows/app/resources/multica"
-          $archives = @(Get-ChildItem -LiteralPath $runtimeDir -File -ErrorAction SilentlyContinue)
-          if ($archives.Count -eq 0) {
-            throw "Multica runtime staging produced no archive in $runtimeDir"
-          }
-          Write-Host "Staged runtime archive: $($archives[0].Name) ($($archives[0].Length) bytes)"
 
       - name: Build Windows installer
         shell: pwsh
@@ -322,15 +299,8 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm ci
 
-      - name: Install workflow dependencies
-        working-directory: apps/codex-workflow-surface
-        run: npm ci
-
       - name: Verify release wiring
         run: node scripts/release/verify-release-workflow.js
-
-      - name: Test Multica notice staging
-        run: node --test scripts/release/stage-multica-notices.test.mjs
 
       - name: Type-check Manager
         working-directory: apps/claude-codex-pro-manager
@@ -355,10 +325,6 @@ jobs:
       - name: Build macOS DMG
         run: |
           VERSION="${{ needs.prepare-release.outputs.version }}"
-          node scripts/release/stage-multica-runtime.mjs \
-            --target "${{ matrix.target }}" \
-            --destination "target/multica-runtime/${{ matrix.target }}"
-          MULTICA_RESOURCE_DIR="$PWD/target/multica-runtime/${{ matrix.target }}" \
           LEILA_RESOURCE_DIR="$PWD/apps/claude-codex-pro-manager/src-tauri/resources/leila/assets" \
           BINARY_DIR="$PWD/target/${{ matrix.target }}/release" bash scripts/installer/macos/package-dmg.sh "$VERSION" "${{ matrix.arch }}"
 

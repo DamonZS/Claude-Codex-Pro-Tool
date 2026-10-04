@@ -90,7 +90,7 @@ export function initialRoute(): Route {
 export function normalizeRoute(value: unknown): unknown {
   if (value === "about") return "settings";
   if (value === "pluginHub" || value === "context" || value === "scripts") return "tools";
-  if (value === "logs" || value === "multica" || value === "maintenance") return "settings";
+  if (value === "logs" || value === "maintenance") return "settings";
   if (value === "relay" || value === "models") return "supplier";
   return value;
 }
@@ -99,7 +99,6 @@ export function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
     overview: "服务健康、当前配置、异常与近期运行状态。",
     supplier: "管理第三方 API、目标应用、本地代理和路由策略。",
-    multica: "本地工作流入口与开关已归入设置。",
     clients: "筛选本机会话、选择片段、配置模型，并审批和归档蒸馏产物。",
     themes: "浏览、导入、应用与恢复本机 Codex 主题。",
     prompts: "管理 Codex 系统提示词、分类与当前生效方式。",
