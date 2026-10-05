@@ -560,7 +560,295 @@ body {
   color: var(--workspace-text-tertiary);
 }
 
-.ops-agent-scope,
+.ops-agent-scope-control {
+  position: relative;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.ops-agent-scope-trigger {
+  display: inline-flex;
+  min-width: 88px;
+  height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-control-radius);
+  background: var(--workspace-surface-raised);
+  color: var(--workspace-text);
+  cursor: pointer;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ops-agent-scope-trigger:hover {
+  background: var(--workspace-surface);
+}
+
+.ops-agent-scope-menu {
+  position: absolute;
+  z-index: 180;
+  top: calc(100% + 9px);
+  left: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 248px;
+  max-height: min(360px, calc(100vh - 96px));
+  overflow: hidden;
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: var(--workspace-menu-radius);
+  background-color: rgb(8 13 10 / 0.9);
+  background-image: var(--workspace-glass-sheen);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.34),
+    var(--workspace-menu-shadow);
+  color: var(--workspace-text);
+  backdrop-filter: blur(34px) saturate(174%);
+  -webkit-backdrop-filter: blur(34px) saturate(174%);
+}
+
+.ops-shell.light .ops-agent-scope-menu {
+  background-color: rgb(250 253 251 / 0.94);
+  box-shadow:
+    inset 0 1px 0 #fff,
+    var(--workspace-menu-shadow);
+}
+
+.ops-agent-scope-menu > header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--workspace-border);
+  padding: 10px 11px 8px;
+}
+
+.ops-agent-scope-menu > header strong {
+  font-size: 12px;
+}
+
+.ops-agent-scope-menu > header small {
+  color: var(--workspace-text-tertiary);
+  font-size: 10px;
+}
+
+.ops-agent-scope-menu > div {
+  display: grid;
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  scrollbar-gutter: stable;
+}
+
+.ops-agent-scope-menu button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--workspace-control-radius);
+  background: transparent;
+  color: var(--workspace-text);
+  cursor: pointer;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.ops-agent-scope-menu button:hover,
+.ops-agent-scope-menu button[aria-checked="true"] {
+  background: var(--workspace-success-soft);
+}
+
+.ops-agent-scope-menu button.dimmed {
+  color: var(--workspace-text-tertiary);
+  opacity: 0.6;
+}
+
+.ops-agent-scope-menu button.dimmed:hover {
+  opacity: 0.8;
+}
+
+.ops-agent-scope-menu button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.ops-agent-scope-menu button :is(strong, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-agent-scope-menu button strong {
+  font-size: 12px;
+}
+
+.ops-agent-scope-menu button small {
+  color: var(--workspace-text-tertiary);
+  font-size: 10px;
+}
+
+.ops-agent-scope-menu button > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  color: var(--workspace-success);
+}
+
+.ops-domain-tabs {
+  position: relative;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.ops-agent-scope-trigger {
+  display: inline-flex;
+  min-width: 88px;
+  height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  border: 1px solid var(--workspace-border);
+  border-radius: var(--workspace-control-radius);
+  background: var(--workspace-surface-raised);
+  color: var(--workspace-text);
+  cursor: pointer;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ops-agent-scope-trigger:hover {
+  background: var(--workspace-surface);
+}
+
+.ops-agent-scope-menu {
+  position: absolute;
+  z-index: 180;
+  top: calc(100% + 9px);
+  left: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: 248px;
+  max-height: min(360px, calc(100vh - 96px));
+  overflow: hidden;
+  border: 1px solid var(--workspace-border-strong);
+  border-radius: var(--workspace-menu-radius);
+  background-color: rgb(8 13 10 / 0.9);
+  background-image: var(--workspace-glass-sheen);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.34),
+    var(--workspace-menu-shadow);
+  color: var(--workspace-text);
+  backdrop-filter: blur(34px) saturate(174%);
+  -webkit-backdrop-filter: blur(34px) saturate(174%);
+}
+
+.ops-shell.light .ops-agent-scope-menu {
+  background-color: rgb(250 253 251 / 0.94);
+  box-shadow:
+    inset 0 1px 0 #fff,
+    var(--workspace-menu-shadow);
+}
+
+.ops-agent-scope-menu > header {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--workspace-border);
+  padding: 10px 11px 8px;
+}
+
+.ops-agent-scope-menu > header strong {
+  font-size: 12px;
+}
+
+.ops-agent-scope-menu > header small {
+  color: var(--workspace-text-tertiary);
+  font-size: 10px;
+}
+
+.ops-agent-scope-menu > div {
+  display: grid;
+  min-height: 0;
+  gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 5px;
+  scrollbar-gutter: stable;
+}
+
+.ops-agent-scope-menu button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--workspace-control-radius);
+  background: transparent;
+  color: var(--workspace-text);
+  cursor: pointer;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.ops-agent-scope-menu button:hover,
+.ops-agent-scope-menu button[aria-checked="true"] {
+  background: var(--workspace-success-soft);
+}
+
+.ops-agent-scope-menu button.dimmed {
+  color: var(--workspace-text-tertiary);
+  opacity: 0.6;
+}
+
+.ops-agent-scope-menu button.dimmed:hover {
+  opacity: 0.8;
+}
+
+.ops-agent-scope-menu button > span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.ops-agent-scope-menu button :is(strong, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ops-agent-scope-menu button strong {
+  font-size: 12px;
+}
+
+.ops-agent-scope-menu button small {
+  color: var(--workspace-text-tertiary);
+  font-size: 10px;
+}
+
+.ops-agent-scope-menu button > svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 15px;
+  color: var(--workspace-success);
+}
+
+
 .ops-domain-tabs {
   display: inline-flex;
   align-items: center;
@@ -571,7 +859,6 @@ body {
   padding: 2px;
 }
 
-.ops-agent-scope button,
 .ops-domain-tabs button {
   min-width: 48px;
   height: 28px;
@@ -585,13 +872,10 @@ body {
   font-weight: 600;
 }
 
-.ops-agent-scope button:hover,
 .ops-domain-tabs button:hover {
   color: var(--workspace-text);
 }
 
-.ops-agent-scope button.active,
-.ops-agent-scope button[aria-pressed="true"],
 .ops-domain-tabs button.active,
 .ops-domain-tabs button[aria-pressed="true"] {
   background: var(--workspace-surface);
@@ -3728,11 +4012,6 @@ html.dark > body > .supplier-model-dropdown-menu,
     display: none;
   }
 
-  .ops-agent-scope button {
-    min-width: 38px;
-    padding-inline: 5px;
-  }
-
   .ops-command-context,
   .ops-command-actions {
     gap: 4px;
@@ -6510,7 +6789,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   }
 
   .ops-rail nav button.active,
-  .ops-agent-scope button[aria-pressed="true"],
   .ops-domain-tabs button[aria-pressed="true"],
   .clients-master-items > button[aria-pressed="true"] {
     outline: 2px solid Highlight;
@@ -6580,6 +6858,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   .ops-command-palette,
   .ops-theme-menu,
   .ops-supplier-menu,
+  .ops-agent-scope-menu,
   .ops-update-popover,
   .supplier-drop-popover,
   .supplier-model-dropdown-menu
@@ -7056,7 +7335,6 @@ html.dark > body > .supplier-model-dropdown-menu,
     var(--workspace-menu-shadow);
 }
 
-.ops-agent-scope,
 .ops-domain-tabs,
 .ops-command-search,
 .ops-runtime-chip,
@@ -7070,7 +7348,6 @@ html.dark > body > .supplier-model-dropdown-menu,
 }
 
 .ops-shell.light :is(
-  .ops-agent-scope,
   .ops-domain-tabs,
   .ops-command-search,
   .ops-runtime-chip,
@@ -7081,8 +7358,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.96);
 }
 
-.ops-agent-scope button.active,
-.ops-agent-scope button[aria-pressed="true"],
 .ops-domain-tabs button.active,
 .ops-domain-tabs button[aria-pressed="true"] {
   background: var(--workspace-surface-raised);
@@ -9468,6 +9743,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 .ops-command-palette,
 .ops-theme-menu,
 .ops-supplier-menu,
+.ops-agent-scope-menu,
 .ops-update-popover {
   border-color: var(--agent-glass-edge) !important;
   background-color: var(--agent-glass-shell) !important;
@@ -9539,8 +9815,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 .ops-command-search,
 .ops-runtime-chip,
 .ops-icon-command,
-.ops-domain-tabs,
-.ops-agent-scope {
+.ops-domain-tabs {
   border-color: rgb(255 255 255 / 0.1);
   background-image: linear-gradient(145deg, rgb(255 255 255 / 0.1), transparent 48%);
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);

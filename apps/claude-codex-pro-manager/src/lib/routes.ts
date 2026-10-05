@@ -97,20 +97,21 @@ export function normalizeRoute(value: unknown): unknown {
 
 export function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
-    overview: "服务健康、当前配置、异常与近期运行状态。",
-    supplier: "管理第三方 API、目标应用、本地代理和路由策略。",
-    clients: "筛选本机会话、选择片段、配置模型，并审批和归档蒸馏产物。",
-    themes: "浏览、导入、应用与恢复本机 Codex 主题。",
-    prompts: "管理 Codex 系统提示词、分类与当前生效方式。",
+    overview: "",
+    supplier: "",
+    clients: "",
+    themes: "",
+    prompts: "",
     tools: "",
-    sessions: "查看本地会话、项目归属、迁移与供应商同步。",
-    maintenance: "检查入口、Watcher、后端、日志并执行明确修复。",
-    settings: "调整本地偏好、增强开关和运行参数。",
-    about: "检查版本、Release 更新与产品联系信息。",
+    sessions: "",
+    "session-index": "",
+    maintenance: "",
+    settings: "",
+    about: "",
   };
   return subtitles[route];
 }
 
 export function routeDocumentTitle(route: Route) {
-  return route === "overview" ? "CCP 管理工具" : `${routeLabel(route)} - CCP 管理工具`;
+  return route === "overview" ? "管理工具" : `${routeLabel(route)} - 管理工具`;
 }

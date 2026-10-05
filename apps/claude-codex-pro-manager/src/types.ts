@@ -1,6 +1,8 @@
 // 全部前端共享类型定义。从 App.tsx 抽出（任务#3 组件拆分）。
 // 纯类型模块，无运行时依赖。
 
+import type { AgentAppId } from "@/components/settings/contract";
+
 export type Status = "ok" | "failed" | "not_implemented" | "not_checked" | string;
 
 export type CommandResult<T> = T & {
@@ -363,7 +365,7 @@ export type SupplierPreset = {
   modelMappingJson?: string;
 };
 
-export type SupplierTargetApp = "codex" | "claude" | "claude-desktop";
+export type SupplierTargetApp = AgentAppId;
 
 export type AggregateStrategy = {
   id: string;
@@ -1426,6 +1428,7 @@ export type Route =
   | "prompts"
   | "tools"
   | "sessions"
+  | "session-index"
   | "maintenance"
   | "settings"
   | "about";
