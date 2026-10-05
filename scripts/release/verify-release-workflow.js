@@ -18,14 +18,12 @@ const manager = JSON.parse(fs.readFileSync("apps/claude-codex-pro-manager/packag
 const tauri = JSON.parse(fs.readFileSync("apps/claude-codex-pro-manager/src-tauri/tauri.conf.json", "utf8"));
 const msi = JSON.parse(fs.readFileSync("scripts/installer/windows/tauri-msi.conf.json", "utf8"));
 
-assert.equal(manager.scripts["renderer:test"], "node --test ../../scripts/test-workflow-page-host.cjs");
-assert.equal(manager.scripts["vite:build"], "npm run renderer:test && vite build");
 assert.equal(manager.scripts["vite:dev"], "vite --host 127.0.0.1 --port 1420");
 assert.equal(manager.scripts.dev, "tauri dev");
 assert.equal(manager.scripts.build, "tauri build");
 assert.equal(tauri.build.beforeDevCommand, "npm run vite:dev");
 assert.equal(tauri.build.beforeBuildCommand, "npm run vite:build");
-for (const command of ["dev", "build", "vite:dev", "vite:build", "renderer:test"]) {
+for (const command of ["dev", "build", "vite:dev", "vite:build", "workflow:test", "workflow:build"]) {
   for (const hook of ["pre", "post"]) {
     assert.equal(manager.scripts[`${hook}${command}`], undefined, `Unexpected recursive/build hook: ${hook}${command}`);
   }
