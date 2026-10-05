@@ -1319,7 +1319,10 @@ function AitrackerSessionPanel({
                         <strong>{session.project || "未采集项目"}</strong>
                         <small>{session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
                       </button>
-                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm"><MessageCircle className="h-3.5 w-3.5" />查看会话</Button>
+                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm">
+                        <MessageCircle className="h-3.5 w-3.5" />
+                        {aitrackerStatusLabel(session.status) === "可恢复" ? "恢复会话" : "查看会话"}
+                      </Button>
                     </article>
                   ))}
                 </div>
