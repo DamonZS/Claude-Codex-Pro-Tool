@@ -35,6 +35,7 @@ import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, 
 
 import { Button } from "@/components/ui/button";
 import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShell";
+import type { AgentAppId } from "@/components/settings/contract";
 import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
 import { CodexThemeCenterScreen } from "@/components/CodexThemeCenterScreen";
 import { SystemPromptScreen } from "@/components/SystemPromptScreen";
@@ -927,7 +928,7 @@ export function App() {
       updateSettingsDraft(result.settings);
       notifyResult({ title: "保存工具与插件", message: result.message, status: result.status });
       await saveSettings(result.settings);
-      // upsert only edits CCP's managed copy; write it into ~/.codex/config.toml
+      // upsert only edits the managed copy; write it into ~/.codex/config.toml
       // too, otherwise a new MCP never reaches Codex or the inventory scan.
       if (statusOk(result.status)) await syncCodexLiveContext(result.settings, "保存工具与插件");
     }
@@ -2853,24 +2854,32 @@ export function App() {
   }, [route, actions]);
 
   const shellSettings = settingsDraft ?? settings?.settings ?? null;
-  const shellActiveProfileId = agentScope === "claude"
+  const shellActiveProfileId = agentScope === "claude" || agentScope === "claude-desktop"
     ? shellSettings?.activeClaudeRelayId || shellSettings?.activeClaudeDesktopRelayId
-    : shellSettings?.activeRelayId;
+    : agentScope === "codex"
+    ? shellSettings?.activeRelayId
+    : null;
   const shellActiveProfile = shellSettings?.relayProfiles.find((profile) => profile.id === shellActiveProfileId)
     ?? shellSettings?.relayProfiles.find((profile) => profile.id === shellSettings?.activeRelayId)
     ?? null;
   const shellSupplierOptions = (shellSettings?.relayProfiles ?? [])
     .filter((profile) => {
       const targetApp = profile.targetApp || "codex";
-      return agentScope === "codex"
-        ? targetApp === "codex"
-        : targetApp === "claude" || targetApp === "claude-desktop";
+      return targetApp === agentScope;
     })
     .map((profile) => ({
       id: profile.id,
       name: profile.name || profile.id,
       targetApp: profile.targetApp || "codex" as const,
     }));
+
+  // 计算每个 Agent 是否有配置的供应商
+  const agentHasSuppliers = new Set<AgentAppId>();
+  (shellSettings?.relayProfiles ?? []).forEach((profile) => {
+    const targetApp = profile.targetApp || "codex";
+    agentHasSuppliers.add(targetApp);
+  });
+
   const shellProxyHealth: ProxyHealth = overview?.latest_launch?.helper_port_online
     ? "healthy"
     : overview?.latest_launch?.frontend_runtime_online
@@ -2885,6 +2894,7 @@ export function App() {
         activeSupplierId={shellActiveProfile?.id ?? null}
         activeSupplierName={shellActiveProfile?.name || shellActiveProfile?.id || "未选择供应商"}
         agentScope={agentScope}
+        agentHasSuppliers={agentHasSuppliers}
         busy={busy}
         codexThemeBackground={codexThemeBackground?.data_uri ?? null}
         onAgentScopeChange={setAgentScope}

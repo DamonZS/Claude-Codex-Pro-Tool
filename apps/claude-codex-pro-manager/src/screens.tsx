@@ -102,10 +102,11 @@ import type {
   UnifiedToolAsset,
   UnifiedToolInventoryResult,
 } from "@/types";
+import type { AgentAppId } from "@/components/settings/contract";
 
 
 
-type OverviewAgentScope = "codex" | "claude";
+type OverviewAgentScope = AgentAppId;
 type OverviewRange = "24h" | "7d" | "30d";
 const overviewRangeLabels: Record<OverviewRange, string> = { "24h": "24 小时", "7d": "7 天", "30d": "30 天" };
 
@@ -1632,7 +1633,7 @@ export const AboutScreen = memo(function AboutScreen({
   return (
     <div className="ops-two-column">
       <div className="ops-wide-column">
-        <Panel title="关于 CCP" detail="CCP 本地供应商、客户端、会话与维护控制台。">
+        <Panel title="关于" detail="本地供应商、客户端、会话与维护控制台。">
           <div className="info-grid compact">
             <InfoRow label="Claude Codex Pro 版本" value={overview?.current_version ?? updateInfo?.currentVersion ?? "未加载"} />
             <InfoRow label="Codex 版本" value={overview?.codex_version ?? "未检测"} />

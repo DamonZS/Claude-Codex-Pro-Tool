@@ -1150,7 +1150,7 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
       entries: [
         { timestampMs: now - 4_000, tool: "click", ok: true, x: 640, y: 412 },
         { timestampMs: now - 9_000, tool: "type_text", ok: true, textLength: 18 },
-        { timestampMs: now - 15_000, tool: "screenshot", ok: false, error: "Computer Use 未开启，请在 CCP 中开启" },
+        { timestampMs: now - 15_000, tool: "screenshot", ok: false, error: "Computer Use 未开启，请在管理工具中开启" },
       ],
     });
   }

@@ -28,7 +28,6 @@ import {
 
 import {
   primaryRoute,
-  routeBreadcrumb,
   routeCatalog,
   routeDomainTabs,
   routeLabel,
@@ -37,8 +36,10 @@ import {
 } from "@/lib/routes";
 import { formatDownloadBytes, updateProgressLabel } from "@/lib/update";
 import type { Route, SupplierTargetApp, UpdateResult } from "@/types";
+import type { AgentAppId } from "@/components/settings/contract";
+import { AGENT_APPS } from "@/components/settings/contract";
 
-export type AgentScope = "codex" | "claude";
+export type AgentScope = AgentAppId;
 export type { ThemePreference } from "@/lib/theme";
 export type ProxyHealth = "healthy" | "attention" | "offline" | "unknown";
 export type ShellSupplierOption = {
@@ -51,6 +52,7 @@ type AppShellProps = {
   activeSupplierId: string | null;
   activeSupplierName: string;
   agentScope: AgentScope;
+  agentHasSuppliers: Set<AgentAppId>;
   busy: boolean;
   children: ReactNode;
   codexThemeBackground: string | null;
@@ -95,6 +97,7 @@ export function AppShell({
   busy,
   children,
   codexThemeBackground,
+  agentHasSuppliers,
   onAgentScopeChange,
   onInstallUpdate,
   onInstallClaudeZhPatch,
@@ -111,6 +114,7 @@ export function AppShell({
   const [themePreference, setThemePreference] = useState<ThemePreference>(readThemePreference);
   const [systemDark, setSystemDark] = useState(systemPrefersDark);
   const [supplierMenuOpen, setSupplierMenuOpen] = useState(false);
+  const [agentScopeMenuOpen, setAgentScopeMenuOpen] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [commandIndex, setCommandIndex] = useState(0);
@@ -118,9 +122,9 @@ export function AppShell({
   const commandPaletteRef = useRef<HTMLElement | null>(null);
   const commandReturnFocusRef = useRef<HTMLElement | null>(null);
   const supplierMenuRef = useRef<HTMLDivElement | null>(null);
+  const agentScopeMenuRef = useRef<HTMLDivElement | null>(null);
   const resolvedTheme = themePreference === "system" ? (systemDark ? "dark" : "light") : themePreference;
   const activePrimaryRoute = primaryRoute(route);
-  const breadcrumbs = routeBreadcrumb(route);
   const domainTabs = routeDomainTabs(route);
   const updateAvailable = updateInfo?.updateAvailable === true;
   const updatePhase = updateInfo?.phase ?? "ready";
@@ -216,6 +220,7 @@ export function AppShell({
       } else if (event.key === "Escape") {
         if (commandOpen) closeCommand();
         setSupplierMenuOpen(false);
+        setAgentScopeMenuOpen(false);
       }
     };
     window.addEventListener("keydown", handleShortcut);
@@ -241,6 +246,15 @@ export function AppShell({
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [supplierMenuOpen]);
+
+  useEffect(() => {
+    if (!agentScopeMenuOpen) return;
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      if (!agentScopeMenuRef.current?.contains(event.target as Node)) setAgentScopeMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [agentScopeMenuOpen]);
 
   const navigate = (nextRoute: Route) => {
     if (commandOpen) closeCommand();
@@ -338,33 +352,50 @@ export function AppShell({
 
       <main className="ops-workspace">
         <header className="ops-topbar" data-tauri-drag-region>
-          {route === "overview" ? (
-            <div className="ops-overview-heading">
-              <strong>运维概览</strong>
-              <small>供应商、路由与 Agent 运行态</small>
-            </div>
-          ) : (
-            <div className="ops-breadcrumb" aria-label="当前位置">
-              {breadcrumbs.map((item, index) => (
-                <span key={`${item}-${index}`}>
-                  {index ? <ChevronRight aria-hidden="true" className="h-3 w-3" /> : null}
-                  <span>{item}</span>
-                </span>
-              ))}
-            </div>
-          )}
-
           <div className="ops-commandbar">
             <div className="ops-command-context">
-              <div className="ops-agent-scope" aria-label="Agent 范围" role="group">
-                {([
-                  ["codex", "Codex"],
-                  ["claude", "Claude"],
-                ] as const).map(([value, label]) => (
-                  <button aria-pressed={agentScope === value} className={agentScope === value ? "active" : ""} key={value} onClick={() => onAgentScopeChange(value)} type="button">
-                    {label}
-                  </button>
-                ))}
+              <div className="ops-agent-scope-control" ref={agentScopeMenuRef}>
+                <button
+                  aria-expanded={agentScopeMenuOpen}
+                  aria-haspopup="menu"
+                  className="ops-agent-scope-trigger"
+                  onClick={() => setAgentScopeMenuOpen((open) => !open)}
+                  type="button"
+                >
+                  <span>
+                    {AGENT_APPS.find((app) => app.id === agentScope)?.label ?? "Agent"}
+                  </span>
+                  <ChevronDown aria-hidden="true" className="h-3 w-3" />
+                </button>
+                {agentScopeMenuOpen ? (
+                  <div className="ops-agent-scope-menu" role="menu">
+                    <div>
+                      {AGENT_APPS.map((app) => {
+                        const selected = agentScope === app.id;
+                        const hasSupplier = agentHasSuppliers.has(app.id);
+                        return (
+                          <button
+                            aria-checked={selected}
+                            className={hasSupplier ? "" : "dimmed"}
+                            key={app.id}
+                            onClick={() => {
+                              setAgentScopeMenuOpen(false);
+                              if (!selected) onAgentScopeChange(app.id);
+                            }}
+                            role="menuitemradio"
+                            type="button"
+                          >
+                            <span>
+                              <strong>{app.label}</strong>
+                              <small>{hasSupplier ? "已配置供应商" : "未配置供应商"}</small>
+                            </span>
+                            {selected ? <Check aria-hidden="true" /> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <button className="ops-command-search" onClick={openCommand} type="button">
                 <Search aria-hidden="true" className="h-4 w-4" />
