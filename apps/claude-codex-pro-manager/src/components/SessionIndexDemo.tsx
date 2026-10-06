@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { invokeCommand } from "@/tauriBridge";
-import type { SessionIndexRow, SessionIndexPagedResult } from "@/types";
+import type { PagedResult, SessionIndex } from "@/api/sessionIndex";
 
 export function SessionIndexDemo() {
-  const [sessions, setSessions] = useState<SessionIndexRow[]>([]);
+  const [sessions, setSessions] = useState<SessionIndex[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
@@ -12,9 +12,10 @@ export function SessionIndexDemo() {
     setLoading(true);
     setError(null);
     try {
-      const result = await invokeCommand<SessionIndexPagedResult>("query_sessions", {
+      const result = await invokeCommand<PagedResult<SessionIndex>>("query_sessions", {
         filter: {},
-        pagination: { page: 1, page_size: 20 },
+        page: 0,
+        page_size: 20,
       });
       setSessions(result.items);
     } catch (err) {
@@ -27,7 +28,7 @@ export function SessionIndexDemo() {
   const startIndexing = async () => {
     setIndexing(true);
     try {
-      await invokeCommand("start_session_indexing");
+      await invokeCommand("scan_sessions");
       await loadSessions();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -75,22 +76,16 @@ export function SessionIndexDemo() {
           <div className="text-sm text-gray-600">共 {sessions.length} 个会话</div>
           {sessions.map((session) => (
             <div
-              key={session.id}
+              key={session.session_id}
               className="p-4 border rounded hover:bg-gray-50"
             >
               <div className="font-semibold">{session.title}</div>
               <div className="text-sm text-gray-600">
-                项目: {session.project} | Agent: {session.agent} |
-                事件数: {session.event_count}
+                项目: {session.project} | 来源: {session.source} |
+                消息数: {session.message_count}
               </div>
-              {(session.branch_name || session.pull_request_url) && (
-                <div className="text-xs text-gray-500 mt-1">
-                  {session.branch_name && `分支: ${session.branch_name}`}
-                  {session.pull_request_url && ` | PR: ${session.pull_request_url}`}
-                </div>
-              )}
               <div className="text-xs text-gray-500 mt-1">
-                开始: {new Date(session.started_at).toLocaleString()} |
+                开始: {new Date(session.created_at).toLocaleString()} |
                 更新: {new Date(session.updated_at).toLocaleString()}
               </div>
             </div>
