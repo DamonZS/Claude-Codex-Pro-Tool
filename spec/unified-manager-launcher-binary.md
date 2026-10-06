@@ -8,7 +8,7 @@
 
 - Windows 与 macOS 只发布一个主程序 `claude-codex-pro`。
 - 默认启动 Manager UI；传入 `--launcher` 时运行原静默 launcher 生命周期。
-- Manager 与 launcher 仍为独立进程，互不绑定窗口生命周期。
+- Manager 与 launcher 仍为独立进程；关闭 Manager 时结束同一完整可执行路径的 launcher 实例，详见 `manager-close-process-lifecycle.md`。
 - `--register-installation` 等内部无界面命令继续由统一程序直接处理。
 - 独立 MCP 程序保持不变。
 - 一次性移除旧 `claude-codex-pro-manager` 构建产物、安装文件、App 和快捷方式，不保留双程序兼容阶段。

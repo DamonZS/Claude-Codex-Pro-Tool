@@ -664,7 +664,7 @@ pub fn send_enter() -> bool {
 }
 
 #[cfg(windows)]
-fn query_process_image_path(process_id: u32) -> Option<PathBuf> {
+pub(crate) fn query_process_image_path(process_id: u32) -> Option<PathBuf> {
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()? };
     if handle.is_invalid() {
         return None;

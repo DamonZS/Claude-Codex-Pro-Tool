@@ -76,7 +76,8 @@
 .overview-summary-action:hover { border-color: rgb(180 230 255 / 0.52); background: rgb(75 142 190 / 0.28); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.24), 0 4px 10px rgb(0 0 0 / 0.22); }
 .overview-summary-action:focus-visible { outline: 1px solid rgb(190 235 255 / 0.75); outline-offset: 2px; }
 .overview-agent-filters { display: flex; min-width: 0; align-items: center; gap: 5px; overflow-x: auto; padding: 1px 0 2px; scrollbar-width: thin; }
-.overview-agent-filters button { flex: 0 0 auto; border: 1px solid transparent; border-radius: 14px; background: transparent; color: var(--workspace-text-secondary); padding: 4px 9px; font: inherit; font-size: 10px; cursor: pointer; }
+.overview-agent-filters button { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; border: 1px solid transparent; border-radius: 14px; background: transparent; color: var(--workspace-text-secondary); padding: 4px 9px; font: inherit; font-size: 13px; cursor: pointer; }
+.overview-agent-filters button img, .overview-agent-filters button > span { width: 16px; height: 16px; flex: 0 0 16px; object-fit: contain; }
 .overview-agent-filters button.active { border-color: var(--workspace-border); background: var(--workspace-surface-raised); color: var(--workspace-text); box-shadow: inset 0 1px 0 rgb(255 255 255 / .1); }
 .overview-data-range { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--workspace-border); border-radius: 6px; background: rgb(8 15 28 / 0.24); }
 .overview-data-range button { border: 0; border-radius: 4px; background: transparent; color: var(--workspace-text-tertiary); padding: 5px 9px; font: inherit; font-size: 10px; cursor: pointer; }
@@ -287,6 +288,8 @@
   .aitracker-overview-layout .overview-data-kpis { grid-template-columns: 1fr; }
   .aitracker-project-layout { grid-template-columns: 1fr; }
 }
+.overview-agent-badge img, .overview-agent-badge > span, .overview-burning-badge img, .overview-burning-badge > span { width: 17px; height: 17px; object-fit: contain; }
+.overview-burning-badge { display: grid; width: 17px; height: 17px; place-items: center; }
 .request-usage-heading { display: flex; min-height: 40px; gap: 12px; padding-inline: 13px; }
 .request-usage-heading > div:first-child { display: flex; align-items: center; gap: 8px; }
 .request-usage-heading > div:first-child > span { display: flex; align-items: center; gap: 8px; }

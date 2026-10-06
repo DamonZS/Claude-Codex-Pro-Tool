@@ -42,6 +42,46 @@ fn read_all_frontend_sources() -> String {
 }
 
 #[test]
+fn manager_exit_cleans_background_instances_for_window_and_tray_exit() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let lib = read_source_file(&manifest_dir.join("src/lib.rs"));
+    let window_exit = source_section(&lib, ".on_window_event(", ".invoke_handler(");
+    assert!(window_exit.contains("WindowEvent::CloseRequested"));
+    assert!(window_exit.contains("window.app_handle().exit(0)"));
+    let tray = source_section(&lib, "fn setup_tray(", "fn show_main_window(");
+    assert!(tray.contains("\"quit\" => {\n                app.exit(0);"));
+    let final_exit = source_section(&lib, "Ok(app) => app.run(", "Err(error) => {");
+    assert!(final_exit.contains("tauri::RunEvent::Exit"));
+    assert!(final_exit.contains("watcher::stop_processes_for_manager_exit()"));
+    assert!(final_exit.contains("\"stopped_background_processes\""));
+}
+
+#[test]
+fn manager_exit_cleanup_rechecks_full_path_before_single_pid_termination() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let watcher = read_source_file(
+        &manifest_dir.join("../../../crates/claude-codex-pro-core/src/watcher.rs"),
+    );
+    let cleanup = source_section(
+        &watcher,
+        "pub fn stop_processes_for_manager_exit()",
+        "fn macos_process_inventory()",
+    );
+    assert!(cleanup.contains("std::env::current_exe()"));
+    assert!(cleanup.contains("std::process::id()"));
+    assert!(cleanup.contains("filter_same_executable_processes("));
+    let recheck = cleanup
+        .find("query_process_image_path(*process_id)")
+        .unwrap();
+    let terminate = cleanup.find("terminate_process(*process_id)").unwrap();
+    assert!(recheck < terminate);
+    assert!(cleanup[recheck..terminate].contains("filter_same_executable_processes("));
+    assert!(!cleanup.contains("terminate_process_tree"));
+    assert!(!cleanup.contains("stop_codex"));
+    assert!(!cleanup.contains("stop_claude"));
+}
+
+#[test]
 fn codex_supplier_switch_starts_route_proxy_before_writing_config() {
     let commands = include_str!("../src/commands.rs");
     let start = commands.find("fn switch_relay_profile_blocking(").unwrap();
@@ -1997,7 +2037,7 @@ fn codex_theme_center_route_and_tauri_command_contracts_match() {
     let registered_commands = source_section(
         &manager_lib,
         ".invoke_handler(tauri::generate_handler![",
-        ".run(tauri::generate_context!())",
+        ".build(tauri::generate_context!())",
     );
     for command in [
         "list_codex_themes",

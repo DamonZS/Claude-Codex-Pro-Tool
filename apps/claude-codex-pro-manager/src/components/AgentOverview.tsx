@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { Boxes, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Coins, Info, MessagesSquare } from "lucide-react";
 import type { AitrackerCapabilitiesResult, RequestRecord, RequestTimelineResult } from "@/types";
+import { AgentBrandIcon } from "@/components/AgentBrandIcon";
 import "./agent-overview.css";
 
 type Range = "today" | "7d" | "30d" | "all" | "custom";
@@ -135,7 +136,7 @@ export function AgentOverview({ capabilities, timeline }: { capabilities: Aitrac
     </div>
     <div className="agent-overview-rail-wrap">
       <button className="agent-overview-rail-arrow" type="button" aria-label="向左滚动 Agent" onClick={() => rail.current?.scrollBy({ left: -240, behavior: "smooth" })}><ChevronLeft /></button>
-      <div className="agent-overview-rail" ref={rail}>{agents.length ? agents.map((agent) => <button key={agent.id} type="button" className={agent.id === selected?.id ? "active" : ""} onClick={() => setSelectedId(agent.id)}><span className="agent-overview-logo" style={{ color: agent.color, background: `${agent.color}22` }}>{agent.icon || agent.name.slice(0, 1).toUpperCase()}</span><span className="agent-overview-rail-text"><strong>{agent.name}<i className={agent.detected ? "detected" : ""} title={agent.detected ? "已安装或有本地记录" : "未检测到安装或记录"} /></strong><small>{agent.tokens ? compact(agent.tokens) : "—"} · {agent.sessions} 会话</small></span></button>) : <span className="agent-overview-rail-empty">暂无 Agent 采集记录</span>}</div>
+      <div className="agent-overview-rail" ref={rail}>{agents.length ? agents.map((agent) => <button key={agent.id} type="button" className={agent.id === selected?.id ? "active" : ""} onClick={() => setSelectedId(agent.id)}><span className="agent-overview-logo" style={{ color: agent.color, background: `${agent.color}22` }}><AgentBrandIcon id={agent.id} name={agent.name} color={agent.color} /></span><span className="agent-overview-rail-text"><strong>{agent.name}<i className={agent.detected ? "detected" : ""} title={agent.detected ? "已安装或有本地记录" : "未检测到安装或记录"} /></strong><small>{agent.tokens ? compact(agent.tokens) : "—"} · {agent.sessions} 会话</small></span></button>) : <span className="agent-overview-rail-empty">暂无 Agent 采集记录</span>}</div>
       <button className="agent-overview-rail-arrow" type="button" aria-label="向右滚动 Agent" onClick={() => rail.current?.scrollBy({ left: 240, behavior: "smooth" })}><ChevronRight /></button>
     </div>
     <section className="agent-overview-panel agent-overview-trend"><header><div><strong>{name} · 消耗趋势</strong><small>区间合计 {compact(total)} · 日均 {compact(Math.round(total / dayCount))} · 峰值 {compact(peak)}</small></div><RangeControl value={trendRange} onChange={setTrendRange} from={trendFrom} to={trendTo} onFromChange={setTrendFrom} onToChange={setTrendTo} label="消耗趋势时间范围" /></header>

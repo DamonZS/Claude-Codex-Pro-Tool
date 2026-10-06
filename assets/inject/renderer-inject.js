@@ -84,7 +84,7 @@
   const codexThreadServiceTierMaxEntries = 120;
   const codexThreadServiceTierDraftBindWindowMs = 60 * 1000;
   const codexServiceTierRequestOverrideVersion = "3";
-  const codexPluginMarketplaceUnlockVersion = "13";
+  const codexPluginMarketplaceUnlockVersion = "14";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -3748,8 +3748,7 @@
     } catch {
       return false;
     }
-    const isKnownFilterSource = source.includes("!u(e.marketplaceName)||e.marketplaceName===r")
-      || source.includes("!ne(e.marketplaceName)||e.marketplaceName===n");
+    const isKnownFilterSource = /^\(?([$A-Z_a-z][$\w]*)\)?=>![$A-Z_a-z][$\w]*\(\1\.marketplaceName\)\|\|\1\.marketplaceName===[$A-Z_a-z][$\w]*$/.test(source.replace(/\s+/g, ""));
     if (!isKnownFilterSource) return false;
     if (!sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName))) return false;
     return sample.some((plugin) => codexPluginOfficialMarketplaceName(plugin?.marketplaceName) && !callback(plugin));

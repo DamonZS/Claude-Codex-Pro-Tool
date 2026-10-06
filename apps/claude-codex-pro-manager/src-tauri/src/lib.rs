@@ -279,14 +279,25 @@ pub fn run() {
             commands::apply_pure_api_injection,
             commands::clear_relay_injection,
         ])
-        .run(tauri::generate_context!());
-    if let Err(error) = run_result {
-        let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
-            "manager.run_failed",
-            serde_json::json!({
-                "error": error.to_string()
-            }),
-        );
+        .build(tauri::generate_context!());
+    match run_result {
+        Ok(app) => app.run(|_app, event| {
+            if let tauri::RunEvent::Exit = event {
+                let stopped = claude_codex_pro_core::watcher::stop_processes_for_manager_exit();
+                let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                    "manager.exit",
+                    serde_json::json!({ "stopped_background_processes": stopped }),
+                );
+            }
+        }),
+        Err(error) => {
+            let _ = claude_codex_pro_core::diagnostic_log::append_diagnostic_log(
+                "manager.run_failed",
+                serde_json::json!({
+                    "error": error.to_string()
+                }),
+            );
+        }
     }
 }
 

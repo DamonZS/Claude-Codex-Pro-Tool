@@ -1,8 +1,9 @@
 use claude_codex_pro_core::watcher::{
     build_spawn_launcher_command, build_watcher_install_plan, cdp_listening, codex_process_ids,
     disable_watcher_at, enable_watcher_at, filter_killable_launcher_processes,
-    filter_restartable_launcher_processes, parse_macos_running_process_inventory,
-    should_recover_stale_launcher, wait_for_process_ids_to_exit_with, watcher_disabled_flag,
+    filter_restartable_launcher_processes, filter_same_executable_processes,
+    parse_macos_running_process_inventory, should_recover_stale_launcher,
+    wait_for_process_ids_to_exit_with, watcher_disabled_flag,
 };
 
 #[test]
@@ -154,6 +155,63 @@ fn repair_restart_launcher_filter_recognizes_macos_silent_launcher_only() {
     assert_eq!(
         filter_restartable_launcher_processes(processes, 30),
         vec![10]
+    );
+}
+
+#[test]
+fn manager_exit_filter_selects_only_other_instances_of_the_full_executable_path() {
+    let root = std::env::temp_dir();
+    let executable = root.join("ccp-exit-install/claude-codex-pro.exe");
+    let other_install = root.join("ccp-other-install/claude-codex-pro.exe");
+    let codex = root.join("Codex/Codex.exe");
+    let claude = root.join("Claude/Claude.exe");
+    let relative = std::path::Path::new("claude-codex-pro.exe");
+    let processes = [
+        (10, Some(executable.as_path())),
+        (20, Some(executable.as_path())),
+        (30, Some(other_install.as_path())),
+        (40, None),
+        (50, Some(relative)),
+        (60, Some(codex.as_path())),
+        (70, Some(claude.as_path())),
+    ];
+
+    assert_eq!(
+        filter_same_executable_processes(processes, 10, &executable),
+        vec![20]
+    );
+    assert!(filter_same_executable_processes(processes, 10, relative).is_empty());
+}
+
+#[test]
+#[cfg(windows)]
+fn manager_exit_filter_normalizes_windows_case_and_separators() {
+    assert_eq!(
+        filter_same_executable_processes(
+            [(
+                20,
+                Some(std::path::Path::new("c:/tools/CCP/claude-codex-pro.EXE"))
+            )],
+            10,
+            std::path::Path::new(r"C:\Tools\ccp\claude-codex-pro.exe"),
+        ),
+        vec![20]
+    );
+}
+
+#[test]
+#[cfg(not(windows))]
+fn manager_exit_filter_preserves_case_on_other_platforms() {
+    assert!(
+        filter_same_executable_processes(
+            [(
+                20,
+                Some(std::path::Path::new("/Applications/CCP/claude-codex-pro"))
+            )],
+            10,
+            std::path::Path::new("/Applications/ccp/claude-codex-pro"),
+        )
+        .is_empty()
     );
 }
 

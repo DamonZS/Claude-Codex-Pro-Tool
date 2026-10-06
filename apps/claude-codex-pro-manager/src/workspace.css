@@ -518,7 +518,7 @@ body {
   top: auto;
   z-index: 15;
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   height: var(--workspace-topbar-height);
   min-height: var(--workspace-topbar-height);
@@ -3995,7 +3995,7 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 @media (max-width: 980px) {
   .ops-topbar {
-    grid-template-columns: max-content minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
     padding-inline: 10px;
   }

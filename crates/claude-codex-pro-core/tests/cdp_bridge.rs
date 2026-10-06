@@ -566,7 +566,7 @@ fn injection_script_unlocks_nested_disabled_plugin_install_buttons() {
 fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"13\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"14\""));
     assert!(script.contains("if (name === \"openai-bundled\") return \"\""));
     assert!(
         !script.contains(
@@ -580,10 +580,10 @@ fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
 fn injection_script_does_not_bypass_plugin_marketplace_search_filters() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"13\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"14\""));
     assert!(script.contains("isCodexPluginBuildFlavorFilter"));
-    assert!(script.contains("source.includes(\"!u(e.marketplaceName)||e.marketplaceName===r\")"));
-    assert!(script.contains("source.includes(\"!ne(e.marketplaceName)||e.marketplaceName===n\")"));
+    assert!(script.contains(r"\(\1\.marketplaceName\)\|\|\1\.marketplaceName==="));
+    assert!(script.contains(".test(source.replace(/\\s+/g, \"\"))"));
     assert!(script.contains("source.includes(\"!t.includes(e.name)\")"));
     assert!(!script.contains("if (!source.includes(\"marketplaceName\")) return false"));
     assert!(!script.contains("if (!source.includes(\"name\")) return false"));
@@ -593,7 +593,7 @@ fn injection_script_does_not_bypass_plugin_marketplace_search_filters() {
 fn injection_script_expands_api_key_plugin_marketplace_requests() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"13\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"14\""));
     assert!(script.contains("installPluginMarketplaceRequestPatch"));
     assert!(script.contains("installPluginBuildFlavorFilterPatch"));
     assert!(script.contains("Array.prototype.filter"));

@@ -143,6 +143,84 @@ pub fn filter_restartable_launcher_processes<'a>(
         .collect()
 }
 
+pub fn filter_same_executable_processes<'a>(
+    processes: impl IntoIterator<Item = (u32, Option<&'a Path>)>,
+    current_process_id: u32,
+    current_executable: &Path,
+) -> Vec<u32> {
+    if !current_executable.is_absolute() {
+        return Vec::new();
+    }
+    processes
+        .into_iter()
+        .filter(|(process_id, executable)| {
+            *process_id != current_process_id
+                && executable.is_some_and(|path| {
+                    path.is_absolute()
+                        && if cfg!(windows) {
+                            path.to_string_lossy()
+                                .replace('\\', "/")
+                                .eq_ignore_ascii_case(
+                                    &current_executable.to_string_lossy().replace('\\', "/"),
+                                )
+                        } else {
+                            path == current_executable
+                        }
+                })
+        })
+        .map(|(process_id, _)| process_id)
+        .collect()
+}
+
+pub fn stop_processes_for_manager_exit() -> usize {
+    let Ok(current_executable) = std::env::current_exe() else {
+        return 0;
+    };
+    let current_process_id = std::process::id();
+    #[cfg(windows)]
+    {
+        let processes = crate::windows_integration::enumerate_processes();
+        filter_same_executable_processes(
+            processes
+                .iter()
+                .map(|process| (process.process_id, process.executable_path.as_deref())),
+            current_process_id,
+            &current_executable,
+        )
+        .into_iter()
+        .filter(|process_id| {
+            let executable = crate::windows_integration::query_process_image_path(*process_id);
+            !filter_same_executable_processes(
+                [(*process_id, executable.as_deref())],
+                current_process_id,
+                &current_executable,
+            )
+            .is_empty()
+                && crate::windows_integration::terminate_process(*process_id)
+        })
+        .count()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let processes = macos_process_inventory();
+        filter_same_executable_processes(
+            processes
+                .iter()
+                .map(|(process_id, executable)| (*process_id, Some(Path::new(executable)))),
+            current_process_id,
+            &current_executable,
+        )
+        .into_iter()
+        .filter(|process_id| terminate_macos_process(*process_id))
+        .count()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (current_executable, current_process_id);
+        0
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn macos_process_inventory() -> Vec<(u32, String)> {
     let Ok(output) = Command::new("/bin/ps")

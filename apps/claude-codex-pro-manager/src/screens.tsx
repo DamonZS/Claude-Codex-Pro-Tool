@@ -15,7 +15,6 @@ import {
   Copy,
   Download,
   ExternalLink,
-  Flame,
   Info,
   KeyRound,
   MessageCircle,
@@ -36,6 +35,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentOverview } from "@/components/AgentOverview";
+import { AgentBrandIcon } from "@/components/AgentBrandIcon";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 export { SupplierScreen } from "@/components/supplier/SupplierScreen";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
@@ -230,12 +230,12 @@ function OverviewAnalysisPanels({
         </svg><div className="overview-data-axis">{axisLabels.slice(0, 6).map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div></div>
         <footer><span><i className="trend-swatch cache" />缓存读取</span><span><i className="trend-swatch input" />输入</span><span><i className="trend-swatch output" />输出</span><span><i className="trend-swatch previous" />环比</span><em>数据来源：本地采集器</em></footer>
       </section>
-      <section className="overview-data-panel overview-data-agent-rank"><header><div><strong>Agent 使用排行</strong><small>按 Token 消耗排序 · {records.length} 个事件</small></div></header><div>{agentUsage.map(([name, item], index) => <div className="overview-agent-rank" key={name}><b>{index + 1}</b><span className="overview-agent-badge">{name.slice(0, 1).toUpperCase()}</span><div><strong>{name}</strong><small>{item.events} 次调用</small><i><em style={{ width: `${Math.max(3, item.tokens / maxAgentTokens * 100)}%` }} /></i></div><strong>{compactMetric(item.tokens)}</strong></div>)}{!agentUsage.length && <p className="overview-data-empty">暂无 Agent 用量记录</p>}</div></section>
+      <section className="overview-data-panel overview-data-agent-rank"><header><div><strong>Agent 使用排行</strong><small>按 Token 消耗排序 · {records.length} 个事件</small></div></header><div>{agentUsage.map(([name, item], index) => <div className="overview-agent-rank" key={name}><b>{index + 1}</b><span className="overview-agent-badge"><AgentBrandIcon id={name} name={name} /></span><div><strong>{name}</strong><small>{item.events} 次调用</small><i><em style={{ width: `${Math.max(3, item.tokens / maxAgentTokens * 100)}%` }} /></i></div><strong>{compactMetric(item.tokens)}</strong></div>)}{!agentUsage.length && <p className="overview-data-empty">暂无 Agent 用量记录</p>}</div></section>
     </div>
     <div className="overview-data-grid-lower aitracker-analysis-lower">
       <section className="overview-data-panel overview-data-provider"><header><div><strong>Provider 请求占比</strong><small>按本地请求事件统计</small></div></header><div className="overview-provider-chart"><div className="overview-donut" style={{ background: providerUsage.length ? `conic-gradient(${providerUsage.map(([, count], index) => `${["#41d8c0", "#9d83ff", "#ff9a72", "#e96987", "#7eb8ff", "#f2b856"][index % 6]} ${providerUsage.slice(0, index).reduce((sum, [, value]) => sum + value, 0) / totalProviderEvents * 100}% ${(providerUsage.slice(0, index + 1).reduce((sum, [, value]) => sum + value, 0) / totalProviderEvents * 100)}%`).join(",")}` : undefined }}><span>{totalProviderEvents || "未采集"}<small>请求</small></span></div><div className="overview-provider-legend">{providerUsage.map(([name, count], index) => <div key={name}><i style={{ background: ["#41d8c0", "#9d83ff", "#ff9a72", "#e96987", "#7eb8ff", "#f2b856"][index % 6] }} /><span>{name}</span><b>{totalProviderEvents ? `${(count / totalProviderEvents * 100).toFixed(1)}%` : "未采集"}</b></div>)}</div></div></section>
       <section className="overview-data-panel overview-data-heat"><header><div><strong>Agent 活跃度</strong><small>按星期与时段统计事件</small></div></header><div className="overview-heat-summary"><span>周一</span><span>周日</span></div><div className="overview-heatmap">{hourly.map((count, index) => <i key={index} data-level={count ? Math.max(1, Math.ceil(count / maxHourly * 4)) : 0} title={`${days[Math.floor(index / 4)]} · ${Math.floor(index % 4) * 6}:00 · ${count} 个事件`} />)}</div><footer><span>少</span><i data-level="1" /><i data-level="2" /><i data-level="3" /><i data-level="4" /><span>多</span></footer></section>
-      <section className="overview-data-panel overview-data-burning"><header><div><strong>Token 燃烧榜</strong><small>按 Agent Token 消耗排行</small></div></header><div>{agentUsage.slice(0, 5).map(([name, item], index) => <div className="overview-burning-row" key={name}><b>#{index + 1}</b><Flame aria-hidden="true" /><div><strong>{name}</strong><small>{item.events} 次调用 · 本地记录</small></div><strong>{compactMetric(item.tokens)}</strong></div>)}{!agentUsage.length && <p className="overview-data-empty">暂无燃烧数据</p>}</div></section>
+      <section className="overview-data-panel overview-data-burning"><header><div><strong>Token 燃烧榜</strong><small>按 Agent Token 消耗排行</small></div></header><div>{agentUsage.slice(0, 5).map(([name, item], index) => <div className="overview-burning-row" key={name}><b>#{index + 1}</b><span className="overview-burning-badge"><AgentBrandIcon id={name} name={name} /></span><div><strong>{name}</strong><small>{item.events} 次调用 · 本地记录</small></div><strong>{compactMetric(item.tokens)}</strong></div>)}{!agentUsage.length && <p className="overview-data-empty">暂无燃烧数据</p>}</div></section>
     </div>
   </>;
 }
@@ -461,7 +461,7 @@ function OverviewDataDashboard({ agentScope, range, requestTimeline, aitrackerCa
       <article><span>Agent 活跃</span><strong>{aitrackerCapabilities ? activeAgentCount.toLocaleString("zh-CN") : (activeAgentCount || "未采集")}</strong><small className="overview-kpi-trend">{aitrackerCapabilities ? `${idleAgentCount} 休眠 · ${overviewRangeLabels[range]}` : "按本地请求记录聚合"}</small></article>
       <article><span>蒸馏产出</span><strong>{distillationOutputCount == null ? "未采集" : distillationOutputCount.toLocaleString("zh-CN")}</strong><small className="overview-kpi-trend">{distillation ? "已审批候选 · 本地状态" : "未加载蒸馏候选"}</small></article>
     </section>
-    <div className="overview-agent-filters aitracker-tool-switcher" role="group" aria-label="Agent 筛选"><button type="button" className={selectedAgent === "all" ? "active" : ""} onClick={() => setSelectedAgent("all")}>全部 Agent</button>{availableAgents.map((agent) => <button type="button" key={agent} className={selectedAgent === agent ? "active" : ""} onClick={() => setSelectedAgent(agent)}>{agent}</button>)}</div>
+    <div className="overview-agent-filters aitracker-tool-switcher" role="group" aria-label="Agent 筛选"><button type="button" className={selectedAgent === "all" ? "active" : ""} onClick={() => setSelectedAgent("all")}>全部 Agent</button>{availableAgents.map((agent) => <button type="button" key={agent} className={selectedAgent === agent ? "active" : ""} onClick={() => setSelectedAgent(agent)}><AgentBrandIcon id={agent} name={agent} />{agent}</button>)}</div>
     <section className="overview-data-panel overview-data-trend aitracker-trend-panel aitracker-trend-replacement">
       <header><div><strong>Token 消耗趋势</strong><small>{records.length ? `${range === "24h" ? "时均" : "日均"} ${compactMetric(Math.round(totalTokens / trend.length))}　${trendText(totalTokens, previousTokens)}　峰值 ${axisLabels[peakIndex]} · ${compactMetric(trend[peakIndex].tokens)}` : `暂无 ${overviewRangeLabels[range]} 用量记录`}</small></div><div className="aitracker-trend-header-actions"><span>缓存命中率 {cacheHitRate == null ? "未采集" : `${cacheHitRate.toFixed(0)}%`}</span><button type="button" aria-label="刷新数据" title="刷新数据" onClick={() => void refresh()}><RefreshCw aria-hidden="true" /></button></div></header>
       <div className="overview-data-chart" onMouseLeave={() => setHoveredTrendIndex(null)}>

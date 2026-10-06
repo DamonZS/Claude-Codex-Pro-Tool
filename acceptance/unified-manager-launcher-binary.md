@@ -14,6 +14,7 @@
 
 3. 独立进程
    - 通过：Manager 使用当前可执行文件生成子进程并附加 `--launcher`；launcher bridge 打开 Manager 时运行当前程序且不附加后台参数。
+   - 退出生命周期：关闭 Manager 窗口或托盘退出时结束同完整 exe 路径的其他 CCP 实例；进程内任务随 Manager 结束。按 `acceptance/manager-close-process-lifecycle.md` 验证，保留外部 Codex/Claude 客户端。
    - 证据：Manager 与 launcher 源码契约测试。
 
 4. 重启不结束 Manager
