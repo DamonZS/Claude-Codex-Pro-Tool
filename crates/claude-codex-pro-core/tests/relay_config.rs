@@ -13,10 +13,11 @@ use claude_codex_pro_core::relay_config::{
     clear_relay_config_to_home_with_auth, codex_provider_auth_environment_from_home,
     codex_provider_credential_environment_keys_from_home, delete_context_entry_from_common_config,
     extract_common_config_from_config, filter_common_config_for_selection,
-    list_context_entries_from_common_config, normalize_relay_profile_for_storage,
-    relay_config_status_from_home, sanitize_common_config_contents,
-    set_codex_goals_feature_in_home, strip_common_config_from_config,
-    sync_live_config_context_entries, test_relay_profile, upsert_context_entry_in_common_config,
+    list_context_entries_from_common_config, normalize_config_text,
+    normalize_relay_profile_for_storage, relay_config_status_from_home,
+    sanitize_common_config_contents, set_codex_goals_feature_in_home,
+    strip_common_config_from_config, sync_live_config_context_entries, test_relay_profile,
+    upsert_context_entry_in_common_config,
 };
 use claude_codex_pro_core::settings::{
     RelayContextSelection, RelayMode, RelayProfile, RelayProtocol,
@@ -427,8 +428,8 @@ model = "gpt-5-mini"
     assert!(updated.contains(r#"wire_api = "responses""#));
     assert!(updated.contains("requires_openai_auth = true"));
     assert!(updated.contains(r#"base_url = "https://relay.example.test/v1""#));
-    assert!(updated.contains(r#"env_key = "OPENAI_API_KEY""#));
-    assert!(!updated.contains("experimental_bearer_token"));
+    assert!(updated.contains(r#"experimental_bearer_token = "sk-test-redacted""#));
+    assert!(!updated.contains(r#"env_key = "OPENAI_API_KEY""#));
     assert_eq!(
         std::env::var_os("OPENAI_API_KEY"),
         process_environment_before,
@@ -470,16 +471,17 @@ base_url = "https://relay.example.test/v1"
     assert!(
         profile
             .config_contents
-            .contains(r#"env_key = "CCP_TEST_CUSTOM_PROVIDER_KEY""#)
+            .contains(r#"experimental_bearer_token = "test-profile-credential""#)
     );
 
     apply_relay_profile_to_home_with_switch_rules(temp.path(), &profile, "").unwrap();
     let live = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
-    assert!(live.contains(r#"env_key = "CCP_TEST_CUSTOM_PROVIDER_KEY""#));
+    assert!(live.contains(r#"experimental_bearer_token = "test-profile-credential""#));
+    assert!(live.contains("experimental_bearer_token"));
     assert_eq!(
         codex_provider_auth_environment_from_home(temp.path()),
         Some((
-            "CCP_TEST_CUSTOM_PROVIDER_KEY".to_string(),
+            "OPENAI_API_KEY".to_string(),
             "test-profile-credential".to_string()
         ))
     );
@@ -502,8 +504,8 @@ fn apply_chat_protocol_relay_points_codex_to_local_responses_proxy() {
     assert!(result.configured);
     assert!(updated.contains(r#"wire_api = "responses""#));
     assert!(updated.contains(r#"base_url = "http://127.0.0.1:57321/v1""#));
-    assert!(updated.contains(r#"env_key = "OPENAI_API_KEY""#));
-    assert!(!updated.contains("experimental_bearer_token"));
+    assert!(updated.contains(r#"experimental_bearer_token = "sk-test-redacted""#));
+    assert!(!updated.contains(r#"env_key = "OPENAI_API_KEY""#));
     assert!(!updated.contains("claude_codex_pro_chat_base_url"));
 }
 
@@ -685,9 +687,9 @@ fn normalize_relay_profile_rebuilds_invalid_pure_api_config_without_losing_form_
             .contains(r#"base_url = "https://relay.example/v1""#)
     );
     assert!(
-        !profile
+        profile
             .config_contents
-            .contains("experimental_bearer_token")
+            .contains(r#"experimental_bearer_token = "sk-test""#)
     );
     assert_eq!(profile.model, "gpt-5");
     assert_eq!(profile.base_url, "https://relay.example/v1");
@@ -907,7 +909,7 @@ Proxy-Authorization = "Bearer test-old-proxy-token"
     assert!(
         profile
             .config_contents
-            .contains(r#"env_key = "CUSTOM_API_KEY""#)
+            .contains(r#"experimental_bearer_token = "test-current-key""#)
     );
     assert!(profile.config_contents.contains(r#"keep = "keep-me""#));
     let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
@@ -937,9 +939,9 @@ fn normalize_codex_profile_rebuilds_invalid_toml_from_current_form() {
     assert!(profile.config_contents.contains(r#"model = "gpt-current""#));
     assert!(profile.config_contents.contains("https://relay.example/v1"));
     assert!(
-        !profile
+        profile
             .config_contents
-            .contains("experimental_bearer_token")
+            .contains(r#"experimental_bearer_token = "test-current-key""#)
     );
     let auth: serde_json::Value = serde_json::from_str(&profile.auth_contents).unwrap();
     assert_eq!(auth["OPENAI_API_KEY"], "test-current-key");
@@ -1176,8 +1178,8 @@ fn apply_pure_api_config_switches_auth_json_and_writes_provider_token() {
     assert!(config.contains(r#"wire_api = "responses""#));
     assert!(config.contains("requires_openai_auth = true"));
     assert!(config.contains(r#"base_url = "http://192.168.188.245:3001/v1""#));
-    assert!(config.contains(r#"env_key = "OPENAI_API_KEY""#));
-    assert!(!config.contains("experimental_bearer_token"));
+    assert!(config.contains("experimental_bearer_token"));
+    assert!(!config.contains(r#"env_key = "OPENAI_API_KEY""#));
 }
 
 #[test]
@@ -2950,9 +2952,9 @@ requires_openai_auth = true
             .contains("[model_providers.manual_api]")
     );
     assert!(
-        !current
+        current
             .config_contents
-            .contains("experimental_bearer_token")
+            .contains(r#"experimental_bearer_token = "sk-manual""#)
     );
     let auth: serde_json::Value = serde_json::from_str(&current.auth_contents).unwrap();
     assert_eq!(auth["OPENAI_API_KEY"], "sk-manual");
@@ -3164,8 +3166,8 @@ base_url = "https://relay.example/v1"
     assert!(auth.get("auth_mode").is_none());
     assert!(auth.get("tokens").is_none());
     let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
-    assert!(!config.contains("experimental_bearer_token"));
-    assert!(config.contains(r#"env_key = "OPENAI_API_KEY""#));
+    assert!(config.contains("experimental_bearer_token"));
+    assert!(!config.contains(r#"env_key = "OPENAI_API_KEY""#));
     assert!(config.contains(r#"model_provider = "custom""#));
     assert!(config.contains("[model_providers.custom]"));
 }
@@ -3208,7 +3210,7 @@ experimental_bearer_token = "sk-new"
     assert!(config.contains(r#"wire_api = "responses""#));
     assert!(config.contains("requires_openai_auth = true"));
     assert!(config.contains(r#"base_url = "https://relay.example/v1""#));
-    assert!(!config.contains("experimental_bearer_token"));
+    assert!(config.contains(r#"experimental_bearer_token = "sk-new""#));
     assert!(!config.contains("live_provider"));
     assert!(!config.contains("https://live.example/v1"));
 }
@@ -3243,7 +3245,7 @@ requires_openai_auth = true
     assert!(config.contains("[model_providers.max_ai]"));
     assert!(config.contains(r#"name = "max_ai""#));
     assert!(config.contains(r#"base_url = "https://relay.example.test/v1""#));
-    assert!(!config.contains("experimental_bearer_token"));
+    assert!(config.contains(r#"experimental_bearer_token = "sk-new""#));
     assert!(!config.contains("[model_providers.custom]"));
 }
 
@@ -3557,6 +3559,51 @@ base_url = "http://192.168.188.245:3001/v1"
 }
 
 #[test]
+fn sanitizes_deprecated_codex_config_keys() {
+    let sanitized = sanitize_common_config_contents(
+        r#"[features.guardianv2]
+thread_context = true
+other_feature = "keep"
+
+[mcp_servers.codegraph]
+type = "stdio"
+command = "codegraph"
+args = ["serve", "--mcp"]
+
+[mcp_servers.other]
+enabled = true
+"#,
+    );
+
+    assert!(!sanitized.contains("thread_context"));
+    assert!(!sanitized.contains("type = \"stdio\""));
+    assert!(sanitized.contains("other_feature = \"keep\""));
+    assert!(sanitized.contains("command = \"codegraph\""));
+    assert!(sanitized.contains("args = [\"serve\", \"--mcp\"]"));
+    assert!(sanitized.contains("enabled = true"));
+}
+
+#[test]
+fn normalizes_deprecated_codex_config_keys() {
+    let normalized = normalize_config_text(
+        r#"[features.guardianv2]
+thread_context = true
+goals = true
+
+[mcp_servers.codegraph]
+type = "stdio"
+command = "codegraph"
+"#,
+    );
+
+    assert!(!normalized.contains("thread_context"));
+    assert!(!normalized.contains("type = \"stdio\""));
+    assert!(normalized.contains("goals = true"));
+    assert!(normalized.contains("command = \"codegraph\""));
+    assert!(normalized.parse::<toml_edit::DocumentMut>().is_ok());
+}
+
+#[test]
 fn apply_relay_profile_to_home_with_switch_rules_switches_auth_even_when_provider_token_exists() {
     let temp = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -3589,7 +3636,7 @@ experimental_bearer_token = "sk-provider-token"
     assert!(auth.as_object().is_some_and(|object| object.is_empty()));
 
     let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
-    assert!(!config.contains("experimental_bearer_token"));
+    assert!(config.contains(r#"experimental_bearer_token = "sk-provider-token""#));
 }
 
 #[test]
@@ -3752,7 +3799,7 @@ experimental_bearer_token = "sk-new"
     assert!(config.contains(r#"base_url = "https://relay.example.test/v1""#));
     assert!(config.contains(r#"wire_api = "responses""#));
     assert!(config.contains("requires_openai_auth = true"));
-    assert!(!config.contains("experimental_bearer_token"));
+    assert!(config.contains(r#"experimental_bearer_token = "sk-new""#));
 }
 
 #[test]

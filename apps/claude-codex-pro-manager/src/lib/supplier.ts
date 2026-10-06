@@ -814,6 +814,7 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
   const model = profile.model.trim();
   const baseUrl = profile.baseUrl.trim();
   const providerId = supplierIdFromName(profile.id || profile.name);
+  const apiKey = supplierProfileResolvedApiKey(profile);
   return [
     model ? `model = ${tomlString(model)}` : null,
     `model_provider = ${tomlString(providerId)}`,
@@ -824,7 +825,7 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
     `name = ${tomlString(profile.name.trim() || providerId)}`,
     'wire_api = "responses"',
     "requires_openai_auth = true",
-    'env_key = "OPENAI_API_KEY"',
+    apiKey ? `experimental_bearer_token = ${tomlString(apiKey)}` : 'env_key = "OPENAI_API_KEY"',
     baseUrl ? `base_url = ${tomlString(baseUrl)}` : null,
     "",
   ].filter((line): line is string => line !== null).join("\n");

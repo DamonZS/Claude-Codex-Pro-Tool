@@ -743,6 +743,7 @@ pub fn sanitize_common_config_contents(common_config: &str) -> String {
     match parse_toml_document(common_config) {
         Ok(mut doc) => {
             remove_provider_specific_common_keys(doc.as_table_mut());
+            remove_deprecated_codex_config_keys(doc.as_table_mut());
             normalize_optional_toml(doc)
         }
         Err(_) => sanitize_common_config_text_fallback(common_config),
@@ -1187,6 +1188,7 @@ fn provider_table_exists(doc: &DocumentMut, provider_id: &str) -> bool {
 /// initiated the write.
 fn normalize_provider_config_consistency(config_text: &str) -> anyhow::Result<String> {
     let mut doc = parse_toml_document(config_text)?;
+    remove_deprecated_codex_config_keys(doc.as_table_mut());
     let Some(active) = active_provider_id(&doc) else {
         return Ok(ensure_trailing_newline(doc.to_string()));
     };
@@ -1227,6 +1229,34 @@ fn normalize_provider_config_consistency(config_text: &str) -> anyhow::Result<St
     Ok(ensure_trailing_newline(doc.to_string()))
 }
 
+fn remove_deprecated_codex_config_keys(table: &mut dyn TableLike) {
+    if let Some(features) = table.get_mut("features").and_then(Item::as_table_like_mut) {
+        if let Some(guardianv2) = features
+            .get_mut("guardianv2")
+            .and_then(Item::as_table_like_mut)
+        {
+            guardianv2.remove("thread_context");
+            if guardianv2.is_empty() {
+                features.remove("guardianv2");
+            }
+        }
+        if features.is_empty() {
+            table.remove("features");
+        }
+    }
+
+    if let Some(mcp_servers) = table
+        .get_mut("mcp_servers")
+        .and_then(Item::as_table_like_mut)
+    {
+        for (_, server) in mcp_servers.iter_mut() {
+            if let Some(server) = server.as_table_like_mut() {
+                server.remove("type");
+            }
+        }
+    }
+}
+
 fn parse_toml_document(contents: &str) -> anyhow::Result<DocumentMut> {
     if contents.trim().is_empty() {
         Ok(DocumentMut::new())
@@ -1254,11 +1284,13 @@ fn sanitize_common_config_text_fallback(common_config: &str) -> String {
     let mut kept = Vec::new();
     let mut in_root = true;
     let mut skipping_model_providers = false;
+    let mut current_table = String::new();
 
     for line in common_config.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             in_root = false;
+            current_table = trimmed.to_string();
             skipping_model_providers =
                 trimmed == "[model_providers]" || trimmed.starts_with("[model_providers.");
             if skipping_model_providers {
@@ -1284,6 +1316,20 @@ fn sanitize_common_config_text_fallback(common_config: &str) -> String {
             }
         }
 
+        if current_table == "[features.guardianv2]"
+            && trimmed
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "thread_context")
+        {
+            continue;
+        }
+        if current_table.starts_with("[mcp_servers.")
+            && trimmed
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "type")
+        {
+            continue;
+        }
         kept.push(line);
     }
 
@@ -1300,7 +1346,13 @@ fn normalize_text_toml(contents: String) -> String {
 }
 
 pub fn normalize_config_text(contents: &str) -> String {
-    normalize_duplicate_toml_text(contents)
+    match parse_toml_document(contents) {
+        Ok(mut doc) => {
+            remove_deprecated_codex_config_keys(doc.as_table_mut());
+            normalize_optional_toml(doc)
+        }
+        Err(_) => normalize_duplicate_toml_text(contents),
+    }
 }
 
 fn normalize_duplicate_toml_text(contents: &str) -> String {
@@ -2160,7 +2212,6 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     {
         provider["requires_openai_auth"] = toml_edit::value(true);
     }
-    provider["env_key"] = toml_edit::value(provider_env_key);
     let provider_base_url = if profile.route_enabled {
         crate::protocol_proxy::local_responses_proxy_base_url(
             crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
@@ -2175,12 +2226,22 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     if !provider_base_url.trim().is_empty() {
         provider["base_url"] = toml_edit::value(provider_base_url.trim());
     }
-    if profile.relay_mode == crate::settings::RelayMode::PureApi
-        || (profile.api_key_explicit && api_key.trim().is_empty())
-    {
-        provider.remove("experimental_bearer_token");
-    } else if !api_key.trim().is_empty() {
-        provider["experimental_bearer_token"] = toml_edit::value(api_key.trim());
+    if profile.relay_mode == crate::settings::RelayMode::PureApi {
+        if !api_key.trim().is_empty() {
+            provider.remove("env_key");
+            provider["experimental_bearer_token"] = toml_edit::value(api_key.trim());
+        } else if profile.api_key_explicit {
+            provider.remove("env_key");
+            provider.remove("experimental_bearer_token");
+        } else {
+            provider["env_key"] = toml_edit::value(provider_env_key);
+            provider.remove("experimental_bearer_token");
+        }
+    } else {
+        provider["env_key"] = toml_edit::value(provider_env_key);
+        if !api_key.trim().is_empty() {
+            provider["experimental_bearer_token"] = toml_edit::value(api_key.trim());
+        }
     }
 
     Ok(move_model_providers_before_profiles(
@@ -3284,7 +3345,7 @@ fn root_key_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
 fn upsert_model_provider_config(
     contents: &str,
     base_url: &str,
-    _bearer_token: &str,
+    bearer_token: &str,
 ) -> anyhow::Result<String> {
     let mut doc = parse_toml_document(contents)?;
     let provider_id = active_or_default_provider_id(&doc);
@@ -3297,9 +3358,15 @@ fn upsert_model_provider_config(
     provider["name"] = toml_edit::value(provider_id.as_str());
     provider["wire_api"] = toml_edit::value("responses");
     provider["requires_openai_auth"] = toml_edit::value(true);
-    provider["env_key"] = toml_edit::value(CODEX_PROVIDER_AUTH_ENV_KEY);
     provider["base_url"] = toml_edit::value(base_url);
-    provider.remove("experimental_bearer_token");
+    let bearer_token = bearer_token.trim();
+    if bearer_token.is_empty() {
+        provider["env_key"] = toml_edit::value(CODEX_PROVIDER_AUTH_ENV_KEY);
+        provider.remove("experimental_bearer_token");
+    } else {
+        provider.remove("env_key");
+        provider["experimental_bearer_token"] = toml_edit::value(bearer_token);
+    }
 
     Ok(move_model_providers_before_profiles(
         &ensure_trailing_newline(doc.to_string()),

@@ -5,9 +5,7 @@
 
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use claude_codex_pro_core::claude_desktop_computer_use::uia::{
-        ElementType, WindowsUiaBackend,
-    };
+    use claude_codex_pro_core::claude_desktop_computer_use::uia::{ElementType, WindowsUiaBackend};
     use std::process::{Child, Command};
     use std::thread;
     use std::time::Duration;

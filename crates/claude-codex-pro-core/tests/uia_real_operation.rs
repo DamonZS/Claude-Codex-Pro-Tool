@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use claude_codex_pro_core::claude_desktop_computer_use::uia::{
-    WindowsUiaBackend, FindParams, ElementType, UiElement,
+    ElementType, FindParams, UiElement, WindowsUiaBackend,
 };
 use std::thread;
 use std::time::Duration;
@@ -12,7 +12,10 @@ fn print_tree(element: &UiElement, depth: usize, max_depth: usize) {
         return;
     }
     let indent = "  ".repeat(depth);
-    println!("   {}- {:?} \"{}\" [{}]", indent, element.element_type, element.label, element.id);
+    println!(
+        "   {}- {:?} \"{}\" [{}]",
+        indent, element.element_type, element.label, element.id
+    );
     for child in &element.children {
         print_tree(child, depth + 1, max_depth);
     }
@@ -46,8 +49,11 @@ fn test_uia_real_operation() -> Result<()> {
 
     // 重新获取窗口列表
     let windows = backend.list_windows()?;
-    let notepad = windows.iter()
-        .find(|w| w.title.contains("记事本") || w.title.contains("Notepad") || w.title.contains("notepad"))
+    let notepad = windows
+        .iter()
+        .find(|w| {
+            w.title.contains("记事本") || w.title.contains("Notepad") || w.title.contains("notepad")
+        })
         .expect("❌ 未找到记事本！已尝试启动，请手动打开记事本后重新运行测试");
 
     println!("   ✅ 找到记事本: {}", notepad.title);

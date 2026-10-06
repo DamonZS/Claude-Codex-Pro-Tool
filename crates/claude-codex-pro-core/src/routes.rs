@@ -437,7 +437,6 @@ impl CoreRuntimeService {
         self.devtools_target_id = Some(target_id.into());
         self
     }
-
 }
 
 #[async_trait]

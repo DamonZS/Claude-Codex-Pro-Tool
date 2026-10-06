@@ -231,7 +231,7 @@ env_key = "{ENV_KEY}"
 
     let (env_key, api_key) = codex_provider_auth_environment_from_home(&home).unwrap();
 
-    assert_eq!(env_key, ENV_KEY);
+    assert_eq!(env_key, "OPENAI_API_KEY");
     assert!(
         api_key == API_KEY,
         "restart-facing provider lookup must return the selected credential"
