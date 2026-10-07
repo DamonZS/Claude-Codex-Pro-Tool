@@ -2243,23 +2243,39 @@ fn replace_file(source: &Path, destination: &Path) -> anyhow::Result<()> {
     };
     use windows::core::PCWSTR;
 
-    let source = source
+    let source_wide = source
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
-    let destination = destination
+    let destination_wide = destination
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
     unsafe {
-        MoveFileExW(
-            PCWSTR(source.as_ptr()),
-            PCWSTR(destination.as_ptr()),
+        match MoveFileExW(
+            PCWSTR(source_wide.as_ptr()),
+            PCWSTR(destination_wide.as_ptr()),
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-        .map_err(anyhow::Error::from)
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code().0 as u32 == 183 => {
+                fs::remove_file(destination).with_context(|| {
+                    format!(
+                        "failed to remove existing destination {}",
+                        destination.display()
+                    )
+                })?;
+                MoveFileExW(
+                    PCWSTR(source_wide.as_ptr()),
+                    PCWSTR(destination_wide.as_ptr()),
+                    MOVEFILE_WRITE_THROUGH,
+                )
+                .map_err(anyhow::Error::from)
+            }
+            Err(error) => Err(anyhow::Error::from(error)),
+        }
     }
 }
 
@@ -4252,6 +4268,17 @@ experimental_bearer_token = "sk-existing"
 
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(saved["providerSyncEnabled"], true);
+    }
+
+    #[test]
+    fn atomic_write_replaces_an_existing_file_repeatedly() {
+        let dir = temp_dir();
+        let path = dir.join("provider.json");
+
+        atomic_write(&path, br#"{"version":1}"#).unwrap();
+        atomic_write(&path, br#"{"version":2}"#).unwrap();
+
+        assert_eq!(std::fs::read_to_string(path).unwrap(), r#"{"version":2}"#);
     }
 
     #[test]
