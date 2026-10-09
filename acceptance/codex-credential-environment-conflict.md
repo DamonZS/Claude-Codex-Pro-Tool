@@ -21,8 +21,10 @@
 15. 合法自定义 `env_key` 在 Profile 规范化和应用后保持不变，不被强制改写为 `OPENAI_API_KEY`。
 16. 通用 relay 文件应用 API 不写入 Manager 进程、三平台用户会话或真实凭据环境变量；集成测试运行前后不会改变真实 `OPENAI_API_KEY`。
 17. Windows MSIX 激活只在进程创建作用域内临时提供 live 凭据，激活结束或失败后精确恢复用户级和 launcher 进程环境。
-18. 所有平台的供应商切换或手动注入只写配置文件，不修改 Manager 进程或用户持久环境；启动凭据只在 core launcher 的最终 Codex 启动边界注入且不出现在日志中。
-19. Windows 删除与 MSIX 临时注入跨进程序列化；删除发生在临时注入期间时，最终状态仍为已删除，不会被 launcher 恢复旧值。
+18. Codex 供应商切换成功后，活动 Profile Key 写入实际 Provider `env_key` 对应的当前用户会话环境变量及 Manager 进程副本；失败切换不写入，空 Key 不写入，Claude/Claude Desktop 切换、通用配置应用和手动注入不触发同步。
+19. Windows 用户持久环境写入通过 `HKCU\Environment` 并广播变更，macOS 使用 `launchctl setenv`，Linux 使用 `systemctl --user set-environment`；Windows 写入与 MSIX 临时注入/清理互斥。
+20. 自定义合法 Provider `env_key` 被用于同步；缺失、空值或非法变量名回退为 `OPENAI_API_KEY`。环境写入失败时命令不报告完整成功，Key 不进入日志或返回值。
+21. Windows 删除与 MSIX 临时注入/供应商切换跨进程序列化；删除发生在临时注入期间时，最终状态仍为已删除，不会被 launcher 恢复旧值。
 
 ## 验证方式与证据
 
@@ -33,6 +35,7 @@
 - launcher 契约测试覆盖 MSIX 激活使用作用域临时凭据且不持久同步。
 - relay switch 测试覆盖同一 Profile 重应用不回填旧 live 凭据。
 - Windows 定向测试使用临时测试变量验证用户环境变量写入、检测、删除，不使用真实 `OPENAI_API_KEY`。
+- Codex 切换测试验证成功持久写入、自定义 `env_key`、默认回退、失败/空 Key 不写、非 Codex 写入入口不触发同步；使用隔离 `CCP_TEST_*` 变量或 mock 平台写入器。
 - macOS 原生测试使用临时 `CCP_TEST_*` 变量验证 launchd 用户会话检测和删除；Linux 原生测试验证 systemd user manager 的可用与不可用分支。
 - 外部来源契约测试证明 CCP 不编辑 shell/profile、plist、`environment.d` 或启动脚本，并显示人工检查提示。
 - `npm --prefix apps/claude-codex-pro-manager run check` 通过。

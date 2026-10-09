@@ -14,6 +14,7 @@ Codex 自定义供应商可通过 `config.toml` 中的 `env_key`、`auth.json`�
 - 对冲突给出明确原因，并允许用户确认后清理当前 Manager 进程副本及当前平台可安全管理的用户会话变量；外部 shell/profile 来源只提示人工处理。
 - 清理后提示完全退出并重新启动 Codex。
 - 启动 Codex 时从当前 live `config.toml` 解析活动 Provider 的实际 `env_key`，并用 live `auth.json` 的凭据覆盖该子进程变量，避免继承旧值导致 401。
+- Codex 供应商切换成功后，将活动 Profile 的非空 Key 持久写入其 `env_key` 指定的当前用户会话环境变量；未声明有效 `env_key` 时使用 `OPENAI_API_KEY`。切换失败不改环境变量。
 - Windows MSIX Codex 激活时仅在进程创建作用域内临时提供 live 凭据，激活结束后恢复用户环境，避免旧注册表值覆盖当前供应商或已删除变量被重新创建。
 
 ## 非目标
@@ -21,7 +22,7 @@ Codex 自定义供应商可通过 `config.toml` 中的 `env_key`、`auth.json`�
 - 不静默删除任何环境变量。
 - 不删除系统级环境变量，不请求管理员权限。
 - 不修改 `CODEX_HOME`。
-- 不修改供应商切换、协议转换或上游请求实现。
+- 不为 Claude / Claude Desktop 切换、通用配置应用或启动过程持久写入用户环境变量。
 - 不展示 API Key、Token、完整指纹或其他认证材料。
 - 不新增独立设置页或重做供应商 UI。
 - 不在通用配置写入 API 或自动化测试中持久修改真实用户凭据环境变量。
@@ -34,6 +35,7 @@ Codex 自定义供应商可通过 `config.toml` 中的 `env_key`、`auth.json`�
 4. 有变量且与 Profile 一致时，提示变量存在但未发现值冲突。
 5. 有变量且与 Profile 不一致时，提示该变量可能覆盖当前 Profile 并导致 401。
 6. 用户点击“删除”后看到确认提示；确认后 CCP 清理当前 Manager 进程副本，以及 Windows `HKCU\Environment`、macOS launchd 用户会话或 Linux systemd user manager 中可管理的同名变量。
+8. Codex 供应商切换成功后，CCP 将活动 Profile 的非空 Key 写入 Provider `env_key` 对应的当前用户会话环境变量。
 7. 清理后重新检测；已运行的 Codex 或其他进程仍可能保留旧值，外部 shell/profile 也可能在下次启动时重新注入，界面分别提示重启或人工检查。
 
 ## 功能要求
@@ -69,6 +71,10 @@ Codex 自定义供应商可通过 `config.toml` 中的 `env_key`、`auth.json`�
 - Windows MSIX 无法接收自定义环境块，因此必须在 `ActivateApplication` 调用作用域内临时覆盖用户级和 launcher 进程环境，并在调用结束后恢复原状态。
 - Windows 删除动作与 MSIX 临时注入必须使用同一跨进程互斥体，确保临时恢复不会把用户刚删除的旧值重新写回。
 - 用户明确执行“使用”“保存并使用”或现有手动注入动作时，Manager 只写配置文件，不得把 live 凭据同步到 Manager 进程或用户持久环境。
+- Codex 供应商切换成功后，将活动 Profile 的非空 API Key 写入当前用户会话变量：Windows `HKCU\Environment`，macOS `launchctl setenv`，Linux `systemctl --user set-environment`；同时更新 Manager 当前进程副本。
+- Provider `env_key` 缺失、空值或非法时回退到 `OPENAI_API_KEY`。Key 为空时不写入或清除变量；配置切换失败时不写入环境变量。
+- 环境持久化失败时明确返回失败，避免报告切换完整成功；Windows 写入与 MSIX 临时注入/清理共用同一互斥体。
+- “使用”“保存并使用”或手动注入仍只写配置文件，不触发环境同步；仅明确的 Codex 供应商切换成功动作同步。
 - Profile 中合法的自定义 `env_key` 必须保留，只有缺失、空值或非法变量名才回退为 `OPENAI_API_KEY`。
 - 启动/重启只读取 live 配置，不得切换 Profile，不得重写 `config.toml`、`auth.json` 或 Manager 设置。
 - 供应商配置仍只在用户触发“使用”或“保存并使用”时落盘；同一 Profile 重应用不得被旧 live 凭据回填覆盖。
@@ -96,7 +102,7 @@ Codex 自定义供应商可通过 `config.toml` 中的 `env_key`、`auth.json`�
 - 凭据解析复用现有 `BackendSettings::active_relay_profile()` 及 Profile 配置内容。
 - launcher 的 live 配置解析复用 core 的 TOML/JSON 解析能力，不在 launcher 二进制中复制字符串解析逻辑。
 - Windows、macOS、Linux 用户会话清理适配与 Windows MSIX 临时注入操作位于 core，manager 只负责命令包装。
-- `apply_relay_*_to_home*` 等可被测试复用的文件 API 只负责文件，不得隐式写入 Manager 环境、`HKCU\\Environment`、launchd 或 systemd user manager。
+- `apply_relay_*_to_home*` 等可被测试复用的文件 API 只负责文件，不得隐式写入 Manager 环境、`HKCU\\Environment`、launchd 或 systemd user manager；环境同步由 Codex 切换命令在文件切换成功后显式调用。
 - 自动化测试只能使用 `CCP_TEST_*` 临时变量或纯比较函数，不得写入真实 `OPENAI_API_KEY`。
 - 最小改动现有 `SupplierScreen`，不拆分或重构该大组件。
 - 不回滚工作区其他改动。

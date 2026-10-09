@@ -420,6 +420,67 @@ pub fn clear_codex_user_credential_environment(
     Ok(diagnostic)
 }
 
+/// Persist the active Codex profile credential in the provider's user-session
+/// environment and keep the current Manager process in sync. This is called
+/// only after an explicit Codex supplier switch has completed successfully.
+pub fn sync_codex_credential_environment(
+    profile: &crate::settings::RelayProfile,
+) -> anyhow::Result<()> {
+    let variable_name = profile_env_key(&profile.config_contents);
+    let credential = relay_profile_resolved_api_key(profile);
+    let credential = credential.trim();
+    if credential.is_empty() {
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        let _environment_lock = TemporaryCodexCredentialEnvironmentLock::acquire()?;
+        let current = crate::windows_integration::current_user_registry_string_value_result(
+            WINDOWS_USER_ENVIRONMENT_KEY,
+            &variable_name,
+        )?;
+        if current.as_ref().map(|value| value.value.as_str()) != Some(credential) {
+            crate::windows_integration::set_current_user_string_value(
+                WINDOWS_USER_ENVIRONMENT_KEY,
+                &variable_name,
+                credential,
+            )?;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("launchctl")
+            .args(["setenv", &variable_name, credential])
+            .status()
+            .map_err(|error| anyhow::anyhow!("写入 launchd 用户会话环境失败：{error}"))?;
+        if !status.success() {
+            anyhow::bail!("写入 launchd 用户会话环境失败")
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let assignment = format!("{variable_name}={credential}");
+        let status = Command::new("systemctl")
+            .args(["--user", "set-environment", &assignment])
+            .status()
+            .map_err(|error| anyhow::anyhow!("写入 systemd 用户环境失败：{error}"))?;
+        if !status.success() {
+            anyhow::bail!("写入 systemd 用户环境失败")
+        }
+    }
+
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    anyhow::bail!("当前平台不支持由 CCP 写入用户会话环境变量");
+
+    unsafe {
+        std::env::set_var(variable_name, credential);
+    }
+    Ok(())
+}
+
 pub fn valid_environment_variable_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 128
@@ -451,4 +512,32 @@ fn profile_env_key(config_contents: &str) -> String {
 
 fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::profile_env_key;
+
+    #[test]
+    fn profile_env_key_uses_custom_provider_variable() {
+        let config = r#"
+model_provider = "custom"
+
+[model_providers.custom]
+env_key = "CCP_TEST_CODEX_KEY"
+"#;
+
+        assert_eq!(profile_env_key(config), "CCP_TEST_CODEX_KEY");
+    }
+
+    #[test]
+    fn profile_env_key_falls_back_for_missing_or_invalid_name() {
+        assert_eq!(profile_env_key(""), "OPENAI_API_KEY");
+        assert_eq!(
+            profile_env_key(
+                "model_provider = \"custom\"\n[model_providers.custom]\nenv_key = \"BAD-KEY\""
+            ),
+            "OPENAI_API_KEY"
+        );
+    }
 }

@@ -202,17 +202,17 @@ fn manager_startup_does_not_launch_claude_desktop_proxy() {
 fn manager_provider_writes_do_not_persist_codex_credentials() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
-    let sync_call = "sync_codex_credential_environment_after_apply(&home)";
-    assert_eq!(
-        commands.matches(sync_call).count(),
-        0,
-        "provider writes must not synchronize credentials into the manager or user environment"
-    );
+    let sync_call = "sync_codex_credential_environment(";
 
     let switch = source_section(
         &commands,
         "fn switch_relay_profile_blocking(",
         "pub async fn preview_claude_desktop_provider(",
+    );
+    let codex_switch = source_section(
+        &commands,
+        "fn switch_codex_supplier_blocking(",
+        "fn switch_claude_supplier_blocking(",
     );
     let relay = source_section(
         &commands,
@@ -225,12 +225,22 @@ fn manager_provider_writes_do_not_persist_codex_credentials() {
         "pub async fn clear_relay_injection()",
     );
 
+    assert!(codex_switch.contains("if result.status == \"ok\""));
+    assert!(codex_switch.contains(sync_call));
+    assert!(
+        codex_switch.find("if result.status == \"ok\"").unwrap()
+            < codex_switch.find(sync_call).unwrap()
+    );
+
     for (name, section) in [
-        ("switch", switch),
+        ("generic relay switch", switch),
         ("relay apply", relay),
         ("pure API apply", pure_api),
     ] {
-        assert!(!section.contains(sync_call), "{name}");
+        assert!(
+            !section.contains("sync_codex_credential_environment"),
+            "{name}"
+        );
         assert!(
             !section.contains("sync_codex_user_credential_environment"),
             "{name} must not mutate the manager or persistent user environment"

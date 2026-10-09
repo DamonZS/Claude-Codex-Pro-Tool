@@ -8640,6 +8640,23 @@ fn switch_codex_supplier_blocking(
         settings: request.settings,
         previous_active_relay_id: request.previous_active_relay_id,
     });
+    if result.status == "ok" {
+        let profile = result.payload.settings.active_relay_profile();
+        if let Err(error) =
+            claude_codex_pro_core::credential_environment::sync_codex_credential_environment(
+                &profile,
+            )
+        {
+            return failed(
+                &format!("Codex 供应商已切换，但凭据环境变量持久化失败：{error}"),
+                SettingsPayload {
+                    settings: result.payload.settings,
+                    settings_path: result.payload.settings_path,
+                    user_scripts: result.payload.user_scripts,
+                },
+            );
+        }
+    }
     CommandResult {
         status: result.status,
         message: if result.message.is_empty() {
