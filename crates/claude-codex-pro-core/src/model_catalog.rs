@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::settings::{RelayProfile, SettingsStore};
 use serde_json::{Value, json};
@@ -70,6 +71,7 @@ pub(crate) struct RelayProfileCatalogModel {
     pub(crate) model: String,
     pub(crate) display_name: String,
     pub(crate) context_window: Option<u64>,
+    pub(crate) max_context_window: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -182,11 +184,13 @@ fn relay_profile_model_ids(profile: &RelayProfile) -> Vec<String> {
 pub(crate) fn relay_profile_catalog_models(
     profile: &RelayProfile,
 ) -> Vec<RelayProfileCatalogModel> {
-    let Ok(Value::Array(rows)) = serde_json::from_str::<Value>(&profile.codex_catalog_json) else {
-        return Vec::new();
-    };
+    let rows = serde_json::from_str::<Value>(&profile.codex_catalog_json)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
     let mut seen = HashSet::new();
-    rows.into_iter()
+    let mapped = rows
+        .into_iter()
         .filter_map(|row| {
             let model = row.get("model")?.as_str()?.trim();
             if model.is_empty() || !seen.insert(model.to_string()) {
@@ -200,30 +204,91 @@ pub(crate) fn relay_profile_catalog_models(
                 .filter(|value| !value.is_empty())
                 .unwrap_or(model)
                 .to_string();
-            let context_window = row
-                .get("contextWindow")
-                .or_else(|| row.get("context_window"))
-                .and_then(|value| {
-                    value.as_u64().or_else(|| {
-                        value
-                            .as_str()
-                            .map(|text| {
-                                text.chars()
-                                    .filter(char::is_ascii_digit)
-                                    .collect::<String>()
-                            })
-                            .and_then(|text| text.parse::<u64>().ok())
-                    })
-                })
-                .filter(|value| *value > 0)
-                .or(Some(DEFAULT_CODEX_CONTEXT_WINDOW));
+            let explicit_context_window =
+                json_positive_u64(&row, &["contextWindow", "context_window"]);
+            let explicit_max_context_window =
+                json_positive_u64(&row, &["maxContextWindow", "max_context_window"]);
+            let supports_1m = row
+                .get("supports1m")
+                .or_else(|| row.get("supports_1m"))
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let max_context_window = explicit_max_context_window
+                .or(explicit_context_window)
+                .or_else(|| codex_model_max_context_window(model))
+                .unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW);
+            let context_window = supports_1m.then(|| {
+                explicit_context_window
+                    .unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW)
+                    .min(max_context_window)
+            });
             Some(RelayProfileCatalogModel {
                 model: model.to_string(),
                 display_name,
                 context_window,
+                max_context_window: Some(explicit_max_context_window.unwrap_or(max_context_window)),
             })
         })
+        .collect::<Vec<_>>();
+    if !mapped.is_empty() {
+        return mapped;
+    }
+
+    std::iter::once(profile.model.as_str())
+        .chain(profile.model_list.split(['\r', '\n', ',']))
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && seen.insert((*model).to_string()))
+        .map(|model| {
+            let max_context_window =
+                codex_model_max_context_window(model).unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW);
+            RelayProfileCatalogModel {
+                model: model.to_string(),
+                display_name: model.to_string(),
+                context_window: Some(DEFAULT_CODEX_CONTEXT_WINDOW.min(max_context_window)),
+                max_context_window: Some(max_context_window),
+            }
+        })
         .collect()
+}
+
+fn json_positive_u64(row: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| row.get(*key))
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_str()
+                    .map(|text| {
+                        text.chars()
+                            .filter(char::is_ascii_digit)
+                            .collect::<String>()
+                    })
+                    .and_then(|text| text.parse::<u64>().ok())
+            })
+        })
+        .filter(|value| *value > 0)
+}
+
+fn codex_model_max_context_window(model: &str) -> Option<u64> {
+    static MAX_CONTEXT_WINDOWS: OnceLock<HashMap<String, u64>> = OnceLock::new();
+    MAX_CONTEXT_WINDOWS
+        .get_or_init(|| {
+            let catalog: Value = serde_json::from_str(include_str!("../assets/codex-models.json"))
+                .expect("bundled Codex model catalog must be valid JSON");
+            catalog["models"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| {
+                    Some((
+                        entry.get("slug")?.as_str()?.to_string(),
+                        entry.get("max_context_window")?.as_u64()?,
+                    ))
+                })
+                .collect()
+        })
+        .get(model)
+        .copied()
 }
 
 /// Codex 原生模型目录中每一档推理档位的固定说明文案。
@@ -264,9 +329,13 @@ fn catalog_entry_from_mapped_model(model: &RelayProfileCatalogModel, priority: u
         "experimental_supported_tools": [],
         "base_instructions": "",
     });
-    if let (Some(window), Some(object)) = (model.context_window, entry.as_object_mut()) {
-        object.insert("context_window".to_string(), json!(window));
-        object.insert("max_context_window".to_string(), json!(window));
+    if let Some(object) = entry.as_object_mut() {
+        if let Some(window) = model.context_window {
+            object.insert("context_window".to_string(), json!(window));
+        }
+        if let Some(window) = model.max_context_window {
+            object.insert("max_context_window".to_string(), json!(window));
+        }
     }
     entry
 }

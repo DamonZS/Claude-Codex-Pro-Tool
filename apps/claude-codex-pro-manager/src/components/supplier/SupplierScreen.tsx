@@ -596,7 +596,7 @@ export function SupplierScreen({
       ...(firstRow ? {
         model: firstRow.model.trim(),
         testModel: firstRow.model.trim(),
-        contextWindow: firstRow.contextWindow,
+        contextWindow: firstRow.supports1m ? "1000000" : "",
       } : {}),
     });
   };
@@ -604,7 +604,8 @@ export function SupplierScreen({
     writeSupplierCodexCatalogModels([...supplierCodexCatalogModels, {
       displayName: "",
       model: "",
-      contextWindow: "1000000",
+      supports1m: true,
+      maxContextWindow: "",
       rowId: `codex-catalog-${supplierCodexCatalogRowIdRef.current += 1}`,
     }]);
   };
@@ -826,7 +827,27 @@ export function SupplierScreen({
     if (result) {
       setModelFetch(result);
       if (result.models.length) {
-        if (draft.targetApp === "codex") return;
+        if (draft.targetApp === "codex") {
+          const existingRows = supplierCodexCatalogModels.length
+            ? supplierCodexCatalogModels
+            : createSupplierCodexCatalogModelRows(supplierCodexCatalogRows(draft));
+          const existingModels = new Set(existingRows.map((row) => row.model.trim().toLowerCase()).filter(Boolean));
+          const mergedRows = [
+            ...existingRows,
+            ...result.models
+              .map((model) => model.trim())
+              .filter((model) => model && !existingModels.has(model.toLowerCase()))
+              .map((model) => ({
+                displayName: model,
+                model,
+                supports1m: true,
+                maxContextWindow: "",
+                rowId: `codex-catalog-${supplierCodexCatalogRowIdRef.current += 1}`,
+              })),
+          ];
+          writeSupplierCodexCatalogModels(mergedRows);
+          return;
+        }
         const isClaudeTarget = draft.targetApp === "claude" || draft.targetApp === "claude-desktop";
         if (isClaudeTarget && draft.modelMappingEnabled) return;
         const existingRows = supplierDirectModels.length
@@ -1401,8 +1422,8 @@ env_key = "OPENAI_API_KEY"
                     <Button onClick={addSupplierCodexCatalogModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
                   </div>
                 </div>
-                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；上下文窗口用于本地模型能力说明。</p>
-                <div className="supplier-codex-catalog-grid header"><span>菜单显示名</span><span>实际请求模型</span><span>上下文窗口</span><span /></div>
+                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；勾选 1M 表示启用百万上下文。</p>
+                <div className="supplier-codex-catalog-grid header"><span>菜单显示名</span><span>实际请求模型</span><span>1M 上下文</span><span>最大上下文</span><span /></div>
                 {supplierCodexCatalogModels.length ? supplierCodexCatalogModels.map((row, index) => (
                   <div className="supplier-codex-catalog-grid" key={row.rowId}>
                     <input
@@ -1432,12 +1453,21 @@ env_key = "OPENAI_API_KEY"
                         value={row.model}
                       />
                     </div>
+                    <label className="supplier-codex-1m-toggle">
+                      <input
+                        aria-label={`1M 上下文 ${index + 1}`}
+                        checked={row.supports1m}
+                        onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { supports1m: event.currentTarget.checked })}
+                        type="checkbox"
+                      />
+                      <span>1M</span>
+                    </label>
                     <input
-                      aria-label={`上下文窗口 ${index + 1}`}
+                      aria-label={`最大上下文 ${index + 1}`}
                       inputMode="numeric"
-                      onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { contextWindow: event.currentTarget.value.replace(/[^\d]/g, "") })}
-                      placeholder="例如: 128000"
-                      value={row.contextWindow}
+                      onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { maxContextWindow: event.currentTarget.value.replace(/[^\d]/g, "") })}
+                      placeholder="自动（按模型）"
+                      value={row.maxContextWindow}
                     />
                     <button aria-label="删除模型" className="supplier-codex-catalog-remove" onClick={() => removeSupplierCodexCatalogModel(row.rowId)} title="删除模型" type="button"><Trash2 className="h-4 w-4" /></button>
                   </div>

@@ -8320,7 +8320,7 @@ body {
 
 .supplier-codex-catalog-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 140px 38px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 140px 140px 38px;
   gap: 10px;
   align-items: center;
 }
@@ -8345,6 +8345,23 @@ body {
   background: rgba(8, 10, 16, 0.78);
   color: var(--ops-ink);
   padding: 0 10px;
+}
+
+.supplier-codex-1m-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 38px;
+  color: var(--ops-ink);
+  cursor: pointer;
+}
+
+.supplier-codex-1m-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  accent-color: var(--ops-accent);
 }
 
 .supplier-model-input-dropdown,

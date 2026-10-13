@@ -436,7 +436,7 @@ pub fn apply_relay_profile_files_to_home_with_context(
         preserve_unmanaged_live_context_entries(home, &config_with_common, common_config_contents)?;
     let config_with_limits = apply_context_limits_to_config(
         &config_with_common,
-        &profile.context_window,
+        &relay_profile_context_window(profile),
         &profile.auto_compact_limit,
     )?;
     let config_with_catalog = inject_supplier_model_catalog(profile, home, &config_with_limits)?;
@@ -473,7 +473,7 @@ pub fn apply_relay_profile_to_home_with_switch_rules_and_computer_use_guard(
         preserve_unmanaged_live_context_entries(home, &config_with_common, common_config_contents)?;
     let config_with_limits = apply_context_limits_to_config(
         &config_with_common,
-        &profile.context_window,
+        &relay_profile_context_window(profile),
         &profile.auto_compact_limit,
     )?;
 
@@ -511,7 +511,7 @@ pub fn apply_relay_profile_config_to_home_with_context(
     let config_with_common = merge_common_config_into_config(&profile_config, &selected_common)?;
     let config_with_limits = apply_context_limits_to_config(
         &config_with_common,
-        &profile.context_window,
+        &relay_profile_context_window(profile),
         &profile.auto_compact_limit,
     )?;
     let config_with_catalog = inject_supplier_model_catalog(profile, home, &config_with_limits)?;
@@ -1527,6 +1527,14 @@ fn apply_context_limits_to_config(
         doc["model_auto_compact_token_limit"] = toml_edit::value(value as i64);
     }
     Ok(normalize_optional_toml(doc))
+}
+
+fn relay_profile_context_window(profile: &RelayProfile) -> String {
+    if !relay_profile_targets_claude(profile) && profile.context_window.trim().is_empty() {
+        "1000000".to_string()
+    } else {
+        profile.context_window.clone()
+    }
 }
 
 fn toml_value_is_subset(target: &toml_edit::Value, source: &toml_edit::Value) -> bool {

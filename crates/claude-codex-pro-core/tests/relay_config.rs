@@ -1724,8 +1724,7 @@ enabled = true
 
 #[test]
 fn apply_relay_profile_without_mapping_does_not_write_model_catalog_json() {
-    // 映射为空时，新语义与旧行为一致：既不改 config.toml 的 model_catalog_json，
-    // 也不生成 model-catalogs 目录。映射非空的覆盖见下方 mapping 前缀用例。
+    // 没有显式映射时，仍根据主模型和模型列表生成 Codex 原生目录。
     let temp = tempfile::tempdir().unwrap();
     let profile = RelayProfile {
         id: "relay-a".to_string(),
@@ -1754,16 +1753,20 @@ experimental_bearer_token = "sk-new"
     apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
 
     let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
-    assert!(!config.contains("model_catalog_json"));
+    assert!(config.contains("model_catalog_json = "));
     assert!(config.contains("model_context_window = 200000"));
     assert!(config.contains("model_auto_compact_token_limit = 160000"));
-    assert!(!temp.path().join("model-catalogs").exists());
+    assert!(
+        temp.path()
+            .join("model-catalogs")
+            .join("relay-relay-a.json")
+            .exists()
+    );
 }
 
 #[test]
 fn apply_relay_profile_without_mapping_preserves_user_model_catalog_json() {
-    // 映射为空：用户自配的 model_catalog_json 必须原样保留，且不生成
-    // 本 CCP 的 model-catalogs 目录文件。
+    // 没有显式映射时，生成的 CCP 目录覆盖旧路径，避免继续使用缺少上下文能力的旧目录。
     let temp = tempfile::tempdir().unwrap();
     let profile = RelayProfile {
         id: "relay-a".to_string(),
@@ -1789,12 +1792,11 @@ experimental_bearer_token = "sk-new"
     apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
 
     let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
-    assert!(config.contains(r#"model_catalog_json = "C:\\old\\catalog.json""#));
+    assert!(config.contains("model_catalog_json = "));
     assert!(
-        !temp
-            .path()
+        temp.path()
             .join("model-catalogs")
-            .join("relay-a.json")
+            .join("relay-relay-a.json")
             .exists()
     );
 }
@@ -1849,10 +1851,8 @@ experimental_bearer_token = "sk-new"
     assert_eq!(models[0]["supported_in_api"], true);
     assert_eq!(models[0]["shell_type"], "unified_exec");
     assert_eq!(models[0]["priority"], 1);
-    assert!(
-        models[0].get("context_window").is_none(),
-        "无窗口的条目不应写窗口字段"
-    );
+    assert_eq!(models[0]["context_window"], 1_000_000);
+    assert_eq!(models[0]["max_context_window"], 1_000_000);
     assert_eq!(models[1]["slug"], "glm-5.3");
     assert_eq!(models[1]["display_name"], "GLM 5.3");
     assert_eq!(models[1]["priority"], 2);
@@ -1863,6 +1863,92 @@ experimental_bearer_token = "sk-new"
     assert!(config.contains("model_catalog_json = "));
     assert!(config.contains("model-catalogs"));
     assert!(config.contains("relay-relay-a.json"));
+}
+
+#[test]
+fn apply_relay_profile_respects_disabled_codex_one_m_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-no-1m".to_string(),
+        name: "无 1M 模型".to_string(),
+        model: "provider-model".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "provider-model"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        codex_catalog_json:
+            r#"[{"model":"provider-model","supports1m":false,"maxContextWindow":128000}]"#
+                .to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+    let catalog_path = temp
+        .path()
+        .join("model-catalogs")
+        .join("relay-relay-no-1m.json");
+    let catalog: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(catalog_path).unwrap()).unwrap();
+    let model = &catalog["models"][0];
+    assert!(model.get("context_window").is_none());
+    assert_eq!(model["max_context_window"], 128000);
+}
+
+#[test]
+fn apply_relay_profile_writes_native_model_max_context_without_mapping() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-native-models".to_string(),
+        model: "gpt-5.5".to_string(),
+        model_list: "gpt-5.5\ngpt-5.4".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "gpt-5.5"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+experimental_bearer_token = "sk-new"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+
+    let catalog_path = temp
+        .path()
+        .join("model-catalogs")
+        .join("relay-relay-native-models.json");
+    let catalog: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(catalog_path).unwrap()).unwrap();
+    let models = catalog["models"].as_array().unwrap();
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0]["slug"], "gpt-5.5");
+    assert_eq!(models[0]["context_window"], 272_000);
+    assert_eq!(models[0]["max_context_window"], 272_000);
+    assert_eq!(models[1]["slug"], "gpt-5.4");
+    assert_eq!(models[1]["context_window"], 1_000_000);
+    assert_eq!(models[1]["max_context_window"], 1_000_000);
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(
+        config.contains("model_context_window = 1000000"),
+        "Codex 默认应写入 1M 上下文：{config}"
+    );
 }
 
 #[test]

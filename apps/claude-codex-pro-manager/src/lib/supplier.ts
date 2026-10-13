@@ -156,7 +156,8 @@ export type SupplierDirectModelRow = {
 export type SupplierCodexCatalogRow = {
   displayName: string;
   model: string;
-  contextWindow: string;
+  supports1m: boolean;
+  maxContextWindow: string;
 };
 
 export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCatalogRow[] {
@@ -178,10 +179,14 @@ export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCa
             : typeof value.display_name === "string"
               ? value.display_name.trim()
               : "";
-          const contextWindow = isCodex
+          const legacyContextWindow = isCodex
             ? normalizedContextWindow(value.contextWindow ?? value.context_window)
             : String(value.contextWindow ?? value.context_window ?? "").replace(/[^\d]/g, "");
-          return [{ displayName, model, contextWindow }];
+          const supports1m = isCodex
+            ? value.supports1m !== false && value.supports_1m !== false && legacyContextWindow !== ""
+            : false;
+          const maxContextWindow = String(value.maxContextWindow ?? value.max_context_window ?? "").replace(/[^\d]/g, "");
+          return [{ displayName, model, supports1m, maxContextWindow }];
         });
       }
     } catch {
@@ -200,9 +205,8 @@ export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCa
     return [{
       displayName: normalized,
       model: normalized,
-      contextWindow: isCodex
-        ? normalizedContextWindow(profile.contextWindow)
-        : String(profile.contextWindow || "").replace(/[^\d]/g, ""),
+      supports1m: isCodex,
+      maxContextWindow: "",
     }];
   });
 }
@@ -214,11 +218,12 @@ export function supplierCodexCatalogJson(rows: SupplierCodexCatalogRow[]) {
     if (!model || seen.has(model)) return [];
     seen.add(model);
     const displayName = row.displayName.trim();
-    const contextWindow = normalizedContextWindow(row.contextWindow);
+    const maxContextWindow = row.maxContextWindow.replace(/[^\d]/g, "");
     return [{
       model,
       ...(displayName ? { displayName } : {}),
-      contextWindow: Number.parseInt(contextWindow, 10),
+      ...(row.supports1m ? { contextWindow: 1_000_000 } : { supports1m: false }),
+      ...(maxContextWindow ? { maxContextWindow: Number.parseInt(maxContextWindow, 10) } : {}),
     }];
   });
   return JSON.stringify(normalized, null, 2);
@@ -815,10 +820,12 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
   const baseUrl = profile.baseUrl.trim();
   const providerId = supplierIdFromName(profile.id || profile.name);
   const apiKey = supplierProfileResolvedApiKey(profile);
+  const contextWindow = normalizedContextWindow(profile.contextWindow);
   return [
     model ? `model = ${tomlString(model)}` : null,
     `model_provider = ${tomlString(providerId)}`,
     'model_reasoning_effort = "high"',
+    contextWindow ? `model_context_window = ${contextWindow}` : null,
     "disable_response_storage = true",
     "",
     `[model_providers.${providerId}]`,
