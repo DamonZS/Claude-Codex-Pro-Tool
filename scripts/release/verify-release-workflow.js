@@ -128,6 +128,14 @@ for (const [label, source] of [["auto", auto], ["manual", manual]]) {
   }
 }
 
+for (const [label, source] of [["auto", auto], ["manual", manual]]) {
+  mustContain(source, "run: ./scripts/installer/windows/install-nsis.ps1", `${label} verified NSIS installation`);
+  mustContain(source, "$makensis = $env:MAKENSIS_EXE", `${label} verified NSIS compiler path`);
+  mustNotContain(source, "run: choco install nsis -y", `${label} unchecked NSIS installation`);
+}
+if (process.platform === "win32") {
+  require("node:child_process").execFileSync("pwsh", ["-NoProfile", "-File", "scripts/release/test-windows-nsis-installation.ps1"], { stdio: "inherit" });
+}
 mustContain(auto, "dist/macos/*.dmg", "auto macOS DMG artifact upload");
 mustContain(auto, "dist/macos/*.zip", "auto macOS ZIP artifact upload");
 mustContain(auto, "macos-${{ matrix.arch }}.zip", "auto macOS ZIP naming");

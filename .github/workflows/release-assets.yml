@@ -29,7 +29,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install NSIS
-        run: choco install nsis -y
+        shell: pwsh
+        run: ./scripts/installer/windows/install-nsis.ps1
 
       - name: Install WiX Toolset
         run: choco install wixtoolset -y
@@ -79,10 +80,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.event.release.tag_name }}".TrimStart("v", "V")
-          $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path $makensis)) {
-            $makensis = "makensis"
-          }
+          $makensis = $env:MAKENSIS_EXE
           Push-Location scripts/installer/windows
           & $makensis "/INPUTCHARSET" "UTF8" "/DVERSION=$version" ClaudeCodexPro.nsi
           Pop-Location
