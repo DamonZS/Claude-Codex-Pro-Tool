@@ -12131,7 +12131,6 @@ fn imported_supplier_config_toml(profile: &RelayProfile) -> String {
         serde_json::to_string(&provider_id).unwrap()
     ));
     lines.push("model_reasoning_effort = \"high\"".to_string());
-    lines.push("disable_response_storage = true".to_string());
     lines.push(String::new());
     lines.push(format!("[model_providers.{provider_id}]"));
     lines.push(format!(

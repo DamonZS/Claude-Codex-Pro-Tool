@@ -2,12 +2,14 @@
 
 ## 背景
 
-CCP 合并公共设置并写入 Codex `config.toml` 时，可能保留 Codex 已忽略或废弃的字段，导致启动时出现配置警告。当前已知字段包括 MCP server 的 `type` 和 `[features.guardianv2].thread_context`。
+CCP 合并公共设置并写入 Codex `config.toml` 时，可能保留 Codex 已忽略或废弃的字段，导致启动时出现配置警告。截图确证已忽略的字段为配置根或 Profile 中的 `disable_response_storage`、`features.code_mode_tool_description_first` 和 `[features.guardianv2].thread_context`；沿用已有 MCP server 的 `type` 清理。
 
 ## 目标
 
 - CCP 清理公共配置和归一化最终配置时删除上述不兼容字段。
-- 保留同一配置中的合法 MCP 命令、参数、启用状态和其他 feature 字段。
+- 前端供应商预览和后端导入生成器停止生成 `disable_response_storage`。
+- 清理根配置及所有 `profiles.<name>` 覆盖；结构化解析覆盖普通表、dotted key 和 inline table。
+- 保留同一配置中的合法 MCP 命令、参数、启用状态、Guardian 的其他设置和其他 feature 字段。
 - 对可解析 TOML 使用结构化处理；公共配置原本无法解析时，fallback 仅移除目标 table 中的目标键。
 - 保持供应商配置及 `experimental_bearer_token` 持久化行为不回归。
 

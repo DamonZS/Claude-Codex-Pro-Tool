@@ -1475,7 +1475,7 @@ path = "plugin.js"
     )
     .unwrap();
 
-    assert!(filtered.contains("disable_response_storage = true"));
+    assert!(!filtered.contains("disable_response_storage"));
     assert!(filtered.contains("[features]"));
     assert!(filtered.contains("goals = true"));
     assert!(!filtered.contains("[mcp_servers.context7]"));
@@ -3326,7 +3326,7 @@ requires_openai_auth = true
 
     let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
     assert!(config.contains(r#"model = "gpt-5.4""#));
-    assert!(config.contains("disable_response_storage = true"));
+    assert!(!config.contains("disable_response_storage"));
     assert!(config.contains(r#"model_provider = "max_ai""#));
     assert!(config.contains("[model_providers.max_ai]"));
     assert!(config.contains(r#"name = "max_ai""#));
@@ -4154,4 +4154,110 @@ fn assert_no_claude_credential_aliases(value: &serde_json::Value) {
 fn base64_url_no_pad(value: &str) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes())
+}
+
+#[test]
+fn removes_ignored_config_keys_from_root_and_profile_overrides() {
+    let input = r#"disable_response_storage = true
+model_context_window = 1000000
+[features]
+code_mode_tool_description_first = true
+goals = true
+guardianv2 = { thread_context = true, guardian_model = "keep-root" }
+[profiles.work]
+disable_response_storage = false
+model = "fixture-work"
+features.code_mode_tool_description_first = false
+features.guardianv2.thread_context = false
+features.guardianv2.guardian_model = "keep-work"
+[profiles.personal]
+features = { code_mode_tool_description_first = true, guardianv2 = { thread_context = true, guardian_model = "keep-personal" }, goals = true }
+[profiles.only_deprecated]
+features = { guardianv2 = { thread_context = true } }
+"#;
+    for cleaned in [
+        normalize_config_text(input),
+        sanitize_common_config_contents(input),
+    ] {
+        let doc = cleaned.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(!cleaned.contains("disable_response_storage"));
+        assert!(!cleaned.contains("code_mode_tool_description_first"));
+        assert!(!cleaned.contains("thread_context"));
+        assert_eq!(doc["model_context_window"].as_integer(), Some(1000000));
+        assert_eq!(doc["features"]["goals"].as_bool(), Some(true));
+        assert_eq!(
+            doc["features"]["guardianv2"]["guardian_model"].as_str(),
+            Some("keep-root")
+        );
+        assert_eq!(
+            doc["profiles"]["work"]["model"].as_str(),
+            Some("fixture-work")
+        );
+        assert_eq!(
+            doc["profiles"]["work"]["features"]["guardianv2"]["guardian_model"].as_str(),
+            Some("keep-work")
+        );
+        assert_eq!(
+            doc["profiles"]["personal"]["features"]["guardianv2"]["guardian_model"].as_str(),
+            Some("keep-personal")
+        );
+        assert!(doc["profiles"]["only_deprecated"].get("features").is_none());
+    }
+}
+
+#[test]
+fn sanitizes_ignored_config_keys_in_invalid_common_config_fallback() {
+    let cleaned = sanitize_common_config_contents(
+        r#"disable_response_storage = true
+malformed =
+[features]
+code_mode_tool_description_first = true
+goals = true
+[features.guardianv2]
+thread_context = true
+guardian_model = "keep-root"
+[profiles.work]
+disable_response_storage = false
+model = "fixture-work"
+[profiles.work.features]
+code_mode_tool_description_first = true
+goals = true
+[profiles.work.features.guardianv2]
+thread_context = true
+guardian_model = "keep-profile"
+"#,
+    );
+    assert!(!cleaned.contains("disable_response_storage"));
+    assert!(!cleaned.contains("code_mode_tool_description_first"));
+    assert!(!cleaned.contains("thread_context"));
+    assert!(cleaned.contains("malformed ="));
+    assert!(cleaned.contains("goals = true"));
+    assert!(cleaned.contains("keep-root"));
+    assert!(cleaned.contains("keep-profile"));
+}
+
+#[test]
+fn applying_profile_removes_ignored_config_keys_before_live_write() {
+    let home = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "fixture".to_string(),
+        config_contents: r#"model = "fixture-model"
+model_provider = "fixture"
+disable_response_storage = true
+[model_providers.fixture]
+name = "Fixture"
+wire_api = "responses"
+[profiles.work]
+disable_response_storage = true
+features = { code_mode_tool_description_first = true, guardianv2 = { thread_context = true, guardian_model = "keep" } }
+"#.to_string(),
+        ..RelayProfile::default()
+    };
+    apply_relay_profile_to_home_with_switch_rules(home.path(), &profile, "").unwrap();
+    let cleaned = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    assert!(!cleaned.contains("disable_response_storage"));
+    assert!(!cleaned.contains("code_mode_tool_description_first"));
+    assert!(!cleaned.contains("thread_context"));
+    assert!(cleaned.contains("guardian_model = \"keep\""));
+    assert!(cleaned.parse::<toml_edit::DocumentMut>().is_ok());
 }

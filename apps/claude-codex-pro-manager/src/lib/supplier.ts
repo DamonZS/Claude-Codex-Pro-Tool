@@ -826,7 +826,6 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
     `model_provider = ${tomlString(providerId)}`,
     'model_reasoning_effort = "high"',
     contextWindow ? `model_context_window = ${contextWindow}` : null,
-    "disable_response_storage = true",
     "",
     `[model_providers.${providerId}]`,
     `name = ${tomlString(profile.name.trim() || providerId)}`,

@@ -1230,7 +1230,9 @@ fn normalize_provider_config_consistency(config_text: &str) -> anyhow::Result<St
 }
 
 fn remove_deprecated_codex_config_keys(table: &mut dyn TableLike) {
+    table.remove("disable_response_storage");
     if let Some(features) = table.get_mut("features").and_then(Item::as_table_like_mut) {
+        features.remove("code_mode_tool_description_first");
         if let Some(guardianv2) = features
             .get_mut("guardianv2")
             .and_then(Item::as_table_like_mut)
@@ -1242,6 +1244,14 @@ fn remove_deprecated_codex_config_keys(table: &mut dyn TableLike) {
         }
         if features.is_empty() {
             table.remove("features");
+        }
+    }
+
+    if let Some(profiles) = table.get_mut("profiles").and_then(Item::as_table_like_mut) {
+        for (_, profile) in profiles.iter_mut() {
+            if let Some(profile) = profile.as_table_like_mut() {
+                remove_deprecated_codex_config_keys(profile);
+            }
         }
     }
 
@@ -1316,12 +1326,21 @@ fn sanitize_common_config_text_fallback(common_config: &str) -> String {
             }
         }
 
-        if current_table == "[features.guardianv2]"
-            && trimmed
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "thread_context")
-        {
-            continue;
+        if let Some((key, _)) = trimmed.split_once('=') {
+            let key = key.trim();
+            let table_path = current_table.trim_start_matches('[').trim_end_matches(']');
+            let profile_path = table_path.strip_prefix("profiles.");
+            let in_profile = profile_path.is_some_and(|path| !path.contains('.'));
+            let in_features = table_path == "features"
+                || profile_path.is_some_and(|path| path.ends_with(".features"));
+            let in_guardian = table_path == "features.guardianv2"
+                || profile_path.is_some_and(|path| path.ends_with(".features.guardianv2"));
+            if ((in_root || in_profile) && key == "disable_response_storage")
+                || (in_features && key == "code_mode_tool_description_first")
+                || (in_guardian && key == "thread_context")
+            {
+                continue;
+            }
         }
         if current_table.starts_with("[mcp_servers.")
             && trimmed

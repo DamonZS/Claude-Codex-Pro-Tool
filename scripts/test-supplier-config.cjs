@@ -89,3 +89,7 @@ test("Claude credentials retain their existing JSON configuration format", () =>
   assert.equal(JSON.parse(generated.configContents).env.ANTHROPIC_AUTH_TOKEN, "fixture-claude-key");
   assert.doesNotMatch(generated.configContents, /experimental_bearer_token/);
 });
+
+test("Codex supplier preview omits ignored response storage setting", () => {
+  assert.doesNotMatch(buildSupplierConfigToml(profile()), /^disable_response_storage\s*=/m);
+});
