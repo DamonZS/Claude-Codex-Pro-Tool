@@ -5,7 +5,7 @@
 ## 通过标准
 
 1. `AitrackerSessionPanel` 包含三项统计卡、同排搜索/范围/刷新、Agent 工具标签、日期分组、会话卡片和分页。
-2. 每条会话卡显示真实 Agent、项目、Provider、模型、事件/工具调用数、Token 数和状态；列表不使用演示数据。
+2. 每条会话卡显示真实 Agent、**会话名称**、项目、Provider、模型、事件/工具调用数、Token 数和状态；列表不使用演示数据。会话名称优先取 Codex `threads.name` / WorkBuddy `sessions.title` / Claude 会话标题，取不到才回退项目名；项目名出现在副标题行。`cargo test -p claude-codex-pro-manager --lib session_titles_are_applied_from_the_map` 通过。
 3. 点击 Codex 等工具只显示该 Agent 的会话，搜索、范围和分页也在完整快照上即时生效，以上操作不调用后端采集；工具图标不全为机器人。
 4. 点击会话后列表页被独立历史视图替换；左侧会话可搜索、按日期分组且可切换，右侧显示当前会话的真实记录和蒸馏入口，返回按钮恢复列表。
    本地读取器提供标题时，右侧显示真实标题；当前选中会话始终出现在左侧历史列表中。

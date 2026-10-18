@@ -54,6 +54,10 @@ enum SchemaKind {
 pub struct LocalSession {
     pub id: String,
     pub title: String,
+    /// Codex's short thread name (the one its own sidebar shows), when present.
+    /// `title` is usually the whole first message.
+    #[serde(default)]
+    pub name: String,
     pub cwd: String,
     pub model_provider: String,
     pub archived: bool,
@@ -143,6 +147,7 @@ impl SQLiteStorageAdapter {
             .into_iter()
             .collect::<HashSet<_>>();
         let title = optional_column_expression(&columns, "title", "''");
+        let name = optional_column_expression(&columns, "name", "''");
         let cwd = optional_column_expression(&columns, "cwd", "''");
         let model_provider = optional_column_expression(&columns, "model_provider", "''");
         let archived = optional_column_expression(&columns, "archived", "0");
@@ -157,7 +162,7 @@ impl SQLiteStorageAdapter {
         };
         let rollout_path = optional_column_expression(&columns, "rollout_path", "''");
         let sql = format!(
-            "SELECT id, {title}, {cwd}, {model_provider}, {archived}, {updated_at_ms}, {rollout_path}
+            "SELECT id, {title}, {cwd}, {model_provider}, {archived}, {updated_at_ms}, {rollout_path}, {name}
              FROM threads
              ORDER BY COALESCE({updated_at_ms}, 0) DESC, id DESC"
         );
@@ -171,6 +176,7 @@ impl SQLiteStorageAdapter {
                 archived: row.get::<_, Option<i64>>(4)?.unwrap_or_default() != 0,
                 updated_at_ms: row.get(5)?,
                 rollout_path: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                name: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
                 db_path: self.db_path.to_string_lossy().to_string(),
             })
         })?;
@@ -200,6 +206,7 @@ impl SQLiteStorageAdapter {
             Ok(LocalSession {
                 id: row.get(0)?,
                 title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                name: String::new(),
                 cwd: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 model_provider: String::new(),
                 archived: row

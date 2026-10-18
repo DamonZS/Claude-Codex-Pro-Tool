@@ -50,7 +50,7 @@ export const OUT_TYPES: readonly OutTypeMeta[] = [
     kind: "prompt",
     label: "Prompt",
     hint: "最轻：一段可直接复用的提示词",
-    instruction: "请产出一段可直接复用的提示词，包含角色、边界与输出格式。",
+    instruction: "请产出一段可直接复用的提示词，包含角色、边界与输出格式；用素材里的真实内容填满，不要输出只有章节标题和占位符的空骨架。",
     color: "var(--dw-chart-4)",
   },
   {

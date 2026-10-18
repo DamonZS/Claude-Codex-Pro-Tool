@@ -1241,6 +1241,7 @@ export type AitrackerCapabilitiesResult = CommandResult<{
       provider: string;
       model: string;
       project: string;
+      title: string;
       startedAt: string;
       endedAt: string;
       events: number;

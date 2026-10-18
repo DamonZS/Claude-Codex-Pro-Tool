@@ -193,6 +193,11 @@ pub struct AgentSessionSummary {
     pub provider: String,
     pub model: String,
     pub project: String,
+    /// Human session name when the client stores one (Codex `threads.name`,
+    /// WorkBuddy `sessions.title`, Claude session title). Filled by the command
+    /// layer; empty when unknown.
+    #[serde(default)]
+    pub title: String,
     pub started_at: String,
     pub ended_at: String,
     pub events: usize,
@@ -566,6 +571,7 @@ pub fn session_summaries(snapshot: &LocalUsageSnapshot) -> Vec<AgentSessionSumma
                 provider: first.provider.clone(),
                 model: first.model.clone(),
                 project: first.project.clone(),
+                title: String::new(),
                 started_at: first.timestamp.clone().min(last.timestamp.clone()),
                 ended_at: first.timestamp.clone().max(last.timestamp.clone()),
                 events: events.len(),
@@ -597,6 +603,7 @@ pub fn session_summaries(snapshot: &LocalUsageSnapshot) -> Vec<AgentSessionSumma
                 provider: session.provider.clone(),
                 model: session.model.clone(),
                 project: session.project.clone(),
+                title: String::new(),
                 started_at: session.started_at.clone(),
                 ended_at: session.ended_at.clone(),
                 events: 0,
@@ -1045,6 +1052,7 @@ mod tests {
             provider: "p".into(),
             model: model.into(),
             project: "Repo".into(),
+            title: String::new(),
             started_at: start.into(),
             ended_at: end.into(),
             events,

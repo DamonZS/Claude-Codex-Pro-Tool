@@ -1125,7 +1125,7 @@ function AitrackerSessionPanel({
       const started = Date.parse(session.startedAt);
       return (!agent || session.agent === agent)
         && (!cutoff || Number.isNaN(started) || started >= cutoff)
-        && (!search || [session.agent, session.provider, session.model, session.project, session.sessionId]
+        && (!search || [session.agent, session.provider, session.model, session.project, session.title, session.sessionId]
           .some((value) => value.toLocaleLowerCase().includes(search)));
     });
   }, [sessions, agent, keyword, range]);
@@ -1188,7 +1188,7 @@ function AitrackerSessionPanel({
     const source = [selected, ...(capabilities?.snapshot.sessions ?? sessions)]
       .filter((session): session is AitrackerSessionSummary => Boolean(session))
       .filter((session) => session.agent === selected?.agent)
-      .filter((session) => !search || [session.project, session.sessionId, session.model].some((value) => value.toLocaleLowerCase().includes(search)))
+      .filter((session) => !search || [session.project, session.title, session.sessionId, session.model].some((value) => value.toLocaleLowerCase().includes(search)))
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
     const groups = new Map<string, AitrackerSessionSummary[]>();
     const seen = new Set<string>();
@@ -1239,7 +1239,7 @@ function AitrackerSessionPanel({
               <time>{aitrackerDateLabel(items[0].startedAt)}</time>
               {items.map((session) => (
                 <button className={selected.sessionId === session.sessionId && selected.agent === session.agent ? "active" : ""} key={`${session.agent}:${session.sessionId}`} onClick={() => void openSession(session)} title={session.project || session.sessionId} type="button">
-                  <strong>{session.sessionId === selected.sessionId ? detail?.transcript?.title || session.project || "未采集标题" : session.project || "未采集标题"}</strong>
+                  <strong>{session.sessionId === selected.sessionId ? detail?.transcript?.title || session.title || session.project || "未采集标题" : session.title || session.project || "未采集标题"}</strong>
                   <small>{new Date(session.startedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })} · {session.model || agentLabel(session.agent)}</small>
                 </button>
               ))}
@@ -1250,7 +1250,7 @@ function AitrackerSessionPanel({
       <section className="aitracker-session-history-main" aria-label="会话内容">
         <header className="aitracker-session-history-header">
           <button aria-label="返回会话列表" className="aitracker-session-history-back" onClick={() => { detailEpoch.current += 1; setSelected(null); setDetail(null); }} title="返回会话列表" type="button"><ArrowLeft aria-hidden="true" /></button>
-          <div><h2>{detail?.transcript?.title || selected.project || "未采集标题"}</h2><p><SessionAgentIcon agent={selected.agent} label={agentLabel(selected.agent)} />{agentLabel(selected.agent)} <span>·</span> {new Date(selected.startedAt).toLocaleString("zh-CN")} <span>·</span> {selected.project || "项目未采集"} <span>·</span> {detail?.transcript?.totalMessages ?? selected.events} 条记录</p></div>
+          <div><h2>{detail?.transcript?.title || selected.title || selected.project || "未采集标题"}</h2><p><SessionAgentIcon agent={selected.agent} label={agentLabel(selected.agent)} />{agentLabel(selected.agent)} <span>·</span> {new Date(selected.startedAt).toLocaleString("zh-CN")} <span>·</span> {selected.project || "项目未采集"} <span>·</span> {detail?.transcript?.totalMessages ?? selected.events} 条记录</p></div>
           <Button disabled={Boolean(selectedCandidate)} onClick={() => void actions.createDistillationCandidate({ agent: selected.agent, sessionId: selected.sessionId })} size="sm" variant="outline"><Sparkles className="h-4 w-4" />{selectedCandidate ? "已加入蒸馏" : "蒸馏"}</Button>
         </header>
         <div className="aitracker-session-history-scroll">
@@ -1315,10 +1315,10 @@ function AitrackerSessionPanel({
                 <div className="aitracker-session-day-list">
                   {group.items.map((session) => (
                     <article className="aitracker-session-card" key={`${session.agent}:${session.sessionId}`}>
-                      <button className="aitracker-session-card-main" onClick={() => void openSession(session)} title={`${session.agent} / ${session.sessionId}`} type="button">
+                      <button className="aitracker-session-card-main" onClick={() => void openSession(session)} title={session.title ? `${session.title} · ${session.agent}` : `${session.agent} / ${session.sessionId}`} type="button">
                         <div className="aitracker-session-card-source"><SessionAgentIcon agent={session.agent} label={agentLabel(session.agent)} /><span>{agentLabel(session.agent)}</span><em>{aitrackerStatusLabel(session.status)}</em></div>
-                        <strong>{session.project || "未采集项目"}</strong>
-                        <small>{session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
+                        <strong>{session.title || session.project || "未采集会话"}</strong>
+                        <small>{session.project || "项目未采集"} · {session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
                       </button>
                       <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm">
                         <MessageCircle className="h-3.5 w-3.5" />

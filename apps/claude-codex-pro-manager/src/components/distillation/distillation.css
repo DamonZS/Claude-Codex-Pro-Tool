@@ -320,6 +320,9 @@
   gap: 6px;
   max-height: 260px;
   margin: 0;
+  /* Vertical scrolling only: a long session title must never put a horizontal
+     scrollbar under the list. */
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 0 4px 0 0;
   list-style: none;
@@ -328,8 +331,10 @@
 .dw-material-row {
   display: flex;
   width: 100%;
+  max-width: 100%;
   align-items: center;
   gap: 10px;
+  overflow: hidden;
   border: 1px solid var(--finish-edge-muted);
   border-radius: var(--dw-radius-sm);
   background: var(--dw-fill);
@@ -340,6 +345,8 @@
 }
 
 .dw-material-row:hover { background: var(--dw-fill-hover); }
+
+.dw-material-list > li { min-width: 0; }
 
 .dw-material-row.checked {
   border-color: color-mix(in srgb, var(--dw-chart-1) 46%, transparent);

@@ -12,7 +12,10 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 pub const MAX_OUTPUT_TOKENS: u32 = 8192;
-const MAX_TRANSIENT_RETRIES: usize = 2;
+/// Three retries after the first attempt: 4 attempts total.
+const MAX_TRANSIENT_RETRIES: usize = 3;
+/// How much of the upstream error body the detail quotes.
+const MAX_DETAIL_CHARS: usize = 200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelProtocol {
@@ -70,6 +73,8 @@ impl std::fmt::Debug for ModelTarget {
 #[derive(Debug, Clone, Copy)]
 pub struct ModelCallOptions {
     pub timeout: Duration,
+    /// Base backoff delay; the wait after the n-th transient failure is
+    /// `retry_delay * 2^n`.
     pub retry_delay: Duration,
 }
 
@@ -77,7 +82,7 @@ impl Default for ModelCallOptions {
     fn default() -> Self {
         Self {
             timeout: Duration::from_secs(120),
-            retry_delay: Duration::from_millis(350),
+            retry_delay: Duration::from_secs(1),
         }
     }
 }
@@ -150,6 +155,29 @@ fn http_failure_code(status: u16) -> &'static str {
 
 fn is_transient_status(status: u16) -> bool {
     matches!(status, 408 | 425 | 429 | 500 | 502 | 503 | 504)
+}
+
+/// Exponential backoff: the retry after `attempt` waits `base * 2^attempt`,
+/// i.e. 1 s / 2 s / 4 s with the default base.
+fn backoff_delay(base: Duration, attempt: usize) -> Duration {
+    base.saturating_mul(1u32 << attempt)
+}
+
+/// `http-error:<status>` plus a short, sanitized excerpt of the upstream body,
+/// so the user sees the provider's own reason (e.g. 「无可用渠道」) instead of
+/// only the status code. The API key is removed before anything is stored.
+fn http_error_detail(status: u16, raw: &str, api_key: &str) -> String {
+    let mut body = raw.to_string();
+    let key = api_key.trim();
+    if !key.is_empty() {
+        body = body.replace(key, "[redacted]");
+    }
+    let excerpt = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if excerpt.is_empty() {
+        return format!("http-error:{status}");
+    }
+    let excerpt: String = excerpt.chars().take(MAX_DETAIL_CHARS).collect();
+    format!("http-error:{status} · {excerpt}")
 }
 
 fn version_suffix() -> &'static Regex {
@@ -401,7 +429,7 @@ pub async fn call_model(
                 }
             }
         }
-        tokio::time::sleep(options.retry_delay).await;
+        tokio::time::sleep(backoff_delay(options.retry_delay, attempt)).await;
     }
     let Some((status, raw)) = last else {
         return Err(ModelCallError::new("ai.provider-invalid-response", None));
@@ -409,7 +437,7 @@ pub async fn call_model(
     if !(200..300).contains(&status) {
         return Err(ModelCallError::new(
             http_failure_code(status),
-            Some(format!("http-error:{status}")),
+            Some(http_error_detail(status, &raw, &target.api_key)),
         ));
     }
     let (text, kind) = parse_completion(target.protocol, &raw);
@@ -731,5 +759,55 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error.code, "ai.profile-unavailable");
+    }
+
+    #[test]
+    fn distill_model_backoff_doubles_each_retry() {
+        let base = Duration::from_secs(1);
+        assert_eq!(backoff_delay(base, 0), Duration::from_secs(1));
+        assert_eq!(backoff_delay(base, 1), Duration::from_secs(2));
+        assert_eq!(backoff_delay(base, 2), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn distill_model_gives_up_after_four_attempts() {
+        let (base, captured, server) = spawn_mock(vec![
+            (429, r#"{"error":"slow down"}"#.into());
+            MAX_TRANSIENT_RETRIES + 1
+        ]);
+        let error = run(&target(ModelProtocol::OpenAi, base)).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error.code, "ai.provider-rate-limited");
+        assert_eq!(captured.try_iter().count(), MAX_TRANSIENT_RETRIES + 1);
+    }
+
+    #[test]
+    fn distill_model_quotes_upstream_body_in_5xx_detail() {
+        let body = r#"{"error":{"message":"无可用渠道"}}"#;
+        let (base, captured, server) =
+            spawn_mock(vec![(503, body.into()); MAX_TRANSIENT_RETRIES + 1]);
+        let error = run(&target(ModelProtocol::OpenAi, base)).unwrap_err();
+        server.join().unwrap();
+        assert_eq!(error.code, "ai.provider-unavailable");
+        let detail = error.detail.as_deref().unwrap_or_default();
+        assert!(detail.starts_with("http-error:503"));
+        assert!(detail.contains("无可用渠道"), "detail was: {detail}");
+        assert_eq!(captured.try_iter().count(), MAX_TRANSIENT_RETRIES + 1);
+        assert!(error.user_message().contains("http-error:503"));
+    }
+
+    #[test]
+    fn distill_model_redacts_and_truncates_upstream_body() {
+        let long = format!("echo test-key {}", "x".repeat(500));
+        let (base, _, server) = spawn_mock(vec![(500, long); MAX_TRANSIENT_RETRIES + 1]);
+        let error = run(&target(ModelProtocol::OpenAi, base)).unwrap_err();
+        server.join().unwrap();
+        let detail = error.detail.as_deref().unwrap_or_default();
+        assert!(!detail.contains("test-key"));
+        assert!(detail.contains("[redacted]"), "detail was: {detail}");
+        assert!(
+            detail.chars().count() <= "http-error:500 · ".chars().count() + MAX_DETAIL_CHARS,
+            "detail was not truncated: {detail}"
+        );
     }
 }

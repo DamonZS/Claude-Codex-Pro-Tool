@@ -234,13 +234,19 @@ const WORKFLOW_LINES: &[&str] = &[
     "输出偏向产品和交付视角，不要写成抽象原则。",
 ];
 
+// CCP intentionally diverges from AITracker here: AITracker delivers a
+// placeholder-heavy "Prompt 模板", which reads as an empty skeleton after a long
+// distillation run. CCP asks for a directly usable system prompt whose sections
+// are filled with what the material actually says.
 const PROMPT_LINES: &[&str] = &[
-    "请把当前素材蒸馏成一份高复用 Prompt 模板，输出 Markdown。",
+    "请把当前素材蒸馏成一份可以直接复制使用的系统提示词（System Prompt），输出 Markdown；它要固化素材里真实出现过的工作方式，而不是通用模板。",
     "必须包含以下一级章节：# Prompt Name、## Role、## Goal、## Inputs、## Constraints、## Process、## Error Handling、## Output Format、## Example Invocation。",
-    "Inputs 至少定义 4 个变量，并在正文中全部以 {{变量名}} 形式显式引用。",
-    "Error Handling 必须写出至少 4 条容错规则，覆盖信息缺失、上下文冲突、输出过长、结果不可执行。",
+    "Role / Goal / Constraints / Process 必须写具体内容：角色名称、业务对象、真实约束、真实步骤（含命令、路径、文件、字段名）都要来自素材，禁止写“根据实际情况处理”“按需调整”这类空话。",
+    "Inputs 只列调用方真正需要替换的输入，最多 2 个；每个变量给出默认值与取值来源，并在正文中以 {{变量名}} 引用。素材里已确定的内容直接写死，不要变成占位符。",
+    "Error Handling 必须写出至少 4 条容错规则，覆盖信息缺失、上下文冲突、输出过长、结果不可执行，并且要针对素材里实际出现过的失败。",
     "Output Format 需要给出稳定字段结构，方便后续程序消费。",
-    "整体语气直接、可执行、面向 AI Agent，不要加入解释性废话。",
+    "Example Invocation 要用素材里的真实项目与任务填满，让读者可以直接照抄。",
+    "整体语气直接、可执行、面向 AI Agent，不要加入解释性废话；禁止输出只有章节标题和占位符的空骨架。",
 ];
 
 const PERSONA_LINES: &[&str] = &[
@@ -314,11 +320,11 @@ mod tests {
     #[test]
     fn distill_prompts_match_aitracker_lengths_and_key_sentences() {
         // Character counts computed from AITracker's runtime promptForKind()
-        // output (with the product name substituted).
+        // output (with the product name substituted). `prompt` is intentionally
+        // absent: CCP redefined that out-type (see `distill_prompt_kind_is_usable`).
         for (kind, chars) in [
             ("skill", 3786usize),
             ("brief", 591),
-            ("prompt", 515),
             ("persona", 455),
             ("memory", 410),
         ] {
@@ -334,10 +340,6 @@ mod tests {
         assert!(skill.contains("<file path=\"SKILL.md\">"));
         assert!(skill.ends_with("每个文件 > 10 字节，非空"));
         assert!(prompt_for_kind("brief", "").contains("必须包含以下一级章节：# 概述、## 适用场景、## 输入、## 输出、## 工作流步骤、## 决策分支、## 异常处理、## 验收清单、## 复用提示词。"));
-        assert!(
-            prompt_for_kind("prompt", "")
-                .contains("Inputs 至少定义 4 个变量，并在正文中全部以 {{变量名}} 形式显式引用。")
-        );
         assert!(prompt_for_kind("persona", "").contains("# 用户画像、## 明确事实"));
         assert!(
             prompt_for_kind("memory", "").ends_with(
@@ -350,6 +352,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn distill_prompt_kind_is_usable() {
+        let prompt = prompt_for_kind("prompt", "");
+        // The delivered artifact must be a filled system prompt, not a skeleton.
+        assert!(prompt.contains("可以直接复制使用的系统提示词"));
+        assert!(prompt.contains("禁止输出只有章节标题和占位符的空骨架"));
+        assert!(prompt.contains("# Prompt Name、## Role、## Goal、## Inputs"));
+        assert!(prompt.contains("最多 2 个"));
+        assert!(!prompt.contains("Inputs 至少定义 4 个变量"));
+        assert!(!prompt.contains("高复用 Prompt 模板"));
+    }
+
     fn fnv1a64(value: &str) -> u64 {
         value.bytes().fold(0xcbf29ce484222325u64, |hash, byte| {
             (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
@@ -359,11 +373,11 @@ mod tests {
     #[test]
     fn distill_prompts_are_byte_identical_to_aitracker() {
         // FNV-1a 64 of AITracker's runtime promptForKind(kind) UTF-8 bytes,
-        // after the single product-name substitution.
+        // after the single product-name substitution. `prompt` is intentionally
+        // absent: CCP redefined that out-type to deliver a usable prompt.
         for (kind, hash) in [
             ("skill", 0xb0b4c080c467b5b1u64),
             ("brief", 0x369a77cf0811519b),
-            ("prompt", 0x7d17af93c6465212),
             ("persona", 0x35e4c133c2310c23),
             ("memory", 0x13efb93114ddc884),
         ] {

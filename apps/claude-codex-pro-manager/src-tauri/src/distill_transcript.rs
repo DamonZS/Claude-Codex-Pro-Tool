@@ -54,11 +54,14 @@ pub fn claude_continuation_chains(
 
 /// Usage-snapshot sessions with Claude continuation chains folded into one row
 /// each. Workbench and pipeline both call this so a chain's representative id
-/// is the same on both sides.
-pub fn merged_sessions(
+/// is the same on both sides. `inventory` is the Claude inventory the caller
+/// already loaded: both callers also need it for session titles, and scanning
+/// the Claude session files twice was the bulk of the workbench load time.
+pub fn merged_sessions_with_inventory(
     summaries: &[claude_codex_pro_data::aitracker::AgentSessionSummary],
+    inventory: Option<&claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory>,
 ) -> Vec<claude_codex_pro_data::aitracker::MergedSession> {
-    let chains: Vec<Vec<String>> = claude_codex_pro_core::claude_sessions::list_claude_sessions()
+    let chains: Vec<Vec<String>> = inventory
         .map(|inventory| claude_continuation_chains(&inventory.sessions))
         .unwrap_or_default()
         .into_iter()

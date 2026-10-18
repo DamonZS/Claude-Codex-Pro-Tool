@@ -1182,6 +1182,35 @@ fn sqlite_timestamp(value: i64) -> String {
 }
 
 /// Reads only WorkBuddy's session index; message bodies and settings stay untouched.
+/// WorkBuddy's own session names, keyed by the raw session id. The usage
+/// snapshot carries no titles, so the workbench would otherwise label every
+/// WorkBuddy row with its project name.
+pub fn workbuddy_session_titles(home: &Path) -> Vec<(String, String)> {
+    let path = home.join(".workbuddy").join("workbuddy.db");
+    let Ok(connection) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return Vec::new();
+    };
+    let Ok(mut statement) = connection.prepare(
+        "SELECT id, custom_title, title FROM sessions WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ?1",
+    ) else {
+        return Vec::new();
+    };
+    let Ok(rows) = statement.query_map([MAX_SQLITE_ROWS as i64], |row| {
+        let id: String = row.get(0)?;
+        let custom: Option<String> = row.get(1).ok();
+        let title: Option<String> = row.get(2).ok();
+        let title = custom
+            .filter(|value| !value.trim().is_empty())
+            .or(title)
+            .unwrap_or_default();
+        Ok((id, title))
+    }) else {
+        return Vec::new();
+    };
+    rows.filter_map(Result::ok).collect()
+}
+
 pub fn collect_workbuddy_sessions(home: &Path) -> Vec<LocalUsageSession> {
     let path = home.join(".workbuddy").join("workbuddy.db");
     let Ok(connection) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)

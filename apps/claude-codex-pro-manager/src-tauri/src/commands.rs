@@ -7138,6 +7138,7 @@ pub async fn read_aitracker_capabilities() -> CommandResult<AitrackerCapabilitie
             &mut snapshot.registry,
             user_home,
         );
+        apply_session_titles(&mut snapshot.sessions, &current_session_titles());
         ok(
             "能力数据已加载。",
             AitrackerCapabilitiesPayload { snapshot, usage },
@@ -7379,26 +7380,60 @@ fn empty_distillation_workbench() -> DistillationWorkbenchPayload {
     }
 }
 
+/// Workbench titles must be readable. Codex stores some thread titles as
+/// `codex://threads/<uuid>…`, a session without a real title falls back to its
+/// timestamp, and many Codex titles are the whole first message. The first two
+/// are dropped so the row uses the project name; the rest is folded to one line
+/// and cut to a row-sized length.
+const SESSION_TITLE_MAX_CHARS: usize = 48;
+
+fn clean_session_title(raw: &str) -> Option<String> {
+    let title = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.is_empty() || title.contains("://") || looks_like_session_timestamp(&title) {
+        return None;
+    }
+    if title.chars().count() <= SESSION_TITLE_MAX_CHARS {
+        return Some(title);
+    }
+    let mut shortened: String = title.chars().take(SESSION_TITLE_MAX_CHARS).collect();
+    shortened.push('…');
+    Some(shortened)
+}
+
+/// `2026-10-18-18-19-23`, `2026-10-18 18:19:23`, `2026/10/18 18:19`.
+fn looks_like_session_timestamp(title: &str) -> bool {
+    let mut digits = 0;
+    for ch in title.chars() {
+        if ch.is_ascii_digit() {
+            digits += 1;
+        } else if !matches!(ch, '-' | ':' | '/' | ' ' | '.') {
+            return false;
+        }
+    }
+    digits >= 10
+}
+
 /// Real session titles keyed by `agent:private-session-id`, the same key the
 /// usage snapshot uses. Usage events carry no title, so without this every
 /// session in the workbench is labelled with its project name.
-fn distillation_session_titles() -> BTreeMap<String, String> {
+fn distillation_session_titles(
+    inventory: Option<&claude_codex_pro_core::claude_sessions::ClaudeSessionsInventory>,
+) -> BTreeMap<String, String> {
     let mut titles = BTreeMap::new();
-    let mut insert = |agent: &str, raw_id: &str, title: &str| {
-        let title = title.trim();
-        if title.is_empty() {
+    let mut insert = |agent: &str, raw_id: &str, raw: &str| {
+        let Some(title) = clean_session_title(raw) else {
             return;
-        }
+        };
         if let Some(private_id) = claude_codex_pro_data::local_usage::session_id_from_structured(
             agent,
             Some(&Value::String(raw_id.to_string())),
         ) {
             titles
                 .entry(format!("{agent}:{private_id}"))
-                .or_insert_with(|| title.to_string());
+                .or_insert(title);
         }
     };
-    if let Ok(inventory) = claude_codex_pro_core::claude_sessions::list_claude_sessions() {
+    if let Some(inventory) = inventory {
         for session in &inventory.sessions {
             insert("claude-code", &session.id, &session.title);
         }
@@ -7406,53 +7441,190 @@ fn distillation_session_titles() -> BTreeMap<String, String> {
     for db_path in session_candidate_db_paths(None) {
         if let Ok(sessions) = local_session_adapter(&db_path).list_local_sessions() {
             for session in &sessions {
+                // Codex's own sidebar shows the short `name`; `title` is the
+                // whole first message. `or_insert` keeps the first usable one.
+                insert("codex", &session.id, &session.name);
                 insert("codex", &session.id, &session.title);
             }
         }
     }
+    // WorkBuddy keeps its short session names in its own SQLite database.
+    let user_home = claude_code_home_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    for (raw_id, title) in claude_codex_pro_data::local_usage::workbuddy_session_titles(&user_home)
+    {
+        insert("workbuddy", &raw_id, &title);
+    }
     titles
+}
+
+/// Titles for every listed session, cached: the 会话 page paginates and must
+/// not rescan the Claude inventory on every page. The workbench builds its own
+/// titles from the inventory it already needs for continuation chains.
+const SESSION_TITLES_TTL: Duration = Duration::from_secs(600);
+
+fn current_session_titles() -> BTreeMap<String, String> {
+    static CACHE: OnceLock<Mutex<Option<(Instant, BTreeMap<String, String>)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut slot = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((scanned_at, titles)) = slot.as_ref()
+        && scanned_at.elapsed() < SESSION_TITLES_TTL
+    {
+        return titles.clone();
+    }
+    let inventory = claude_codex_pro_core::claude_sessions::list_claude_sessions().ok();
+    let titles = distillation_session_titles(inventory.as_ref());
+    *slot = Some((Instant::now(), titles.clone()));
+    titles
+}
+
+/// Copies the human session names onto the rows the 会话 page renders.
+fn apply_session_titles(
+    sessions: &mut [claude_codex_pro_data::aitracker::AgentSessionSummary],
+    titles: &BTreeMap<String, String>,
+) {
+    for session in sessions {
+        if let Some(title) = titles.get(&format!("{}:{}", session.agent, session.session_id)) {
+            session.title = title.clone();
+        }
+    }
+}
+
+/// The workbench session list scans every distillable agent's usage store plus
+/// the Claude session inventory. It changes slowly, so cache it; providers and
+/// candidates stay live because they are cheap and must reflect edits. A cold
+/// scan reads several GB of session files, so the cache is long enough to keep
+/// page navigation instant.
+const WORKBENCH_SESSIONS_TTL: Duration = Duration::from_secs(600);
+/// Upper bound for one workbench payload; the list is rendered in one scroll.
+const MAX_WORKBENCH_SESSIONS: usize = 300;
+
+type WorkbenchSessionData = (
+    Vec<DistillationWorkbenchSession>,
+    Vec<DistillationSkillAgent>,
+);
+
+fn workbench_session_data() -> WorkbenchSessionData {
+    static CACHE: OnceLock<Mutex<Option<(Instant, WorkbenchSessionData)>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut slot = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((scanned_at, value)) = slot.as_ref()
+        && scanned_at.elapsed() < WORKBENCH_SESSIONS_TTL
+    {
+        return value.clone();
+    }
+    let value = scan_workbench_session_data();
+    *slot = Some((Instant::now(), value.clone()));
+    value
+}
+
+/// Agents whose transcripts the distillation pipeline can actually read. The
+/// workbench lists only these; scanning the other agents' stores was most of
+/// its load time and produced rows that cannot be distilled.
+const DISTILLABLE_AGENTS: &[&str] = &["codex", "claude-code", "workbuddy", "cursor", "openclaw"];
+
+/// Usage snapshot for the workbench. The request history already covers Codex
+/// and Claude, so their generic adapters are skipped instead of reading the
+/// same multi-GB session files a second time.
+fn scan_workbench_usage() -> claude_codex_pro_data::local_usage::LocalUsageSnapshot {
+    let user_home = claude_code_home_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let (records, _) = claude_codex_pro_data::request_history::read_recent_local_requests(
+        &session_candidate_db_paths(None),
+        &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
+        4_096,
+    );
+    let mut events = records
+        .iter()
+        .map(claude_codex_pro_data::local_usage::event_from_request_record)
+        .collect::<Vec<_>>();
+    for adapter in claude_codex_pro_data::local_usage::builtin_adapters(&user_home) {
+        if !DISTILLABLE_AGENTS.contains(&adapter.source.as_str())
+            || matches!(adapter.source.as_str(), "codex" | "claude-code")
+        {
+            continue;
+        }
+        let (found, _) = claude_codex_pro_data::local_usage::scan_adapter(
+            &adapter,
+            claude_codex_pro_data::local_usage::MAX_EVENTS,
+        );
+        events.extend(found);
+    }
+    let mut usage = claude_codex_pro_data::local_usage::aggregate(events, Vec::new());
+    usage.sessions = claude_codex_pro_data::local_usage::collect_workbuddy_sessions(&user_home);
+    usage
+}
+
+fn scan_workbench_session_data() -> WorkbenchSessionData {
+    let usage = scan_workbench_usage();
+    let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+    // Loaded once and shared by the title map and the continuation merge.
+    let inventory = claude_codex_pro_core::claude_sessions::list_claude_sessions().ok();
+    let session_titles = distillation_session_titles(inventory.as_ref());
+    // Fold continued conversations into one row before taking the newest rows.
+    let mut session_rows =
+        distill_transcript::merged_sessions_with_inventory(&snapshot.sessions, inventory.as_ref());
+    session_rows.sort_by(|left, right| right.summary.ended_at.cmp(&left.summary.ended_at));
+    let sessions = session_rows
+        .into_iter()
+        .take(MAX_WORKBENCH_SESSIONS)
+        .map(|merged| {
+            let session = merged.summary;
+            DistillationWorkbenchSession {
+                agent: session.agent.clone(),
+                session_id: session.session_id.clone(),
+                title: session_titles
+                    .get(&format!("{}:{}", session.agent, session.session_id))
+                    .cloned()
+                    .unwrap_or_else(|| session.project.clone()),
+                project: session.project.clone(),
+                project_key: session.project.clone(),
+                is_git_project: session.project != "unknown",
+                model: session.model.clone(),
+                started_at: session.started_at.clone(),
+                updated_at: session.ended_at.clone(),
+                events: session.events,
+                turns: session.events,
+                status: if session.status.trim().is_empty() {
+                    "completed".into()
+                } else {
+                    session.status.clone()
+                },
+                tokens: session.totals.total_tokens,
+                segments: merged.segments,
+            }
+        })
+        .collect();
+    let skill_agents = unified_inventory_roots()
+        .agent_skill_roots
+        .into_iter()
+        .filter_map(|(id, roots)| {
+            let root = roots.into_iter().next()?;
+            Some(DistillationSkillAgent {
+                label: distillation_agent_label(&id, &snapshot.registry),
+                id,
+                root: root.display().to_string(),
+            })
+        })
+        .collect();
+    (sessions, skill_agents)
 }
 
 #[tauri::command]
 pub async fn load_distillation_workbench() -> CommandResult<DistillationWorkbenchPayload> {
     tauri::async_runtime::spawn_blocking(|| {
-        let (_, _, usage) = collect_unified_usage_snapshot();
-        let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
-        let session_titles = distillation_session_titles();
+        let (sessions, skill_agents) = workbench_session_data();
         let settings = SettingsStore::default().load().unwrap_or_default();
-        // Fold continued conversations into one row before taking the newest 100.
-        let mut session_rows = distill_transcript::merged_sessions(&snapshot.sessions);
-        session_rows.sort_by(|left, right| right.summary.ended_at.cmp(&left.summary.ended_at));
-        let sessions = session_rows
-            .into_iter()
-            .take(100)
-            .map(|merged| {
-                let session = merged.summary;
-                DistillationWorkbenchSession {
-                    agent: session.agent.clone(),
-                    session_id: session.session_id.clone(),
-                    title: session_titles
-                        .get(&format!("{}:{}", session.agent, session.session_id))
-                        .cloned()
-                        .unwrap_or_else(|| session.project.clone()),
-                    project: session.project.clone(),
-                    project_key: session.project.clone(),
-                    is_git_project: session.project != "unknown",
-                    model: session.model.clone(),
-                    started_at: session.started_at.clone(),
-                    updated_at: session.ended_at.clone(),
-                    events: session.events,
-                    turns: session.events,
-                    status: if session.status.trim().is_empty() {
-                        "completed".into()
-                    } else {
-                        session.status.clone()
-                    },
-                    tokens: session.totals.total_tokens,
-                    segments: merged.segments,
-                }
-            })
-            .collect();
         let active_id = settings.active_relay_profile().id;
         let mut providers = settings
             .relay_profiles
@@ -7483,18 +7655,6 @@ pub async fn load_distillation_workbench() -> CommandResult<DistillationWorkbenc
             .collect::<Vec<_>>();
         // Active profile first (stable sort keeps the configured order otherwise).
         providers.sort_by_key(|provider| !provider.active);
-        let skill_agents = unified_inventory_roots()
-            .agent_skill_roots
-            .into_iter()
-            .filter_map(|(id, roots)| {
-                let root = roots.into_iter().next()?;
-                Some(DistillationSkillAgent {
-                    label: distillation_agent_label(&id, &snapshot.registry),
-                    id,
-                    root: root.display().to_string(),
-                })
-            })
-            .collect();
         ok(
             "蒸馏工作台已加载。",
             DistillationWorkbenchPayload {
@@ -7769,7 +7929,7 @@ pub async fn query_aitracker_sessions(
 ) -> CommandResult<AitrackerSessionsPayload> {
     tauri::async_runtime::spawn_blocking(move || {
         let (_, _, usage) = collect_unified_usage_snapshot();
-        let (sessions, total) = claude_codex_pro_data::aitracker::query_sessions(
+        let (mut sessions, total) = claude_codex_pro_data::aitracker::query_sessions(
             &usage,
             request.agent.as_deref(),
             request.status.as_deref(),
@@ -7778,6 +7938,7 @@ pub async fn query_aitracker_sessions(
             request.page,
             request.page_size,
         );
+        apply_session_titles(&mut sessions, &current_session_titles());
         ok(
             "会话已加载。",
             AitrackerSessionsPayload {
@@ -12454,6 +12615,61 @@ mod tests {
     }
 
     #[test]
+    fn workbench_titles_drop_urls_and_timestamps() {
+        assert_eq!(
+            clean_session_title("  请独立实现一个阶段：编辑名片页  "),
+            Some("请独立实现一个阶段：编辑名片页".to_string())
+        );
+        assert_eq!(
+            clean_session_title("codex://threads/01a13d0f-3438-7bf1-a57e-d9cdd9260908继续任务"),
+            None
+        );
+        for stamp in [
+            "2026-10-18-18-19-23",
+            "2026-10-18 18:19:23",
+            "2026/10/18 18:19",
+        ] {
+            assert_eq!(clean_session_title(stamp), None, "{stamp}");
+        }
+        assert_eq!(clean_session_title("   "), None);
+        assert_eq!(
+            clean_session_title("Bug fix 2026-10-18"),
+            Some("Bug fix 2026-10-18".into())
+        );
+        // Long first-message titles are folded to one line and cut to row size.
+        assert_eq!(clean_session_title("  a\n  b\tc "), Some("a b c".into()));
+        let long = "很长".repeat(60);
+        let shortened = clean_session_title(&long).unwrap();
+        assert!(shortened.ends_with('…'));
+        assert_eq!(shortened.chars().count(), SESSION_TITLE_MAX_CHARS + 1);
+    }
+
+    #[test]
+    fn session_titles_are_applied_from_the_map() {
+        let mut sessions = vec![claude_codex_pro_data::aitracker::AgentSessionSummary {
+            session_id: "session-1".into(),
+            agent: "codex".into(),
+            provider: String::new(),
+            model: String::new(),
+            project: "Repo".into(),
+            title: String::new(),
+            started_at: String::new(),
+            ended_at: String::new(),
+            events: 0,
+            tool_calls: 0,
+            status: String::new(),
+            totals: Default::default(),
+        }];
+        let mut titles = BTreeMap::new();
+        titles.insert(
+            "codex:session-1".to_string(),
+            "继续指定会话任务".to_string(),
+        );
+        apply_session_titles(&mut sessions, &titles);
+        assert_eq!(sessions[0].title, "继续指定会话任务");
+    }
+
+    #[test]
     fn distillation_library_and_transcript_reject_invalid_input() {
         let result =
             tauri::async_runtime::block_on(open_distillation_library(DistillationLibraryRequest {
@@ -12487,6 +12703,7 @@ mod tests {
                 provider: String::new(),
                 model: String::new(),
                 project: String::new(),
+                title: String::new(),
                 started_at: String::new(),
                 ended_at: String::new(),
                 events: 0,

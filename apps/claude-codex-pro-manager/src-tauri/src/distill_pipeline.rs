@@ -181,7 +181,10 @@ fn load_material(
     // Continued conversations are one row in the workbench; its representative
     // id must resolve here too. Non-representative members keep resolving via
     // `raw` above, and reading any member reads the whole chain.
-    for merged in super::distill_transcript::merged_sessions(&raw) {
+    let inventory = claude_codex_pro_core::claude_sessions::list_claude_sessions().ok();
+    for merged in
+        super::distill_transcript::merged_sessions_with_inventory(&raw, inventory.as_ref())
+    {
         summaries.insert(
             (
                 merged.summary.agent.clone(),
@@ -190,7 +193,7 @@ fn load_material(
             merged.summary,
         );
     }
-    let titles = super::distillation_session_titles();
+    let titles = super::distillation_session_titles(inventory.as_ref());
     let mut loaded = LoadedMaterial {
         rows: Vec::new(),
         materials: Vec::new(),

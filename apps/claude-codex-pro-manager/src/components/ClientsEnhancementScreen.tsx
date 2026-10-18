@@ -423,6 +423,21 @@ function DistillationWorkbench({ actions, data }: { actions: AppActions; data: D
     </div>
   );
 
+  // The first workbench load scans every local agent's session store, which can
+  // take a while on machines with a large history; show that instead of an
+  // empty材料列表 that looks like "nothing was collected".
+  if (!data) {
+    return (
+      <section aria-label="蒸馏工作台" className="dw-root distillation-workbench">
+        <div className="dw-glass dw-viewbar">
+          <span className="dw-viewbar-hint">
+            <LoaderCircle aria-hidden="true" className="spin" /> 正在扫描本机会话…
+          </span>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section aria-label="蒸馏工作台" className="dw-root distillation-workbench">
       {view === "config" ? (
