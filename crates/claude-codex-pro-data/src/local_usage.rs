@@ -961,6 +961,31 @@ fn scan_jsonl_file(
     events: &mut Vec<LocalUsageEvent>,
     diagnostics: &mut Vec<LocalUsageDiagnostic>,
 ) {
+    if let Some((cached_events, cached_diagnostics)) =
+        crate::file_cache::cached::<(Vec<LocalUsageEvent>, Vec<LocalUsageDiagnostic>)>(path)
+    {
+        events.extend(cached_events);
+        diagnostics.extend(cached_diagnostics);
+        return;
+    }
+    let event_start = events.len();
+    let diagnostic_start = diagnostics.len();
+    scan_jsonl_file_inner(path, adapter, events, diagnostics);
+    crate::file_cache::store(
+        path,
+        &(
+            events[event_start..].to_vec(),
+            diagnostics[diagnostic_start..].to_vec(),
+        ),
+    );
+}
+
+fn scan_jsonl_file_inner(
+    path: &Path,
+    adapter: &UsageAdapter,
+    events: &mut Vec<LocalUsageEvent>,
+    diagnostics: &mut Vec<LocalUsageDiagnostic>,
+) {
     let file = fs::File::open(path).and_then(|file| Ok((file.metadata()?.len(), file)));
     let (len, file) = match file {
         Ok(value) => value,

@@ -36,6 +36,10 @@ pub fn run() {
                 .inner_size(1180.0, 820.0)
                 .min_inner_size(960.0, 640.0)
                 .build()?;
+            // Warm the persisted session snapshots while the user is still on
+            // the overview page, so 会话 / 蒸馏工作台 open without waiting for
+            // the multi-GB rescan.
+            commands::warm_snapshots_in_background();
             match setup_tray(app) {
                 Ok(()) => TRAY_AVAILABLE.store(true, Ordering::Relaxed),
                 Err(error) => {
@@ -211,6 +215,10 @@ pub fn run() {
             commands::update_distillation_candidate,
             commands::cancel_distillation_candidate,
             commands::load_distillation_workbench,
+            commands::load_memory_library,
+            commands::save_memory_library_entry,
+            commands::delete_memory_library_entries,
+            commands::export_memory_library_entry,
             commands::load_app_preferences,
             commands::save_app_preferences,
             commands::load_routing_config,

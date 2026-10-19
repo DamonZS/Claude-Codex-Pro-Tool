@@ -6,6 +6,8 @@ use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime};
 
 const MAX_DATABASES: usize = 32;
@@ -14,6 +16,10 @@ const MAX_RECORDS: usize = 4_096;
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_ENTRIES: usize = 30_000;
 const MAX_DEPTH: usize = 32;
+/// Candidate file lists (rollouts/Claude transcripts) are reused this long.
+const PATH_LIST_TTL: Duration = Duration::from_secs(30);
+/// Upper bound for concurrent per-file parsing.
+const MAX_PARALLEL_FILES: usize = 8;
 const COVERAGE: &str = "本地用量按 AITracker 方式扫描最近 10 年内最多 32 个数据库、1200 个 Codex/Claude JSONL 文件和 30000 个目录条目；单文件最多 256 MiB，最多返回 4096 条规范化记录。HTTP 状态、协议、耗时及流式状态仅来自 CCP 代理记录；本地会话缺失字段保持未知。";
 const TRUNCATED: &str = "已达到文件、目录或记录读取上限，仅展示覆盖范围内的近期用量。";
 const READ_ERROR: &str = "部分本地用量来源读取失败，已跳过。";
@@ -158,19 +164,92 @@ pub fn read_recent_local_requests(
         return (Vec::new(), warnings);
     }
     let mut records = Vec::new();
-    for path in recent_rollouts(db_paths, &mut warnings) {
-        read_codex(&path, &mut records, &mut warnings);
-        trim_records(&mut records, MAX_RECORDS, &mut warnings);
-    }
-    for path in recent_claude_files(claude_projects, &mut warnings) {
-        read_claude(&path, &mut records, &mut warnings);
-        trim_records(&mut records, MAX_RECORDS, &mut warnings);
-    }
+    let rollout_paths = recent_rollouts(db_paths, &mut warnings);
+    merge_scanned_files(
+        &mut records,
+        &mut warnings,
+        scan_files_in_parallel(&rollout_paths, read_codex),
+    );
+    let claude_paths = recent_claude_files(claude_projects, &mut warnings);
+    merge_scanned_files(
+        &mut records,
+        &mut warnings,
+        scan_files_in_parallel(&claude_paths, read_claude),
+    );
     trim_records(&mut records, limit, &mut warnings);
     for item in &mut records {
         normalize_local_usage(item);
     }
     (records, warnings)
+}
+
+/// Parse files concurrently while preserving the serial merge semantics.
+///
+/// Workers claim indexes off a shared counter, but the per-file results are
+/// stored by index and merged by the caller in original file order, so the
+/// output is independent of thread scheduling.
+fn scan_files_in_parallel(
+    paths: &[PathBuf],
+    read: fn(&Path, &mut Vec<RequestRecord>, &mut Vec<String>),
+) -> Vec<(Vec<RequestRecord>, Vec<String>)> {
+    let workers = MAX_PARALLEL_FILES.min(paths.len());
+    if workers <= 1 {
+        return paths
+            .iter()
+            .map(|path| {
+                let mut records = Vec::new();
+                let mut warnings = Vec::new();
+                read(path, &mut records, &mut warnings);
+                (records, warnings)
+            })
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let slots: Vec<Mutex<Option<(Vec<RequestRecord>, Vec<String>)>>> =
+        (0..paths.len()).map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        let next = &next;
+        let slots = &slots;
+        for _ in 0..workers {
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(path) = paths.get(index) else {
+                        break;
+                    };
+                    let mut records = Vec::new();
+                    let mut warnings = Vec::new();
+                    read(path, &mut records, &mut warnings);
+                    let mut slot = match slots[index].lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    *slot = Some((records, warnings));
+                }
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|slot| match slot.into_inner() {
+            Ok(scan) => scan.unwrap_or_default(),
+            Err(poisoned) => poisoned.into_inner().unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn merge_scanned_files(
+    records: &mut Vec<RequestRecord>,
+    warnings: &mut Vec<String>,
+    scanned: Vec<(Vec<RequestRecord>, Vec<String>)>,
+) {
+    for (found, found_warnings) in scanned {
+        records.extend(found);
+        for warning in found_warnings {
+            warn(warnings, &warning);
+        }
+        trim_records(records, MAX_RECORDS, warnings);
+    }
 }
 
 pub(crate) fn read_native_usage_file(
@@ -246,10 +325,64 @@ fn merge_snapshot(previous: &mut RequestRecord, item: RequestRecord) {
     }
 }
 
+/// Listing warnings are cached next to a path list so a TTL hit replays the
+/// same static diagnostics instead of silently dropping them.
+static PATH_LIST_WARNINGS: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+
+fn path_list_warnings() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    PATH_LIST_WARNINGS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cached_path_list_with_warnings(
+    key: String,
+    warnings: &mut Vec<String>,
+    build: impl FnOnce() -> (Vec<PathBuf>, Vec<String>),
+) -> Vec<PathBuf> {
+    let built = std::cell::Cell::new(false);
+    let built_warnings = std::cell::RefCell::new(Vec::new());
+    let paths = crate::file_cache::cached_path_list(&key, PATH_LIST_TTL, || {
+        let (paths, found) = build();
+        built.set(true);
+        *built_warnings.borrow_mut() = found;
+        paths
+    });
+    let found = if built.get() {
+        let found = built_warnings.into_inner();
+        let mut cache = match path_list_warnings().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        cache.insert(key, found.clone());
+        found
+    } else {
+        match path_list_warnings().lock() {
+            Ok(cache) => cache.get(&key).cloned().unwrap_or_default(),
+            Err(poisoned) => poisoned.into_inner().get(&key).cloned().unwrap_or_default(),
+        }
+    };
+    for warning in found {
+        warn(warnings, &warning);
+    }
+    paths
+}
+
 fn recent_rollouts(paths: &[PathBuf], warnings: &mut Vec<String>) -> Vec<PathBuf> {
+    let key = format!(
+        "request-history:rollouts:{}",
+        paths
+            .iter()
+            .map(|path| path.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\u{1f}")
+    );
+    cached_path_list_with_warnings(key, warnings, || collect_rollout_paths(paths))
+}
+
+fn collect_rollout_paths(paths: &[PathBuf]) -> (Vec<PathBuf>, Vec<String>) {
+    let mut warnings = Vec::new();
     let mut candidates = Vec::new();
     if paths.len() > MAX_DATABASES {
-        warn(warnings, TRUNCATED);
+        warn(&mut warnings, TRUNCATED);
     }
     for path in paths.iter().take(MAX_DATABASES) {
         let result = (|| -> rusqlite::Result<Vec<(i64, PathBuf)>> {
@@ -283,26 +416,39 @@ fn recent_rollouts(paths: &[PathBuf], warnings: &mut Vec<String>) -> Vec<PathBuf
         })();
         match result {
             Ok(rows) => candidates.extend(rows),
-            Err(_) => warn(warnings, READ_ERROR),
+            Err(_) => warn(&mut warnings, READ_ERROR),
         }
     }
     candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     let mut seen = HashSet::new();
     candidates.retain(|(_, path)| seen.insert(path.clone()));
     if candidates.len() > MAX_FILES {
-        warn(warnings, TRUNCATED);
+        warn(&mut warnings, TRUNCATED);
     }
-    candidates
-        .into_iter()
-        .take(MAX_FILES)
-        .map(|(_, p)| p)
-        .collect()
+    (
+        candidates
+            .into_iter()
+            .take(MAX_FILES)
+            .map(|(_, p)| p)
+            .collect(),
+        warnings,
+    )
 }
 
 fn recent_claude_files(root: &Path, warnings: &mut Vec<String>) -> Vec<PathBuf> {
     if !root.exists() {
         return Vec::new();
     }
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let key = format!(
+        "request-history:claude:{}",
+        canonical_root.to_string_lossy()
+    );
+    cached_path_list_with_warnings(key, warnings, || collect_claude_files(root))
+}
+
+fn collect_claude_files(root: &Path) -> (Vec<PathBuf>, Vec<String>) {
+    let mut warnings = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0)];
     let mut files = Vec::new();
     let mut count = 0;
@@ -310,28 +456,28 @@ fn recent_claude_files(root: &Path, warnings: &mut Vec<String>) -> Vec<PathBuf> 
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(_) => {
-                warn(warnings, READ_ERROR);
+                warn(&mut warnings, READ_ERROR);
                 continue;
             }
         };
         for entry in entries {
             count += 1;
             if count > MAX_ENTRIES {
-                warn(warnings, TRUNCATED);
+                warn(&mut warnings, TRUNCATED);
                 pending.clear();
                 break;
             }
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => {
-                    warn(warnings, READ_ERROR);
+                    warn(&mut warnings, READ_ERROR);
                     continue;
                 }
             };
             let kind = match entry.file_type() {
                 Ok(kind) => kind,
                 Err(_) => {
-                    warn(warnings, READ_ERROR);
+                    warn(&mut warnings, READ_ERROR);
                     continue;
                 }
             };
@@ -339,21 +485,24 @@ fn recent_claude_files(root: &Path, warnings: &mut Vec<String>) -> Vec<PathBuf> 
                 if depth < MAX_DEPTH {
                     pending.push((entry.path(), depth + 1));
                 } else {
-                    warn(warnings, TRUNCATED);
+                    warn(&mut warnings, TRUNCATED);
                 }
             } else if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "jsonl") {
                 match entry.metadata().and_then(|meta| meta.modified()) {
                     Ok(time) => files.push((time, entry.path())),
-                    Err(_) => warn(warnings, READ_ERROR),
+                    Err(_) => warn(&mut warnings, READ_ERROR),
                 }
             }
         }
     }
     files.sort_by(|a: &(SystemTime, PathBuf), b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     if files.len() > MAX_FILES {
-        warn(warnings, TRUNCATED);
+        warn(&mut warnings, TRUNCATED);
     }
-    files.into_iter().take(MAX_FILES).map(|(_, p)| p).collect()
+    (
+        files.into_iter().take(MAX_FILES).map(|(_, p)| p).collect(),
+        warnings,
+    )
 }
 
 fn lines<'a>(
@@ -521,6 +670,26 @@ fn record(id: String, time: u64, source: &str, agent: &str, usage: &Usage) -> Re
 }
 
 fn read_codex(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {
+    if let Some((cached, cached_warnings)) =
+        crate::file_cache::cached::<(Vec<RequestRecord>, Vec<String>)>(path)
+    {
+        records.extend(cached);
+        warnings.extend(cached_warnings);
+        return;
+    }
+    let record_start = records.len();
+    let warning_start = warnings.len();
+    read_codex_inner(path, records, warnings);
+    crate::file_cache::store(
+        path,
+        &(
+            records[record_start..].to_vec(),
+            warnings[warning_start..].to_vec(),
+        ),
+    );
+}
+
+fn read_codex_inner(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {
     let mut provider = None;
     let mut session_id = None;
     let mut project = None;
@@ -628,6 +797,26 @@ fn rollout_session_id(path: &Path) -> Option<String> {
 }
 
 fn read_claude(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {
+    if let Some((cached, cached_warnings)) =
+        crate::file_cache::cached::<(Vec<RequestRecord>, Vec<String>)>(path)
+    {
+        records.extend(cached);
+        warnings.extend(cached_warnings);
+        return;
+    }
+    let record_start = records.len();
+    let warning_start = warnings.len();
+    read_claude_inner(path, records, warnings);
+    crate::file_cache::store(
+        path,
+        &(
+            records[record_start..].to_vec(),
+            warnings[warning_start..].to_vec(),
+        ),
+    );
+}
+
+fn read_claude_inner(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {
     let Some(lines) = lines(path, warnings) else {
         return;
     };

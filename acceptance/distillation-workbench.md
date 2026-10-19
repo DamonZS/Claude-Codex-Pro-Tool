@@ -17,7 +17,7 @@
 - [ ] 实机确认（需用户执行，无法在本机自动验证）：重新构建并重启 CCP 后，「按会话」里同一对话只占一行并显示「· N 段续接」；对该会话一键蒸馏，产物内容来自真实对话而不是只有项目名；用较小 `contextWindow` 的供应商蒸馏超长会话时，任务详情显示「已处理 x / n 批」。未在本机对真实供应商发起过蒸馏调用。
 - [ ] 项目口径（规格 14）：`cargo test -p claude-codex-pro-data --lib local_usage` 通过，覆盖存活 worktree、已删除 worktree、仓库也不存在三种情况都归并到主仓库名。
 - [ ] 标题口径（规格 14）：实机打开蒸馏工作台，「按会话」每行标题是真实会话标题而不是重复的项目名，「按项目」只出现项目文件夹名（无 `xxx-29f861` 这类 worktree 随机名）；Codex 会话优先显示 `threads.name`（Codex 侧边栏的短名，如「继续指定会话任务」），取不到才退回清洗后的 `threads.title`；超长标题只显示一行并以 `…` 收尾，**会话列表下方不出现横向滚动条**。`cargo test -p claude-codex-pro-manager --lib workbench_titles` 通过，覆盖：URL 标题（`codex://threads/…`）与纯时间戳标题被丢弃、超长标题折叠空白并截断到 48 字符、正常中文标题保留、空白标题丢弃。实机部分需用户确认。
-- [ ] 加载与刷新（规格 17）：`load_distillation_workbench` 只列可蒸馏 Agent（Codex / Claude / WorkBuddy / Cursor / OpenClaw），Codex 与 Claude 复用请求历史、不重复读同一批会话文件；单次调用只扫描一次 Claude 会话清单（标题与续接链共用）；会话扫描结果缓存 10 分钟，供应商与候选实时读取。验证方式：连续两次加载，第二次应在 1 秒内返回且往返页面不再等待重扫；蒸馏完成后重新加载历史，新候选立即出现。该验证需用户实机执行。
+- [ ] 加载与刷新（规格 17）：`load_distillation_workbench` 只列可蒸馏 Agent（Codex / Claude / WorkBuddy / Cursor / OpenClaw），Codex 与 Claude 复用请求历史、不重复读同一批会话文件；单次调用只扫描一次 Claude 会话清单（标题与续接链共用）；会话列表读取持久化快照（缺失时同步扫描一次），过期后后台刷新，供应商与候选实时读取（规格 17、spec/session-snapshot-cache.md）。验证方式：连续两次加载，第二次应在 1 秒内返回且往返页面不再等待重扫；蒸馏完成后重新加载历史，新候选立即出现。该验证需用户实机执行。
 
 ## 必需证据
 - `npm --prefix apps/claude-codex-pro-manager run check`、`run vite:build` 输出。

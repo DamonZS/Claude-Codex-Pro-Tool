@@ -1371,6 +1371,26 @@ export type DistillationRunResult = CommandResult<{
   segmentCount?: number;
 }>;
 
+export type MemoryLibraryEntry = {
+  id: string;
+  kind: "persona" | "memory";
+  title: string;
+  body: string;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MemoryLibraryCounts = { total: number; persona: number; memory: number };
+
+export type MemoryLibraryResult = CommandResult<{
+  entries: MemoryLibraryEntry[];
+  counts: MemoryLibraryCounts;
+  updatedAt: string;
+}>;
+
+export type MemoryExportResult = CommandResult<{ path: string }>;
+
 export type LogsResult = CommandResult<{
   path: string;
   text: string;
@@ -1425,6 +1445,7 @@ export type Route =
   | "overview"
   | "supplier"
   | "clients"
+  | "memory"
   | "themes"
   | "prompts"
   | "tools"

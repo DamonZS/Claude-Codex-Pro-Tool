@@ -243,7 +243,7 @@ export function ExpCard({
             </div>
             <div className="dw-exp-actions">
               <Act icon={Pencil} label={editing ? "完成编辑" : "编辑"} onClick={() => setEditing((value) => !value)} />
-              <button className="dw-act primary" onClick={() => void actions.openDistillationLibrary(candidate.kind ?? "memory")} type="button"><ArrowRight aria-hidden="true" />去记忆库查看</button>
+              <button className="dw-act primary" onClick={() => void actions.openMemoryLibrary()} type="button"><ArrowRight aria-hidden="true" />去记忆库查看</button>
               <Act disabled={busy} icon={RefreshCw} label="重新生成" onClick={onRegenerate} />
             </div>
           </>

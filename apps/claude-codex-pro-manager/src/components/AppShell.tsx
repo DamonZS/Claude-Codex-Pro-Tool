@@ -523,7 +523,7 @@ export function AppShell({
         </header>
 
         <section className="ops-screen" data-route={route}>
-          {route !== "prompts" && route !== "overview" && route !== "sessions" && route !== "supplier" && route !== "themes" && route !== "tools" && route !== "maintenance" && route !== "settings" && route !== "clients" ? (
+          {route !== "prompts" && route !== "overview" && route !== "sessions" && route !== "supplier" && route !== "themes" && route !== "tools" && route !== "maintenance" && route !== "settings" && route !== "clients" && route !== "memory" ? (
             <div className="ops-page-heading">
               <div>
                 <h1>{routeLabel(route)}</h1>

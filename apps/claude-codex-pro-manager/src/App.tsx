@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShell";
 import type { AgentAppId } from "@/components/settings/contract";
 import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
+import { MemoryLibraryPage } from "@/components/memory/MemoryLibraryPage";
 import { CodexThemeCenterScreen } from "@/components/CodexThemeCenterScreen";
 import { SystemPromptScreen } from "@/components/SystemPromptScreen";
 import { listen } from "@tauri-apps/api/event";
@@ -174,6 +175,8 @@ import type {
   ClaudeDesktopResult,
   ClaudeZhPatchResult,
   ClaudeZhPatchStatus,
+  MemoryExportResult,
+  MemoryLibraryResult,
   CodexHookTrustResult,
   CodexSessionContextPage,
   CodexPluginMarketplaceRepairResult,
@@ -304,6 +307,7 @@ export function App() {
   const [aitrackerCapabilities, setAitrackerCapabilities] = useState<AitrackerCapabilitiesResult | null>(null);
   const [distillationCandidates, setDistillationCandidates] = useState<DistillationCandidatesResult | null>(null);
   const [distillationWorkbench, setDistillationWorkbench] = useState<DistillationWorkbenchResult | null>(null);
+  const [memoryLibrary, setMemoryLibrary] = useState<MemoryLibraryResult | null>(null);
   const [timelineLogs, setTimelineLogs] = useState<TimelineLogsState>({ logs: null, loading: false, error: null, updatedAtMs: null });
   const requestTimelineInFlight = useRef(false);
   const capabilitiesInFlight = useRef(false);
@@ -841,6 +845,48 @@ export function App() {
     if (result?.candidate) void loadDistillationWorkbench();
     return result;
   };
+
+  const loadMemoryLibrary = async () => {
+    const result = await run(
+      () => call<MemoryLibraryResult>("load_memory_library"),
+      "记忆库",
+      { trackBusy: false, notify: false },
+    );
+    if (result) setMemoryLibrary(result);
+    return result;
+  };
+
+  const saveMemoryLibraryEntry = async (input: {
+    id?: string | null;
+    kind: "persona" | "memory";
+    title: string;
+    body: string;
+  }) => {
+    const result = await run(
+      () => call<MemoryLibraryResult>("save_memory_library_entry", { request: input }),
+      "保存记忆",
+    );
+    if (result) setMemoryLibrary(result);
+    return result;
+  };
+
+  const deleteMemoryLibraryEntries = async (ids: string[]) => {
+    const result = await run(
+      () => call<MemoryLibraryResult>("delete_memory_library_entries", { request: { ids } }),
+      "删除记忆",
+    );
+    if (result) setMemoryLibrary(result);
+    return result;
+  };
+
+  const exportMemoryLibraryEntry = async (id: string) =>
+    run(
+      () => call<MemoryExportResult>("export_memory_library_entry", { request: { id } }),
+      "导出记忆",
+      { trackBusy: false, notify: false },
+    );
+
+  const openMemoryLibrary = () => setRoute("memory");
 
   const queryDistillationTask = async (taskId: string) => call<DistillationRunResult>("query_distillation_task", { request: { taskId } });
 
@@ -2472,6 +2518,8 @@ export function App() {
       requiredResults = await Promise.all([refreshSettings(true), refreshClaudeDesktopDevMode(true), diagnoseCodexCredentialEnvironment(true)]);
     } else if (target === "clients") {
       await Promise.all([refreshSettings(true), loadDistillationWorkbench()]);
+    } else if (target === "memory") {
+      await loadMemoryLibrary();
     } else if (target === "themes") {
       await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground(), refreshCodexManagerBackgrounds(true)]);
     } else if (target === "prompts") {
@@ -2668,6 +2716,11 @@ export function App() {
       saveDistillationOutput,
       deleteDistillationCandidates,
       openDistillationLibrary,
+      loadMemoryLibrary,
+      saveMemoryLibraryEntry,
+      deleteMemoryLibraryEntries,
+      exportMemoryLibraryEntry,
+      openMemoryLibrary,
       readDistillationTranscript,
       applyRelayMode,
       applyPureApiMode,
@@ -2804,6 +2857,11 @@ export function App() {
       saveDistillationOutput: (...args) => actionsRef.current!.saveDistillationOutput(...args),
       deleteDistillationCandidates: (...args) => actionsRef.current!.deleteDistillationCandidates(...args),
       openDistillationLibrary: (...args) => actionsRef.current!.openDistillationLibrary(...args),
+      loadMemoryLibrary: (...args) => actionsRef.current!.loadMemoryLibrary(...args),
+      saveMemoryLibraryEntry: (...args) => actionsRef.current!.saveMemoryLibraryEntry(...args),
+      deleteMemoryLibraryEntries: (...args) => actionsRef.current!.deleteMemoryLibraryEntries(...args),
+      exportMemoryLibraryEntry: (...args) => actionsRef.current!.exportMemoryLibraryEntry(...args),
+      openMemoryLibrary: (...args) => actionsRef.current!.openMemoryLibrary(...args),
       readDistillationTranscript: (...args) => actionsRef.current!.readDistillationTranscript(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
@@ -2936,6 +2994,9 @@ export function App() {
               actions={actions}
               distillationWorkbench={distillationWorkbench}
             />
+          ) : null}
+          {route === "memory" ? (
+            <MemoryLibraryPage actions={actions} data={memoryLibrary} />
           ) : null}
           {route === "themes" ? (
             <CodexThemeCenterScreen

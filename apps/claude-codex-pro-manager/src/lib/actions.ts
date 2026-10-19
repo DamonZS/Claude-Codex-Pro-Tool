@@ -37,6 +37,8 @@ import type {
   LocalSession,
   LocalSessionsResult,
   LogsResult,
+  MemoryExportResult,
+  MemoryLibraryResult,
   RequestTimelineResult,
   PluginHubResult,
   PluginInstallPreviewResult,
@@ -156,6 +158,16 @@ export function createActionsShape() {
     saveDistillationOutput: async (_request: { candidateId: string; target: string; skillId?: string; files?: Array<{ path: string; content: string }>; agents?: string[] }) => null as DistillationSaveResult | null,
     deleteDistillationCandidates: async (_ids: string[]) => null as DistillationCandidatesResult | null,
     openDistillationLibrary: async (_kind: string) => {},
+    loadMemoryLibrary: async () => null as MemoryLibraryResult | null,
+    saveMemoryLibraryEntry: async (_input: {
+      id?: string | null;
+      kind: "persona" | "memory";
+      title: string;
+      body: string;
+    }) => null as MemoryLibraryResult | null,
+    deleteMemoryLibraryEntries: async (_ids: string[]) => null as MemoryLibraryResult | null,
+    exportMemoryLibraryEntry: async (_id: string) => null as MemoryExportResult | null,
+    openMemoryLibrary: () => {},
     readDistillationTranscript: async (_request: { agent: string; sessionId: string }) => null as AitrackerSessionDetailResult | null,
     loadClaudeSessionContext: async (_session: ClaudeSession) => {},
     loadEarlierClaudeSessionContext: async () => {},

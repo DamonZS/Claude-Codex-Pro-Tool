@@ -581,6 +581,41 @@ let previewAgentStates: Record<string, { activeId: string | null; appliedIds: st
 };
 const previewAgentPayload = () => ({ providers: previewAgentProviders, states: previewAgentStates });
 
+/** Approved distillation candidates so the preview can render the history cards. */
+const previewDistilledCandidates = () => {
+  const createdAt = String(Date.now() - 3_600_000);
+  const sourceRefs = [{ agent: "workbuddy", sessionId: "preview-a", project: "TopoBC", startIndex: 0, endIndex: 0 }];
+  const base = {
+    agent: "workbuddy",
+    sessionId: "preview-a",
+    summary: "",
+    status: "approved",
+    createdAt,
+    mode: "model",
+    providerId: "preview-provider",
+    modelId: "deepseek-v4-pro",
+    taskId: "preview-task",
+    sourceRefs,
+    savedPath: "",
+  };
+  return [
+    {
+      ...base,
+      id: "preview-skill-1",
+      kind: "skill",
+      title: "topobc-skill-package",
+      output: "<folder name=\"topobc-skill-package\">\n<file path=\"SKILL.md\">---\nname: topobc-skill-package\ndescription: 由 workbuddy 蒸馏得到的可复用 Skill 能力包\n---\n\n# topobc-skill-package\n\n## 核心运行指令\n\n角色：你是代码仓库巡检专家。\n\n## 参考资源\n\n- references/heuristics.md\n</file>\n<file path=\"references/heuristics.md\"># 巡检要点\n</file>\n</folder>",
+    },
+    {
+      ...base,
+      id: "preview-brief-1",
+      kind: "brief",
+      title: "topobc-workflow-5-sessions",
+      output: "# 概述\n\n按阶段实现 TopoBC 小程序页面，并在每阶段结束做只读校验。\n\n## 工作流步骤\n\n1. 确认任务边界\n2. 实施\n3. 验证\n",
+    },
+  ];
+};
+
 export async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
   if (command === "inspect_leila_status") return previewLeilaStatus();
@@ -1328,7 +1363,7 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
     return ok("预览模式未连接会话采集源。", { detail: null });
   }
   if (command === "list_distillation_candidates" || command === "create_distillation_candidate" || command === "update_distillation_candidate" || command === "cancel_distillation_candidate" || command === "delete_distillation_candidates") {
-    return ok("预览模式未连接蒸馏存储。", { candidates: [] });
+    return ok("预览模式蒸馏候选。", { candidates: previewDistilledCandidates() });
   }
   if (command === "load_app_preferences" || command === "save_app_preferences") {
     const saved = (_args?.request as { preferences?: Record<string, unknown> } | undefined)?.preferences;
@@ -1400,6 +1435,42 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
   if (command === "open_distillation_library") {
     return ok("预览模式不会打开本地目录。", { path: "" });
   }
+  if (command === "load_memory_library") {
+    return ok("预览模式记忆库已加载。", {
+      entries: [
+        {
+          id: "preview-memory-1",
+          kind: "memory",
+          title: "Claude-Codex-Pro-Tool Task Memory · 6 sessions",
+          body: "## 当前目标\n在 ~ 项目内，修复并完善 Codex 客户端左侧「我的任务」入口的可用性与视觉一致性。\n\n## 已确认决策\n1. 入口不再偶发「未连接」。\n2. 看板需展示 Codex 原生项目、智能体与任务。\n3. 执行归属全部在 Codex 内完成。",
+          source: "distill",
+          createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+          updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
+        },
+        {
+          id: "preview-memory-2",
+          kind: "persona",
+          title: "用户画像 · 偏好直接行动",
+          body: "## 明确事实\n- 同时使用 Codex、Claude Code 与 WorkBuddy。\n- 偏好直接给结论与可执行命令。\n\n## 高置信偏好\n- 信息密度高、拒绝客套。",
+          source: "distill",
+          createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+          updatedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        },
+      ],
+      counts: { total: 2, persona: 1, memory: 1 },
+      updatedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+  }
+  if (command === "save_memory_library_entry" || command === "delete_memory_library_entries") {
+    return ok("预览模式已记录记忆操作。", {
+      entries: [],
+      counts: { total: 0, persona: 0, memory: 0 },
+      updatedAt: "",
+    });
+  }
+  if (command === "export_memory_library_entry") {
+    return ok("预览模式不会写入下载目录。", { path: "~/Downloads/preview-memory.md" });
+  }
   if (command === "load_distillation_workbench") {
     const now = Date.now();
     const iso = (offsetHours: number) => new Date(now - offsetHours * 3_600_000).toISOString();
@@ -1410,7 +1481,7 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
         { agent: "codex", sessionId: "preview-c", title: "toporeduce 性能排查", project: "toporeduce", projectKey: "toporeduce", isGitProject: true, model: "gpt-5.5", startedAt: iso(200), updatedAt: iso(199), events: 8, turns: 8, tokens: 0, status: "completed" },
       ],
       providers: [{ id: "preview-provider", name: "Preview Relay", models: ["deepseek-v4-pro", "deepseek-v4-flash"], status: "ok", vendor: "OpenAI" }],
-      candidates: [],
+      candidates: previewDistilledCandidates(),
       skillAgents: [
         { id: "claude-code", label: "Claude Code", root: "~/.claude/skills" },
         { id: "codex", label: "Codex", root: "~/.codex/skills" },

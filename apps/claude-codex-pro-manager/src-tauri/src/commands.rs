@@ -5,7 +5,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
     Mutex, OnceLock,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -41,6 +41,7 @@ use claude_codex_pro_core::system_prompt::{
 };
 use claude_codex_pro_core::user_scripts::UserScriptManager;
 use claude_codex_pro_core::zed_remote::{ZedOpenStrategy, ZedRemoteProject};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{Emitter, Manager};
@@ -1167,7 +1168,7 @@ pub struct DistillationDeleteRequest {
     pub ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DistillationWorkbenchSession {
     pub agent: String,
@@ -1229,7 +1230,7 @@ pub struct DistillationLibraryPayload {
     pub path: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DistillationSkillAgent {
     pub id: String,
@@ -7102,6 +7103,12 @@ fn scan_unified_usage_snapshot() -> UnifiedUsageSnapshot {
     dedupe_unified_request_records(&mut records);
     let mut usage = claude_codex_pro_data::local_usage::aggregate(usage_events, diagnostics);
     usage.sessions = claude_codex_pro_data::local_usage::collect_workbuddy_sessions(&user_home);
+    claude_codex_pro_data::file_cache::save();
+    // Rebuild the SQLite session index from the same projection the JSON
+    // snapshot persists. The index is only a cache: a write failure must not
+    // change the scan result.
+    let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+    let _ = claude_codex_pro_data::usage_index::write_usage(&usage, &snapshot);
     (records, warnings, usage)
 }
 
@@ -7127,11 +7134,192 @@ fn dedupe_unified_request_records(
     records.extend(unique.into_values());
 }
 
+// ============================================================================
+// 持久化快照：应用重启后会话页 / 蒸馏工作台也立即出数据
+// ============================================================================
+//
+// 全量扫描一次要读数 GB 会话文件（本机实测 70–90 秒）。AITracker 的做法是
+// 常驻 snapshot，页面只读已水合的投影。这里同样把扫描结果落到应用数据目录，
+// 页面先读文件，过期后在后台线程刷新。
+
+const SNAPSHOT_REFRESH_AFTER_MS: u64 = 5 * 60 * 1000;
+const USAGE_SNAPSHOT_FILE: &str = "usage-snapshot-v1.json";
+const WORKBENCH_SNAPSHOT_FILE: &str = "workbench-snapshot-v1.json";
+/// In-process copy of the last snapshot: consecutive commands must not re-parse
+/// the (currently ~60 MB) JSON file.
+const USAGE_SNAPSHOT_MEMORY_TTL: Duration = Duration::from_secs(600);
+
+static USAGE_SNAPSHOT_REFRESHING: AtomicBool = AtomicBool::new(false);
+static USAGE_MEMORY: OnceLock<Mutex<Option<(Instant, std::sync::Arc<UsageSnapshotFile>)>>> =
+    OnceLock::new();
+static USAGE_BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static WORKBENCH_BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn usage_memory() -> &'static Mutex<Option<(Instant, std::sync::Arc<UsageSnapshotFile>)>> {
+    USAGE_MEMORY.get_or_init(|| Mutex::new(None))
+}
+
+fn usage_build_lock() -> &'static Mutex<()> {
+    USAGE_BUILD_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn workbench_build_lock() -> &'static Mutex<()> {
+    WORKBENCH_BUILD_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageSnapshotFile {
+    saved_at_ms: u64,
+    usage: claude_codex_pro_data::local_usage::LocalUsageSnapshot,
+    snapshot: claude_codex_pro_data::aitracker::AitrackerSnapshot,
+}
+
+fn now_ms_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn snapshot_cache_dir() -> PathBuf {
+    claude_codex_pro_core::paths::default_app_state_dir()
+        .join("aitracker")
+        .join("cache")
+}
+
+fn read_json_at<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_json_at<T: Serialize>(path: &Path, value: &T) {
+    if let Some(dir) = path.parent()
+        && fs::create_dir_all(dir).is_err()
+    {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(value) else {
+        return;
+    };
+    let temporary = path.with_extension("json.tmp");
+    if fs::write(&temporary, bytes).is_err() {
+        return;
+    }
+    let _ = fs::rename(&temporary, path);
+}
+
+fn read_snapshot_file<T: DeserializeOwned>(name: &str) -> Option<T> {
+    read_json_at(&snapshot_cache_dir().join(name))
+}
+
+fn write_snapshot_file<T: Serialize>(name: &str, value: &T) {
+    write_json_at(&snapshot_cache_dir().join(name), value);
+}
+
+fn snapshot_is_stale(saved_at_ms: u64) -> bool {
+    now_ms_u64().saturating_sub(saved_at_ms) > SNAPSHOT_REFRESH_AFTER_MS
+}
+
+fn build_usage_snapshot_file() -> UsageSnapshotFile {
+    let (_, _, usage) = collect_unified_usage_snapshot();
+    let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+    UsageSnapshotFile {
+        saved_at_ms: now_ms_u64(),
+        usage,
+        snapshot,
+    }
+}
+
+fn remember_usage_snapshot(file: &UsageSnapshotFile) -> std::sync::Arc<UsageSnapshotFile> {
+    let value = std::sync::Arc::new(file.clone());
+    let mut slot = match usage_memory().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    *slot = Some((Instant::now(), value.clone()));
+    value
+}
+
+fn refresh_usage_snapshot_in_background() {
+    if USAGE_SNAPSHOT_REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        {
+            let _guard = match usage_build_lock().lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Ok(file) = std::panic::catch_unwind(build_usage_snapshot_file) {
+                write_snapshot_file(USAGE_SNAPSHOT_FILE, &file);
+            }
+        }
+        let mut slot = match usage_memory().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = None;
+        USAGE_SNAPSHOT_REFRESHING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Usage/capability snapshot served to the 会话 page: memory, then disk cache,
+/// and a serialized scan only when no snapshot exists yet (first launch).
+fn cached_usage_snapshot() -> std::sync::Arc<UsageSnapshotFile> {
+    {
+        let slot = match usage_memory().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some((loaded_at, file)) = slot.as_ref()
+            && loaded_at.elapsed() < USAGE_SNAPSHOT_MEMORY_TTL
+        {
+            return file.clone();
+        }
+    }
+    if let Some(file) = read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE) {
+        if snapshot_is_stale(file.saved_at_ms) {
+            refresh_usage_snapshot_in_background();
+        }
+        return remember_usage_snapshot(&file);
+    }
+    // The persisted snapshot may still be building (startup warm-up): serialize
+    // with it instead of scanning the same multi-GB files a second time.
+    let file = {
+        let _guard = match usage_build_lock().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE) {
+            Some(file) => file,
+            None => {
+                let file = build_usage_snapshot_file();
+                write_snapshot_file(USAGE_SNAPSHOT_FILE, &file);
+                file
+            }
+        }
+    };
+    remember_usage_snapshot(&file)
+}
+
+/// Called once from the Tauri setup hook so the heavy scan runs while the user is
+/// still on the overview page instead of when they first open 会话 / 蒸馏工作台.
+pub fn warm_snapshots_in_background() {
+    let usage_stale = read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE)
+        .map(|file| snapshot_is_stale(file.saved_at_ms))
+        .unwrap_or(true);
+    if usage_stale {
+        refresh_usage_snapshot_in_background();
+    }
+    warm_workbench_snapshot_in_background();
+}
+
 #[tauri::command]
 pub async fn read_aitracker_capabilities() -> CommandResult<AitrackerCapabilitiesPayload> {
     tauri::async_runtime::spawn_blocking(|| {
-        let (_, _, usage) = collect_unified_usage_snapshot();
-        let mut snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+        let cached = cached_usage_snapshot();
+        let mut snapshot = cached.snapshot.clone();
         let claude_home = claude_code_home_dir();
         let user_home = claude_home.parent().unwrap_or(&claude_home);
         claude_codex_pro_data::aitracker::populate_local_capabilities(
@@ -7141,7 +7329,10 @@ pub async fn read_aitracker_capabilities() -> CommandResult<AitrackerCapabilitie
         apply_session_titles(&mut snapshot.sessions, &current_session_titles());
         ok(
             "能力数据已加载。",
-            AitrackerCapabilitiesPayload { snapshot, usage },
+            AitrackerCapabilitiesPayload {
+                snapshot,
+                usage: cached.usage.clone(),
+            },
         )
     })
     .await
@@ -7509,19 +7700,115 @@ type WorkbenchSessionData = (
     Vec<DistillationSkillAgent>,
 );
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkbenchSnapshotFile {
+    saved_at_ms: u64,
+    sessions: Vec<DistillationWorkbenchSession>,
+    skill_agents: Vec<DistillationSkillAgent>,
+}
+
+static WORKBENCH_MEMORY_CACHE: OnceLock<Mutex<Option<(Instant, WorkbenchSessionData)>>> =
+    OnceLock::new();
+static WORKBENCH_SNAPSHOT_REFRESHING: AtomicBool = AtomicBool::new(false);
+
+fn workbench_memory_cache() -> &'static Mutex<Option<(Instant, WorkbenchSessionData)>> {
+    WORKBENCH_MEMORY_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn persist_workbench_snapshot(value: &WorkbenchSessionData) {
+    write_snapshot_file(
+        WORKBENCH_SNAPSHOT_FILE,
+        &WorkbenchSnapshotFile {
+            saved_at_ms: now_ms_u64(),
+            sessions: value.0.clone(),
+            skill_agents: value.1.clone(),
+        },
+    );
+}
+
+fn refresh_workbench_snapshot_in_background() {
+    if WORKBENCH_SNAPSHOT_REFRESHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(|| {
+        {
+            let _guard = match workbench_build_lock().lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Ok(value) = std::panic::catch_unwind(scan_workbench_session_data) {
+                persist_workbench_snapshot(&value);
+            }
+        }
+        // Drop the in-memory copy so the next page load picks up the fresh
+        // snapshot instead of the stale one served during the refresh.
+        let mut slot = match workbench_memory_cache().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = None;
+        WORKBENCH_SNAPSHOT_REFRESHING.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Warm the workbench snapshot at app start when the persisted copy is stale.
+fn warm_workbench_snapshot_in_background() {
+    let stale = read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE)
+        .map(|file| snapshot_is_stale(file.saved_at_ms))
+        .unwrap_or(true);
+    if stale {
+        refresh_workbench_snapshot_in_background();
+    }
+}
+
 fn workbench_session_data() -> WorkbenchSessionData {
-    static CACHE: OnceLock<Mutex<Option<(Instant, WorkbenchSessionData)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
-    let mut slot = match cache.lock() {
+    {
+        let slot = match workbench_memory_cache().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if let Some((scanned_at, value)) = slot.as_ref()
+            && scanned_at.elapsed() < WORKBENCH_SESSIONS_TTL
+        {
+            return value.clone();
+        }
+    }
+    // A persisted snapshot renders the page immediately after a restart; the
+    // expensive rescan then happens in the background.
+    if let Some(file) = read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE) {
+        let value = (file.sessions, file.skill_agents);
+        let mut slot = match workbench_memory_cache().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *slot = Some((Instant::now(), value.clone()));
+        drop(slot);
+        if snapshot_is_stale(file.saved_at_ms) {
+            refresh_workbench_snapshot_in_background();
+        }
+        return value;
+    }
+    // A startup warm-up may still be scanning: wait for it (serialized) instead
+    // of reading the same session files a second time.
+    let value = {
+        let _guard = match workbench_build_lock().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        match read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE) {
+            Some(file) => (file.sessions, file.skill_agents),
+            None => {
+                let value = scan_workbench_session_data();
+                persist_workbench_snapshot(&value);
+                value
+            }
+        }
+    };
+    let mut slot = match workbench_memory_cache().lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    if let Some((scanned_at, value)) = slot.as_ref()
-        && scanned_at.elapsed() < WORKBENCH_SESSIONS_TTL
-    {
-        return value.clone();
-    }
-    let value = scan_workbench_session_data();
     *slot = Some((Instant::now(), value.clone()));
     value
 }
@@ -7562,6 +7849,7 @@ fn scan_workbench_usage() -> claude_codex_pro_data::local_usage::LocalUsageSnaps
     }
     let mut usage = claude_codex_pro_data::local_usage::aggregate(events, Vec::new());
     usage.sessions = claude_codex_pro_data::local_usage::collect_workbuddy_sessions(&user_home);
+    claude_codex_pro_data::file_cache::save();
     usage
 }
 
@@ -7575,7 +7863,7 @@ fn scan_workbench_session_data() -> WorkbenchSessionData {
     let mut session_rows =
         distill_transcript::merged_sessions_with_inventory(&snapshot.sessions, inventory.as_ref());
     session_rows.sort_by(|left, right| right.summary.ended_at.cmp(&left.summary.ended_at));
-    let sessions = session_rows
+    let sessions: Vec<DistillationWorkbenchSession> = session_rows
         .into_iter()
         .take(MAX_WORKBENCH_SESSIONS)
         .map(|merged| {
@@ -7605,6 +7893,28 @@ fn scan_workbench_session_data() -> WorkbenchSessionData {
             }
         })
         .collect();
+    // Mirror the workbench projection into the SQLite index. The page keeps
+    // reading the in-memory value, so an index failure is harmless.
+    let index_rows: Vec<claude_codex_pro_data::usage_index::WorkbenchRow> = sessions
+        .iter()
+        .map(|session| claude_codex_pro_data::usage_index::WorkbenchRow {
+            agent: session.agent.clone(),
+            session_id: session.session_id.clone(),
+            title: session.title.clone(),
+            project: session.project.clone(),
+            project_key: session.project_key.clone(),
+            is_git_project: session.is_git_project,
+            model: session.model.clone(),
+            started_at: session.started_at.clone(),
+            updated_at: session.updated_at.clone(),
+            events: session.events,
+            turns: session.turns,
+            status: session.status.clone(),
+            tokens: session.tokens,
+            segments: session.segments,
+        })
+        .collect();
+    let _ = claude_codex_pro_data::usage_index::write_workbench(&index_rows);
     let skill_agents = unified_inventory_roots()
         .agent_skill_roots
         .into_iter()
@@ -7923,21 +8233,415 @@ pub async fn delete_distillation_candidates(
         })
 }
 
+// ============================================================================
+// 记忆库（蒸馏产出的画像 / 任务记忆）
+// ============================================================================
+
+const MAX_MEMORY_TITLE_CHARS: usize = 256;
+const MAX_MEMORY_BODY_CHARS: usize = 24_000;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLibraryEntry {
+    pub id: String,
+    /// `persona` (画像) or `memory` (任务记忆).
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+    pub source: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLibraryCounts {
+    pub total: usize,
+    pub persona: usize,
+    pub memory: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryLibraryPayload {
+    pub entries: Vec<MemoryLibraryEntry>,
+    pub counts: MemoryLibraryCounts,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySaveRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryDeleteRequest {
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryExportRequest {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryExportPayload {
+    pub path: String,
+}
+
+fn memory_now_ms() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
+}
+
+fn parse_memory_timestamp(value: &str) -> u64 {
+    value.trim().parse::<u64>().unwrap_or(0)
+}
+
+/// Last-write time of the memory file, falling back to the distill timestamp.
+fn memory_updated_at(
+    candidate: &claude_codex_pro_data::aitracker::DistillationCandidate,
+) -> String {
+    fs::metadata(distill_pipeline::memory_file_path(candidate))
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis().to_string())
+        .unwrap_or_else(|| candidate.created_at.clone())
+}
+
+fn memory_entry_from(
+    candidate: claude_codex_pro_data::aitracker::DistillationCandidate,
+) -> MemoryLibraryEntry {
+    let updated_at = memory_updated_at(&candidate);
+    MemoryLibraryEntry {
+        id: candidate.id,
+        kind: candidate.kind,
+        title: candidate.title,
+        body: candidate.output,
+        source: "distill".into(),
+        created_at: candidate.created_at,
+        updated_at,
+    }
+}
+
+fn memory_library_payload_from(
+    candidates: Vec<claude_codex_pro_data::aitracker::DistillationCandidate>,
+) -> MemoryLibraryPayload {
+    let mut entries = candidates
+        .into_iter()
+        .filter(|candidate| {
+            matches!(candidate.kind.as_str(), "persona" | "memory")
+                && candidate.status != "cancelled"
+        })
+        .map(memory_entry_from)
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        parse_memory_timestamp(&right.updated_at).cmp(&parse_memory_timestamp(&left.updated_at))
+    });
+    let counts = MemoryLibraryCounts {
+        total: entries.len(),
+        persona: entries
+            .iter()
+            .filter(|entry| entry.kind == "persona")
+            .count(),
+        memory: entries
+            .iter()
+            .filter(|entry| entry.kind == "memory")
+            .count(),
+    };
+    let updated_at = entries
+        .first()
+        .map(|entry| entry.updated_at.clone())
+        .unwrap_or_default();
+    MemoryLibraryPayload {
+        entries,
+        counts,
+        updated_at,
+    }
+}
+
+fn current_memory_library() -> MemoryLibraryPayload {
+    memory_library_payload_from(all_distillation_candidates())
+}
+
+#[tauri::command]
+pub async fn load_memory_library() -> CommandResult<MemoryLibraryPayload> {
+    tauri::async_runtime::spawn_blocking(|| ok("记忆库已加载。", current_memory_library()))
+        .await
+        .unwrap_or_else(|_| failed("记忆库读取失败。", memory_library_payload_from(Vec::new())))
+}
+
+#[tauri::command]
+pub async fn save_memory_library_entry(
+    request: MemorySaveRequest,
+) -> CommandResult<MemoryLibraryPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let kind = match request.kind.trim() {
+            "persona" => "persona",
+            "memory" => "memory",
+            _ => {
+                return failed(
+                    "记忆类型无效：只能是画像或任务记忆。",
+                    current_memory_library(),
+                );
+            }
+        };
+        let title = request
+            .title
+            .trim()
+            .chars()
+            .take(MAX_MEMORY_TITLE_CHARS)
+            .collect::<String>();
+        let body = request
+            .body
+            .trim()
+            .chars()
+            .take(MAX_MEMORY_BODY_CHARS)
+            .collect::<String>();
+        if title.is_empty() || body.is_empty() {
+            return failed("标题和说明都不能为空。", current_memory_library());
+        }
+        let requested_id = request.id.unwrap_or_default().trim().to_string();
+        let _guard = distillation_candidates_lock();
+        let mut candidates = read_distillation_candidates();
+        let existing = if requested_id.is_empty() {
+            None
+        } else {
+            candidates.iter().position(|item| item.id == requested_id)
+        };
+        let previous = existing.map(|index| candidates[index].clone());
+        let index = match existing {
+            Some(index) => index,
+            None => {
+                let now = memory_now_ms();
+                candidates.push(claude_codex_pro_data::aitracker::DistillationCandidate {
+                    id: if requested_id.is_empty() {
+                        format!("memory-{now}")
+                    } else {
+                        requested_id
+                    },
+                    agent: "manual".into(),
+                    session_id: String::new(),
+                    summary: title.clone(),
+                    status: "saved".into(),
+                    created_at: now,
+                    kind: kind.into(),
+                    title: title.clone(),
+                    output: body.clone(),
+                    mode: "manual".into(),
+                    provider_id: String::new(),
+                    model_id: String::new(),
+                    task_id: String::new(),
+                    source_refs: Vec::new(),
+                    saved_path: String::new(),
+                });
+                candidates.len() - 1
+            }
+        };
+        candidates[index].kind = kind.into();
+        candidates[index].title = title;
+        candidates[index].output = body;
+        if let Ok(path) = distill_pipeline::write_memory_file_in(
+            &distill_pipeline::memory_dir(kind),
+            &candidates[index],
+        ) {
+            candidates[index].saved_path = path.display().to_string();
+        }
+        if let Some(previous) = previous
+            && previous.kind != candidates[index].kind
+        {
+            let _ = fs::remove_file(distill_pipeline::memory_file_path(&previous));
+        }
+        if write_distillation_candidates(&candidates).is_err() {
+            return failed("记忆保存失败。", current_memory_library());
+        }
+        drop(_guard);
+        ok("记忆已保存。", current_memory_library())
+    })
+    .await
+    .unwrap_or_else(|_| failed("记忆保存失败。", current_memory_library()))
+}
+
+#[tauri::command]
+pub async fn delete_memory_library_entries(
+    request: MemoryDeleteRequest,
+) -> CommandResult<MemoryLibraryPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ids = request
+            .ids
+            .iter()
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+            .collect::<BTreeSet<_>>();
+        if ids.is_empty() {
+            return failed("没有选中要删除的记忆。", current_memory_library());
+        }
+        let paths = all_distillation_candidates()
+            .into_iter()
+            .filter(|item| ids.contains(&item.id))
+            .map(|item| distill_pipeline::memory_file_path(&item))
+            .collect::<Vec<_>>();
+        let deleted = distill_pipeline::delete_candidates(ids.into_iter().collect::<Vec<_>>());
+        if deleted.status != "ok" {
+            return failed(&deleted.message, current_memory_library());
+        }
+        for path in paths {
+            let _ = fs::remove_file(path);
+        }
+        ok(&deleted.message, current_memory_library())
+    })
+    .await
+    .unwrap_or_else(|_| failed("记忆删除失败。", current_memory_library()))
+}
+
+fn memory_markdown(title: &str, kind: &str, updated_at: &str, body: &str) -> String {
+    format!(
+        "---\ntitle: {}\ntype: {}\nsource: distill\nupdatedAt: {}\n---\n\n{}",
+        title.replace(['\r', '\n'], " ").trim(),
+        kind,
+        updated_at,
+        body
+    )
+}
+
+fn memory_export_stem(title: &str) -> String {
+    let cleaned = title
+        .chars()
+        .filter(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '_' | '-'))
+        .collect::<String>();
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        "memory".to_string()
+    } else {
+        cleaned.chars().take(60).collect()
+    }
+}
+
+fn memory_export_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .map(|home| home.join("Downloads"))
+        .unwrap_or_else(|| claude_codex_pro_core::paths::default_app_state_dir().join("exports"))
+}
+
+#[tauri::command]
+pub async fn export_memory_library_entry(
+    request: MemoryExportRequest,
+) -> CommandResult<MemoryExportPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = request.id.trim().to_string();
+        let Some(candidate) = all_distillation_candidates()
+            .into_iter()
+            .find(|item| item.id == id && matches!(item.kind.as_str(), "persona" | "memory"))
+        else {
+            return failed(
+                "记忆不存在或已被删除。",
+                MemoryExportPayload {
+                    path: String::new(),
+                },
+            );
+        };
+        let updated_at = memory_updated_at(&candidate);
+        let markdown = memory_markdown(
+            &candidate.title,
+            &candidate.kind,
+            &updated_at,
+            &candidate.output,
+        );
+        let dir = memory_export_dir();
+        if fs::create_dir_all(&dir).is_err() {
+            return failed(
+                "无法创建导出目录。",
+                MemoryExportPayload {
+                    path: String::new(),
+                },
+            );
+        }
+        let mut path = dir.join(format!("{}.md", memory_export_stem(&candidate.title)));
+        if path.exists() {
+            path = dir.join(format!(
+                "{}-{}.md",
+                memory_export_stem(&candidate.title),
+                memory_now_ms()
+            ));
+        }
+        if fs::write(&path, markdown).is_err() {
+            return failed(
+                "导出记忆失败。",
+                MemoryExportPayload {
+                    path: String::new(),
+                },
+            );
+        }
+        ok(
+            &format!("已导出到 {}", path.display()),
+            MemoryExportPayload {
+                path: path.display().to_string(),
+            },
+        )
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "导出记忆失败。",
+            MemoryExportPayload {
+                path: String::new(),
+            },
+        )
+    })
+}
+
 #[tauri::command]
 pub async fn query_aitracker_sessions(
     request: AitrackerSessionQueryRequest,
 ) -> CommandResult<AitrackerSessionsPayload> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (_, _, usage) = collect_unified_usage_snapshot();
-        let (mut sessions, total) = claude_codex_pro_data::aitracker::query_sessions(
-            &usage,
-            request.agent.as_deref(),
-            request.status.as_deref(),
-            request.keyword.as_deref(),
-            request.range.as_deref(),
-            request.page,
-            request.page_size,
-        );
+        // Prefer the SQLite session index once a complete snapshot has been
+        // committed. Otherwise keep the existing JSON-snapshot path unchanged.
+        let (mut sessions, total, generated_at, mode) =
+            if claude_codex_pro_data::usage_index::index_ready() {
+                let (sessions, total) = claude_codex_pro_data::usage_index::query_sessions(
+                    request.agent.as_deref(),
+                    request.status.as_deref(),
+                    request.keyword.as_deref(),
+                    request.range.as_deref(),
+                    request.page,
+                    request.page_size,
+                );
+                let (generated_at, mode) = claude_codex_pro_data::usage_index::index_metadata();
+                (sessions, total, generated_at, mode)
+            } else {
+                let usage = cached_usage_snapshot();
+                let (sessions, total) = claude_codex_pro_data::aitracker::query_sessions(
+                    &usage.usage,
+                    request.agent.as_deref(),
+                    request.status.as_deref(),
+                    request.keyword.as_deref(),
+                    request.range.as_deref(),
+                    request.page,
+                    request.page_size,
+                );
+                (
+                    sessions,
+                    total,
+                    usage.usage.generated_at.clone(),
+                    usage.usage.mode.clone(),
+                )
+            };
+        // Index titles can be empty (the projection does not carry the title
+        // map); reuse the existing title lookup for both paths.
         apply_session_titles(&mut sessions, &current_session_titles());
         ok(
             "会话已加载。",
@@ -7946,8 +8650,8 @@ pub async fn query_aitracker_sessions(
                 total,
                 page: request.page,
                 page_size: request.page_size.clamp(1, 200),
-                generated_at: usage.generated_at,
-                mode: usage.mode,
+                generated_at,
+                mode,
             },
         )
     })
@@ -12667,6 +13371,117 @@ mod tests {
         );
         apply_session_titles(&mut sessions, &titles);
         assert_eq!(sessions[0].title, "继续指定会话任务");
+    }
+
+    #[test]
+    fn memory_library_payload_filters_and_counts() {
+        fn candidate(
+            id: &str,
+            kind: &str,
+            status: &str,
+        ) -> claude_codex_pro_data::aitracker::DistillationCandidate {
+            claude_codex_pro_data::aitracker::DistillationCandidate {
+                id: id.into(),
+                agent: "codex".into(),
+                session_id: String::new(),
+                summary: String::new(),
+                status: status.into(),
+                created_at: "1000".into(),
+                kind: kind.into(),
+                title: format!("{id} title"),
+                output: "body".into(),
+                mode: "model".into(),
+                provider_id: String::new(),
+                model_id: String::new(),
+                task_id: String::new(),
+                source_refs: Vec::new(),
+                saved_path: String::new(),
+            }
+        }
+        let payload = memory_library_payload_from(vec![
+            candidate("a", "persona", "approved"),
+            candidate("b", "memory", "saved"),
+            candidate("c", "memory", "cancelled"),
+            candidate("d", "skill", "approved"),
+        ]);
+        assert_eq!(payload.counts.total, 2);
+        assert_eq!(payload.counts.persona, 1);
+        assert_eq!(payload.counts.memory, 1);
+        assert_eq!(payload.updated_at, "1000");
+        assert!(
+            payload
+                .entries
+                .iter()
+                .all(|entry| entry.source == "distill")
+        );
+    }
+
+    #[test]
+    fn memory_markdown_has_frontmatter_and_body() {
+        let markdown = memory_markdown("标题\n换行", "memory", "123", "# 正文");
+        assert!(
+            markdown.starts_with("---\ntitle: 标题 换行\ntype: memory\nsource: distill\nupdatedAt: 123\n---\n\n# 正文"),
+            "{markdown}"
+        );
+    }
+
+    #[test]
+    fn memory_export_stem_is_safe() {
+        assert_eq!(memory_export_stem("CPP/任务:记忆*6"), "CPP任务记忆6");
+        assert_eq!(memory_export_stem("   "), "memory");
+    }
+
+    #[test]
+    fn snapshot_files_roundtrip_and_ignore_corruption() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("snapshot.json");
+        let value = WorkbenchSnapshotFile {
+            saved_at_ms: 42,
+            sessions: vec![DistillationWorkbenchSession {
+                agent: "codex".into(),
+                session_id: "s1".into(),
+                title: "标题".into(),
+                project: "Repo".into(),
+                project_key: "Repo".into(),
+                is_git_project: true,
+                model: "m".into(),
+                started_at: "1".into(),
+                updated_at: "2".into(),
+                events: 1,
+                turns: 1,
+                status: "completed".into(),
+                tokens: 10,
+                segments: 1,
+            }],
+            skill_agents: vec![DistillationSkillAgent {
+                id: "codex".into(),
+                label: "Codex".into(),
+                root: "C:/skills".into(),
+            }],
+        };
+        write_json_at(&path, &value);
+        let loaded: WorkbenchSnapshotFile = read_json_at(&path).expect("roundtrip");
+        assert_eq!(loaded.saved_at_ms, 42);
+        assert_eq!(loaded.sessions[0].title, "标题");
+        assert_eq!(loaded.skill_agents[0].id, "codex");
+
+        fs::write(&path, b"{not json").unwrap();
+        assert!(read_json_at::<WorkbenchSnapshotFile>(&path).is_none());
+        assert!(
+            read_json_at::<WorkbenchSnapshotFile>(&directory.path().join("missing.json")).is_none()
+        );
+    }
+
+    #[test]
+    fn snapshot_staleness_uses_the_refresh_window() {
+        let now = now_ms_u64();
+        assert!(!snapshot_is_stale(now));
+        assert!(!snapshot_is_stale(
+            now.saturating_sub(SNAPSHOT_REFRESH_AFTER_MS)
+        ));
+        assert!(snapshot_is_stale(
+            now.saturating_sub(SNAPSHOT_REFRESH_AFTER_MS + 2_000)
+        ));
     }
 
     #[test]

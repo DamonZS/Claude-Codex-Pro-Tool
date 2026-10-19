@@ -437,6 +437,16 @@ pub fn memory_dir(kind: &str) -> PathBuf {
         })
 }
 
+/// On-disk file for one persona/task-memory candidate.
+pub fn memory_file_path(candidate: &DistillationCandidate) -> PathBuf {
+    let safe_id = candidate
+        .id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+        .collect::<String>();
+    memory_dir(&candidate.kind).join(format!("{safe_id}.md"))
+}
+
 /// Write a persona/task-memory candidate into the local memory library.
 pub fn write_memory_file_in(
     dir: &Path,
@@ -1081,6 +1091,67 @@ mod tests {
         );
         assert!(install_skill_files("x", &files, &["unknown".into()], &roots, "skill").is_err());
         assert!(install_skill_files("x", &files, &[], &roots, "skill").is_err());
+    }
+
+    #[test]
+    fn distill_install_workflow_package_for_every_supported_agent() {
+        let temp = tempfile::tempdir().unwrap();
+        const AGENTS: [&str; 12] = [
+            "claude-code",
+            "codex",
+            "cursor",
+            "gemini-cli",
+            "opencode",
+            "grok",
+            "hermes",
+            "workbuddy",
+            "openclaw",
+            "antigravity",
+            "aipy",
+            "zcode",
+        ];
+        let roots = BTreeMap::from_iter(AGENTS.iter().map(|agent| {
+            (
+                (*agent).to_string(),
+                vec![temp.path().join(agent).join("skills")],
+            )
+        }));
+        let file = |path: &str, content: &str| DistillationFileInput {
+            path: path.into(),
+            content: content.into(),
+        };
+        let files = validate_skill_files(
+            "topobc-workflow",
+            Some(vec![
+                file(
+                    "SKILL.md",
+                    "---\nname: topobc-workflow\n---\n\n# 工作流包\n",
+                ),
+                file("WORKFLOW.md", "# 工作流\n\n1. 确认边界\n"),
+                file("references/pitfalls.md", "# 已知风险\n"),
+            ]),
+            "",
+        )
+        .unwrap();
+        let agents = AGENTS.map(str::to_string).to_vec();
+        let outcome =
+            install_skill_files("topobc-workflow", &files, &agents, &roots, "brief").unwrap();
+        assert_eq!(outcome.written.len(), AGENTS.len());
+        for agent in AGENTS {
+            let package = temp
+                .path()
+                .join(agent)
+                .join("skills")
+                .join("topobc-workflow");
+            assert!(
+                package.join("WORKFLOW.md").is_file(),
+                "{agent} 未写入 WORKFLOW.md"
+            );
+            assert!(
+                package.join("references").join("pitfalls.md").is_file(),
+                "{agent} 未写入 references"
+            );
+        }
     }
 
     #[test]

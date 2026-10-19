@@ -39,7 +39,7 @@
     - 工作台只显示一行，代表 id 为链内最早且有用量记录的会话；Token/事件/工具调用累加，开始取最早、结束取最晚，模型/项目/状态取最新一段；行副标题显示「· N 段续接」，N 含没有用量记录的成员。
     - 读取转录时链内任一成员都读整条链：按时间顺序拼接，去掉后续段开头的续接提示；超过消息窗口时保留开头 1/5 与结尾 4/5。
     - 无法读取的成员不参与合并，也不会让整条链失败；同一文件含多个会话的来源不参与合并。
-17. 工作台加载与刷新：`load_distillation_workbench` 只列可蒸馏 Agent（Codex / Claude / WorkBuddy / Cursor / OpenClaw）的会话；Codex 与 Claude 直接复用请求历史，通用适配器不再重复读同一批会话文件。每次加载只读一次 Claude 会话清单，标题映射与续接链合并共用同一份清单；会话列表的扫描结果缓存 10 分钟，供应商与候选每次实时读取（编辑供应商后立即生效，蒸馏完成后历史立即出现，不再等待整机重扫）。会话列表最多返回 300 行。前端在拿到首份数据前显示「正在扫描本机会话…」，不显示空列表。
+17. 工作台加载与刷新：`load_distillation_workbench` 只列可蒸馏 Agent（Codex / Claude / WorkBuddy / Cursor / OpenClaw）的会话；Codex 与 Claude 直接复用请求历史，通用适配器不再重复读同一批会话文件。每次加载只读一次 Claude 会话清单，标题映射与续接链合并共用同一份清单；会话列表与用量快照持久化到应用数据目录（见 spec/session-snapshot-cache.md）：读取先命中内存/磁盘快照，过期后刷新，供应商与候选每次实时读取（编辑供应商后立即生效，蒸馏完成后历史立即出现，不再等待整机重扫）。会话列表最多返回 300 行。前端在拿到首份数据前显示「正在扫描本机会话…」，不显示空列表。
 
 ## 数据与接口
 - Tauri：`load_distillation_workbench`、`run_distillation_workbench`、`query_distillation_task`、`cancel_distillation_task`、`save_distillation_output`、`delete_distillation_candidates`；前端只传供应商 ID/模型 ID，密钥只在 Rust 加载。

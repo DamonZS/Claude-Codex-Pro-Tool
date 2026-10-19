@@ -1,5 +1,6 @@
 import {
   Boxes,
+  Brain,
   FlaskConical,
   LayoutDashboard,
   MessageSquare,
@@ -29,6 +30,7 @@ export const routes: RouteItem[] = [
   { id: "overview", label: "概览", icon: LayoutDashboard, description: "服务状态、异常与近期操作", keywords: ["首页", "状态", "dashboard"] },
   { id: "supplier", label: "供应商与路由", icon: Network, description: "第三方 API、模型映射、代理与故障转移", keywords: ["provider", "api", "model", "protocol", "模型", "协议", "代理", "中转"] },
   { id: "clients", label: "蒸馏工作台", icon: FlaskConical, description: "从本机会话提炼并管理可复用的能力与记忆资产", keywords: ["distill", "蒸馏", "skill", "workflow", "prompt", "persona", "memory"] },
+  { id: "memory", label: "记忆库", icon: Brain, description: "蒸馏产出的画像与任务记忆，可编辑、导出与删除", keywords: ["memory", "记忆", "画像", "persona", "任务记忆"] },
   { id: "themes", label: "主题中心", icon: Palette, description: "导入、应用与恢复 Codex 主题", keywords: ["theme", "主题", "皮肤", "外观"] },
   { id: "prompts", label: "系统提示词", icon: FileText, description: "管理 Codex 指令模板与生效方式", keywords: ["prompt", "instructions", "提示词", "指令"] },
   { id: "sessions", label: "会话", icon: MessageSquare, description: "本地会话、项目归属、迁移与供应商同步", keywords: ["session", "会话"] },
@@ -100,6 +102,7 @@ export function routeSubtitle(route: Route) {
     overview: "",
     supplier: "",
     clients: "",
+    memory: "",
     themes: "",
     prompts: "",
     tools: "",
