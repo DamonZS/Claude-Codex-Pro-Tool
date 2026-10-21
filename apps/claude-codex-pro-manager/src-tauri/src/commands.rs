@@ -8289,6 +8289,10 @@ pub struct MemoryDeleteRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MemoryExportRequest {
     pub id: String,
+    /// Folder the user picked in the save dialog. Absent falls back to the
+    /// system Downloads folder.
+    #[serde(default)]
+    pub directory: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -8560,7 +8564,26 @@ pub async fn export_memory_library_entry(
             &updated_at,
             &candidate.output,
         );
-        let dir = memory_export_dir();
+        let dir = match request
+            .directory
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(raw) => {
+                let chosen = PathBuf::from(raw);
+                if !chosen.is_dir() {
+                    return failed(
+                        "导出文件夹不存在，请重新选择。",
+                        MemoryExportPayload {
+                            path: String::new(),
+                        },
+                    );
+                }
+                chosen
+            }
+            None => memory_export_dir(),
+        };
         if fs::create_dir_all(&dir).is_err() {
             return failed(
                 "无法创建导出目录。",

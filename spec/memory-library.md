@@ -27,8 +27,8 @@
 1. 在蒸馏工作台跑完「画像 / 任务记忆」，或点击历史卡片的「去记忆库查看」。
 2. 进入「记忆库」：顶部看到记忆总数 / 画像 / 蒸馏沉淀 / 最近更新，下面是搜索与分类。
 3. 每条记忆卡片显示类型、标题、正文摘要、更新时间，以及「导出 MD / 编辑 / 删除」。
-4. 点击「编辑」打开「编辑记忆」弹窗：可改类型、一句话标题、说明，然后保存；「导出 MD」把
-   frontmatter + 完整正文写到系统下载目录。
+4. 点击「编辑」打开「编辑记忆」弹窗：可改类型、一句话标题、说明，然后保存；「导出 MD」先弹出文件夹选择，再把
+   frontmatter + 完整正文写入用户选中的文件夹（取消则不写）。
 5. 删除后卡片立即消失，列表计数同步更新。
 
 ## 功能要求
@@ -72,7 +72,7 @@ Tauri 命令（均为 `spawn_blocking`，返回 `MemoryLibraryPayload`，导出�
 | `load_memory_library` | 无 | 读取全部已批准画像 / 任务记忆，按 `updatedAt` 倒序 |
 | `save_memory_library_entry` | `{ id?, kind, title, body }` | 校验类型与必填；更新候选并重写记忆文件；`id` 为空时新建 |
 | `delete_memory_library_entries` | `{ ids }` | 删除 1–100 条候选与对应记忆文件 |
-| `export_memory_library_entry` | `{ id }` | 写 `title/type/source/updatedAt` frontmatter + 正文到下载目录，返回路径 |
+| `export_memory_library_entry` | `{ id, directory? }` | 写 `title/type/source/updatedAt` frontmatter + 正文；`directory` 为用户在保存弹窗中选择的文件夹（不存在则报错），缺省时回退系统下载目录；返回路径 |
 
 `MemoryLibraryPayload`：`{ entries: [{ id, kind, title, body, source, createdAt, updatedAt }],
 counts: { total, persona, memory }, updatedAt }`。

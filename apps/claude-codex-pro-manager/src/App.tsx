@@ -879,9 +879,12 @@ export function App() {
     return result;
   };
 
-  const exportMemoryLibraryEntry = async (id: string) =>
+  const exportMemoryLibraryEntry = async (id: string, directory?: string) =>
     run(
-      () => call<MemoryExportResult>("export_memory_library_entry", { request: { id } }),
+      () =>
+        call<MemoryExportResult>("export_memory_library_entry", {
+          request: { id, directory: directory ?? null },
+        }),
       "导出记忆",
       { trackBusy: false, notify: false },
     );

@@ -166,7 +166,8 @@ export function createActionsShape() {
       body: string;
     }) => null as MemoryLibraryResult | null,
     deleteMemoryLibraryEntries: async (_ids: string[]) => null as MemoryLibraryResult | null,
-    exportMemoryLibraryEntry: async (_id: string) => null as MemoryExportResult | null,
+    exportMemoryLibraryEntry: async (_id: string, _directory?: string) =>
+      null as MemoryExportResult | null,
     openMemoryLibrary: () => {},
     readDistillationTranscript: async (_request: { agent: string; sessionId: string }) => null as AitrackerSessionDetailResult | null,
     loadClaudeSessionContext: async (_session: ClaudeSession) => {},

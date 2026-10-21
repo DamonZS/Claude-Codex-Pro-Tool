@@ -159,6 +159,31 @@ fn is_reasoning_role(role: &str) -> bool {
     )
 }
 
+/// Tool calls and their outputs are transcript noise for distillation: the
+/// Claude reader renders them as `Tool call: <name>` messages with role `tool`.
+/// Feeding those to the model made it echo shell commands instead of distilling
+/// the conversation (seen as `**tool**: Tool call: PowerShell` in a memory).
+fn is_tool_role(role: &str) -> bool {
+    matches!(
+        role.trim().to_ascii_lowercase().as_str(),
+        "tool"
+            | "tool_call"
+            | "tool-call"
+            | "tool_result"
+            | "tool-result"
+            | "tool_use"
+            | "tool-use"
+            | "function"
+            | "function_call"
+            | "function-result"
+    )
+}
+
+/// Roles worth sending to the distillation model.
+fn is_distillable_role(role: &str) -> bool {
+    !is_reasoning_role(role) && !is_tool_role(role)
+}
+
 /// `read_bodies` makes a whole-session selection (no message range) read the
 /// transcript instead of sending only metadata. Offline runs pass `false`.
 fn load_material(
@@ -254,7 +279,7 @@ fn load_material(
                 let messages = transcript
                     .messages
                     .into_iter()
-                    .filter(|message| !is_reasoning_role(&message.role))
+                    .filter(|message| is_distillable_role(&message.role))
                     .map(|message| SegmentMessage {
                         role: message.role,
                         text: message.text,
@@ -287,7 +312,7 @@ fn load_material(
                     .collect::<Vec<_>>();
                 let window = extract_segment_messages(&messages, start, end)
                     .into_iter()
-                    .filter(|message| !is_reasoning_role(&message.role))
+                    .filter(|message| is_distillable_role(&message.role))
                     .collect::<Vec<_>>();
                 if !window.is_empty() {
                     loaded.materials.push(SegmentMaterial {
@@ -475,6 +500,14 @@ pub async fn execute_distillation(
         .await
         .map_err(|_| DistillError::Failed("素材读取任务失败。".into()))?
         .map_err(DistillError::Failed)?;
+    // Never distil metadata only: without a transcript the model would invent
+    // content (or echo tool noise), which surfaces as an empty/garbage memory.
+    if !offline && loaded.materials.is_empty() {
+        return Err(DistillError::Failed(
+            "未能读取所选会话的对话正文，无法蒸馏真实内容；请确认会话文件仍在本机后重试（errors.distillation.materialUnavailable）。"
+                .into(),
+        ));
+    }
     ensure_active(&task_id)?;
 
     super::patch_distillation_task(&task_id, "generating", 30, None, None);
@@ -1154,6 +1187,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn distill_material_skips_tool_and_reasoning_messages() {
+        assert!(!is_distillable_role("tool"));
+        assert!(!is_distillable_role("tool_result"));
+        assert!(!is_distillable_role("thinking"));
+        assert!(is_distillable_role("user"));
+        assert!(is_distillable_role("assistant"));
+        assert!(is_distillable_role("USER"));
+    }
     #[test]
     fn distill_save_validates_names_and_paths() {
         assert!(validate_skill_files("", None, "x").is_err());

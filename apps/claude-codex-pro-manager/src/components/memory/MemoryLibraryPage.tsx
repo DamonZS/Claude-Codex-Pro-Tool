@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import type { AppActions } from "@/lib/actions";
 import type { MemoryLibraryEntry, MemoryLibraryResult } from "@/types";
@@ -25,7 +26,14 @@ export function MemoryLibraryPage({
   const counts = data?.counts ?? { total: 0, persona: 0, memory: 0 };
 
   const exportEntry = async (entry: MemoryLibraryEntry) => {
-    const result = await actions.exportMemoryLibraryEntry(entry.id);
+    // Let the user pick the destination folder first; cancel means no write.
+    const picked = await open({
+      directory: true,
+      multiple: false,
+      title: "选择记忆导出文件夹",
+    });
+    if (!picked || Array.isArray(picked)) return;
+    const result = await actions.exportMemoryLibraryEntry(entry.id, picked);
     const ok = result?.status === "ok";
     actions.showNotice({
       title: "导出记忆",
