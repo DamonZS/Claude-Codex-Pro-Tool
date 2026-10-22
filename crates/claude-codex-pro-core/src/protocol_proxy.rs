@@ -438,9 +438,6 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
         return;
     };
 
-    // 🔍 DEBUG
-    eprintln!("🔍 [DEBUG] normalize: 处理 {} 个输入项", items.len());
-
     // 收集 call_ids
     let mut known_call_ids = BTreeSet::new();
     for item in items.iter() {
@@ -455,12 +452,9 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
                 .filter(|v| !v.is_empty())
             {
                 known_call_ids.insert(call_id.to_string());
-                eprintln!("🔍 [DEBUG] 收集 call_id: {}", call_id);
             }
         }
     }
-
-    eprintln!("🔍 [DEBUG] 已知 call_ids: {:?}", known_call_ids);
 
     // 补全工具输出
     for item in items.iter_mut() {
@@ -489,11 +483,8 @@ fn normalize_responses_tool_output_call_ids(body: &mut Value) {
 
         if let Some(id) = candidate_id {
             if let Some(obj) = item.as_object_mut() {
-                obj.insert("call_id".to_string(), Value::String(id.clone()));
-                eprintln!("✅ [DEBUG] 添加 call_id: {}", id);
+                obj.insert("call_id".to_string(), Value::String(id));
             }
-        } else {
-            eprintln!("❌ [DEBUG] 无法匹配 call_id");
         }
     }
 }
@@ -1076,10 +1067,11 @@ async fn open_responses_proxy_request_with_relay(
         RelayProtocol::Responses => request_json.clone(),
         RelayProtocol::ChatCompletions => responses_to_chat_completions(request_json.clone())?,
     };
+    let target_is_loopback = crate::http_client::url_target_is_loopback(&base_url);
     let client = if is_stream {
-        crate::http_client::streaming_proxy_client(&relay.user_agent)?
+        crate::http_client::streaming_proxy_client_for(&relay.user_agent, target_is_loopback)?
     } else {
-        crate::http_client::proxied_client(&relay.user_agent)?
+        crate::http_client::proxied_client_for(&relay.user_agent, target_is_loopback)?
     };
     let upstream_url = match relay.protocol {
         RelayProtocol::Responses => responses_url(&base_url),
@@ -1135,7 +1127,10 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
         anyhow::bail!("Chat Completions 上游 Key 不能为空");
     }
 
-    let client = crate::http_client::proxied_client(&relay.user_agent)?;
+    let client = crate::http_client::proxied_client_for(
+        &relay.user_agent,
+        crate::http_client::url_target_is_loopback(&relay.base_url),
+    )?;
     let upstream = client
         .get(models_url(&relay.base_url))
         .bearer_auth(relay.api_key.trim())
@@ -1355,10 +1350,11 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let target_is_loopback = crate::http_client::url_target_is_loopback(&base_url);
     let client = if is_stream {
-        crate::http_client::streaming_proxy_client(&relay.user_agent)?
+        crate::http_client::streaming_proxy_client_for(&relay.user_agent, target_is_loopback)?
     } else {
-        crate::http_client::proxied_client(&relay.user_agent)?
+        crate::http_client::proxied_client_for(&relay.user_agent, target_is_loopback)?
     };
     let upstream_url = claude_messages_url(&base_url);
     let request_body_fields = request_json
@@ -1779,10 +1775,11 @@ pub async fn open_chat_completions_proxy_request(
         .get("stream")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let target_is_loopback = crate::http_client::url_target_is_loopback(&relay.base_url);
     let client = if is_stream {
-        crate::http_client::streaming_proxy_client(&relay.user_agent)?
+        crate::http_client::streaming_proxy_client_for(&relay.user_agent, target_is_loopback)?
     } else {
-        crate::http_client::proxied_client(&relay.user_agent)?
+        crate::http_client::proxied_client_for(&relay.user_agent, target_is_loopback)?
     };
     let upstream = client
         .post(chat_completions_url(&relay.base_url))

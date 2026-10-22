@@ -56,6 +56,7 @@ import {
   supplierApiFormatRequiresRoute,
   SUPPLIER_API_FORMAT_OPTIONS,
   supplierCodexCatalogJson,
+  supplierCodexCatalogLimitTokens,
   supplierCodexCatalogModelList,
   supplierCodexCatalogRows,
   type SupplierCodexCatalogRow,
@@ -596,7 +597,7 @@ export function SupplierScreen({
       ...(firstRow ? {
         model: firstRow.model.trim(),
         testModel: firstRow.model.trim(),
-        contextWindow: firstRow.supports1m ? "1000000" : "",
+        contextWindow: firstRow.supports1m ? "1000000" : supplierCodexCatalogLimitTokens(firstRow.maxContextWindow),
       } : {}),
     });
   };
@@ -1422,8 +1423,8 @@ env_key = "OPENAI_API_KEY"
                     <Button onClick={addSupplierCodexCatalogModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
                   </div>
                 </div>
-                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；勾选 1M 表示启用百万上下文。</p>
-                <div className="supplier-codex-catalog-grid header"><span>菜单显示名</span><span>实际请求模型</span><span>1M 上下文</span><span>最大上下文</span><span /></div>
+                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；勾选 1M 直接落 1000000 上下文，不勾时按「最大上下文」的 K 值生效（留空默认 256K）。</p>
+                <div className="supplier-codex-catalog-grid header"><span>菜单显示名</span><span>实际请求模型</span><span>1M 上下文</span><span>最大上下文（K）</span><span /></div>
                 {supplierCodexCatalogModels.length ? supplierCodexCatalogModels.map((row, index) => (
                   <div className="supplier-codex-catalog-grid" key={row.rowId}>
                     <input
@@ -1462,13 +1463,17 @@ env_key = "OPENAI_API_KEY"
                       />
                       <span>1M</span>
                     </label>
-                    <input
-                      aria-label={`最大上下文 ${index + 1}`}
-                      inputMode="numeric"
-                      onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { maxContextWindow: event.currentTarget.value.replace(/[^\d]/g, "") })}
-                      placeholder="自动（按模型）"
-                      value={row.maxContextWindow}
-                    />
+                    <div className="supplier-codex-catalog-limit">
+                      <input
+                        aria-label={`最大上下文（K）${index + 1}`}
+                        disabled={row.supports1m}
+                        inputMode="numeric"
+                        onChange={(event) => updateSupplierCodexCatalogModel(row.rowId, { maxContextWindow: event.currentTarget.value.replace(/[^\d]/g, "") })}
+                        placeholder="256"
+                        value={row.supports1m ? "1000" : row.maxContextWindow}
+                      />
+                      <span aria-hidden="true">K</span>
+                    </div>
                     <button aria-label="删除模型" className="supplier-codex-catalog-remove" onClick={() => removeSupplierCodexCatalogModel(row.rowId)} title="删除模型" type="button"><Trash2 className="h-4 w-4" /></button>
                   </div>
                 )) : <p className="supplier-codex-catalog-empty">尚未添加模型；可手动添加，或先获取上游模型后从列表选择。</p>}

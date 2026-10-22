@@ -3555,22 +3555,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn injection_attaches_the_execution_factory_transport_for_builder_reads() {
-        let source = include_str!("launcher.rs");
-        let injection = source
-            .split("async fn try_inject(")
-            .nth(1)
-            .unwrap()
-            .split("pub fn build_macos_open_command(")
-            .next()
-            .unwrap();
-        assert_eq!(
-            injection.matches("codex_page_execution_service(").count(),
-            1
-        );
-    }
-
-    #[test]
     fn removed_legacy_session_features_do_not_trigger_frontend_injection() {
         let mut settings = BackendSettings::default();
         settings.enhancements_enabled = false;

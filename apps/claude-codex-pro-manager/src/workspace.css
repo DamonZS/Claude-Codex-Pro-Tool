@@ -2137,7 +2137,6 @@ body {
 .supplier-editor-card,
 .supplier-ccswitch-config-card,
 .supplier-advanced-card,
-.supplier-direct-model-list-body,
 .supplier-model-map-table {
   min-width: 0;
   border-color: var(--workspace-border);
@@ -2434,7 +2433,6 @@ body {
   .supplier-ccswitch-form-card,
   .supplier-ccswitch-config-card,
   .supplier-advanced-card,
-  .supplier-direct-model-list-body,
   .supplier-model-map-table,
   .supplier-ccswitch-collapse-card
 ) {
@@ -2551,15 +2549,13 @@ body {
 
 .supplier-ccswitch-config-card,
 .supplier-advanced-card,
-.supplier-direct-model-list-body,
 .supplier-model-map-table {
   border: 1px solid var(--workspace-border);
   padding: 14px;
 }
 
 .supplier-advanced-card > summary,
-.supplier-ccswitch-collapse-head,
-.supplier-direct-model-list > summary {
+.supplier-ccswitch-collapse-head {
   color: var(--workspace-text);
 }
 
@@ -9646,7 +9642,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   .supplier-ccswitch-form-card,
   .supplier-ccswitch-config-card,
   .supplier-advanced-card,
-  .supplier-direct-model-list-body,
   .supplier-model-map-table,
   .supplier-ccswitch-collapse-card
 ) {

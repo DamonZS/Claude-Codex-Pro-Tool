@@ -1549,11 +1549,17 @@ fn apply_context_limits_to_config(
 }
 
 fn relay_profile_context_window(profile: &RelayProfile) -> String {
-    if !relay_profile_targets_claude(profile) && profile.context_window.trim().is_empty() {
-        "1000000".to_string()
-    } else {
-        profile.context_window.clone()
+    if !relay_profile_targets_claude(profile) {
+        // 模型映射里的「最大上下文 / 1M」决定实际生效窗口。
+        if let Some(window) = crate::model_catalog::codex_catalog_effective_context_window(profile)
+        {
+            return window;
+        }
+        if profile.context_window.trim().is_empty() {
+            return "1000000".to_string();
+        }
     }
+    profile.context_window.clone()
 }
 
 fn toml_value_is_subset(target: &toml_edit::Value, source: &toml_edit::Value) -> bool {

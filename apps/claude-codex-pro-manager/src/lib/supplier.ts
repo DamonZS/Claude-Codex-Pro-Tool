@@ -160,6 +160,20 @@ export type SupplierCodexCatalogRow = {
   maxContextWindow: string;
 };
 
+/** 「最大上下文」输入框的默认 K 值：未勾 1M 且留空时按 256K 落盘。 */
+const CODEX_CATALOG_DEFAULT_LIMIT_K = 256;
+
+/** 把「最大上下文」输入框的 K 值换算成落盘的字节数。 */
+export function supplierCodexCatalogLimitTokens(maxContextWindow: string) {
+  const kilo = Number.parseInt(String(maxContextWindow ?? "").replace(/[^\d]/g, ""), 10);
+  return String((kilo > 0 ? kilo : CODEX_CATALOG_DEFAULT_LIMIT_K) * 1000);
+}
+
+function codexCatalogLimitK(value: unknown) {
+  const tokens = Number.parseInt(String(value ?? "").replace(/[^\d]/g, ""), 10);
+  return tokens > 0 ? String(Math.round(tokens / 1000)) : String(CODEX_CATALOG_DEFAULT_LIMIT_K);
+}
+
 export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCatalogRow[] {
   const isCodex = (profile.targetApp || "codex") === "codex";
   const raw = String(profile.codexCatalogJson ?? "").trim();
@@ -185,7 +199,9 @@ export function supplierCodexCatalogRows(profile: RelayProfile): SupplierCodexCa
           const supports1m = isCodex
             ? value.supports1m !== false && value.supports_1m !== false && legacyContextWindow !== ""
             : false;
-          const maxContextWindow = String(value.maxContextWindow ?? value.max_context_window ?? "").replace(/[^\d]/g, "");
+          const maxContextWindow = isCodex
+            ? codexCatalogLimitK(value.maxContextWindow ?? value.max_context_window)
+            : String(value.maxContextWindow ?? value.max_context_window ?? "").replace(/[^\d]/g, "");
           return [{ displayName, model, supports1m, maxContextWindow }];
         });
       }
@@ -218,12 +234,12 @@ export function supplierCodexCatalogJson(rows: SupplierCodexCatalogRow[]) {
     if (!model || seen.has(model)) return [];
     seen.add(model);
     const displayName = row.displayName.trim();
-    const maxContextWindow = row.maxContextWindow.replace(/[^\d]/g, "");
     return [{
       model,
       ...(displayName ? { displayName } : {}),
-      ...(row.supports1m ? { contextWindow: 1_000_000 } : { supports1m: false }),
-      ...(maxContextWindow ? { maxContextWindow: Number.parseInt(maxContextWindow, 10) } : {}),
+      ...(row.supports1m
+        ? { contextWindow: 1_000_000, maxContextWindow: 1_000_000 }
+        : { supports1m: false, maxContextWindow: Number.parseInt(supplierCodexCatalogLimitTokens(row.maxContextWindow), 10) }),
     }];
   });
   return JSON.stringify(normalized, null, 2);
@@ -240,6 +256,17 @@ export function supplierCodexCatalogModelList(rows: SupplierCodexCatalogRow[]) {
   } catch {
     return "";
   }
+}
+
+/**
+ * Codex 目标实际生效的 `model_context_window`：勾了 1M 落 1000000，
+ * 不勾按首行「最大上下文」的 K 值（留空 256K）；没有映射行时返回空串。
+ */
+export function supplierCodexEffectiveContextWindow(profile: RelayProfile) {
+  if ((profile.targetApp || "codex") !== "codex") return "";
+  const firstRow = supplierCodexCatalogRows(profile).find((row) => row.model.trim());
+  if (!firstRow) return "";
+  return firstRow.supports1m ? "1000000" : supplierCodexCatalogLimitTokens(firstRow.maxContextWindow);
 }
 
 export function supplierDirectModelRows(modelList: string): SupplierDirectModelRow[] {
@@ -820,7 +847,7 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
   const baseUrl = profile.baseUrl.trim();
   const providerId = supplierIdFromName(profile.id || profile.name);
   const apiKey = supplierProfileResolvedApiKey(profile);
-  const contextWindow = normalizedContextWindow(profile.contextWindow);
+  const contextWindow = supplierCodexEffectiveContextWindow(profile) || normalizedContextWindow(profile.contextWindow);
   return [
     model ? `model = ${tomlString(model)}` : null,
     `model_provider = ${tomlString(providerId)}`,

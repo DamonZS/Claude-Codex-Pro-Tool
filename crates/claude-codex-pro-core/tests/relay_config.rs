@@ -1886,7 +1886,7 @@ base_url = "https://relay.example/v1"
         .to_string(),
         auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
         codex_catalog_json:
-            r#"[{"model":"provider-model","supports1m":false,"maxContextWindow":128000}]"#
+            r#"[{"model":"provider-model","supports1m":false,"maxContextWindow":256000}]"#
                 .to_string(),
         ..RelayProfile::default()
     };
@@ -1899,8 +1899,57 @@ base_url = "https://relay.example/v1"
     let catalog: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(catalog_path).unwrap()).unwrap();
     let model = &catalog["models"][0];
-    assert!(model.get("context_window").is_none());
-    assert_eq!(model["max_context_window"], 128000);
+    assert_eq!(model["context_window"], 256_000);
+    assert_eq!(model["max_context_window"], 256_000);
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(
+        config.contains("model_context_window = 256000"),
+        "不勾 1M 时应落「最大上下文」的 K 值：{config}"
+    );
+}
+
+#[test]
+fn apply_relay_profile_codex_one_m_ignores_smaller_max_context() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile = RelayProfile {
+        id: "relay-1m-wins".to_string(),
+        name: "勾了 1M".to_string(),
+        model: "provider-model".to_string(),
+        target_app: "codex".to_string(),
+        relay_mode: RelayMode::PureApi,
+        config_contents: r#"model = "provider-model"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "https://relay.example/v1"
+"#
+        .to_string(),
+        auth_contents: r#"{"OPENAI_API_KEY":"sk-new"}"#.to_string(),
+        codex_catalog_json: r#"[{"model":"provider-model","supports1m":true,"contextWindow":1000000,"maxContextWindow":256000}]"#
+            .to_string(),
+        ..RelayProfile::default()
+    };
+
+    apply_relay_profile_files_to_home_with_context(temp.path(), &profile, "").unwrap();
+    let catalog_path = temp
+        .path()
+        .join("model-catalogs")
+        .join("relay-relay-1m-wins.json");
+    let catalog: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(catalog_path).unwrap()).unwrap();
+    let model = &catalog["models"][0];
+    assert_eq!(model["context_window"], 1_000_000);
+    assert_eq!(model["max_context_window"], 1_000_000);
+
+    let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(
+        config.contains("model_context_window = 1000000"),
+        "勾了 1M 就落 1M：{config}"
+    );
 }
 
 #[test]

@@ -43,7 +43,12 @@
 - 生成条件：profile 的目标应用不是 Claude 系列，且 `codex_catalog_json` 能解析出至少一个非空 `model`。
 - 解析规则：接受 `model` / `displayName` 或 `display_name` / `contextWindow` 或 `context_window`；`model` 为空的行跳过；重复 `slug` 只保留第一条。
 - 显示名回退：`displayName` 为空时用 `model` 自身。
-- 上下文窗口：解析出大于 0 的整数时，条目写入 `context_window` 与 `max_context_window`；否则不写这两个字段。
+- 上下文窗口（2026-10-22 变更）：行内「最大上下文」以 **K 为单位**存储与展示，落盘时乘 1000 写入 `maxContextWindow`。
+  - 勾选「1M 上下文」：条目写入 `context_window` = `max_context_window` = `1000000`，忽略同行的 K 数值。
+  - 未勾选「1M 上下文」：条目写入 `context_window` = `max_context_window` = K × 1000；K 为空或非法时按默认 `256`（即 256000）处理。
+  - `config.toml` 的 `model_context_window` 取首行同一规则：勾 1M 为 `1000000`，否则为 K × 1000（默认 `256000`）。
+  - 显式不勾 1M（行内带 `supports1m: false`）且行内没有任何可解析数值：保持原状，不写这两个字段。
+  - 缺省 `supports1m` 的历史行（后端直接收到、不经前端序列化的旧 JSON）沿用旧的 `min()` 语义：`max_context_window` 取「显式值 → 该模型内置上限 → `1000000`」，`context_window` 取 `min(显式值或 1000000, max_context_window)`，因此仍会写入这两个字段。
 - 目录条目字段固定为：`slug`、`display_name`、`description`（取显示名）、`supported_reasoning_levels`（low/medium/high/xhigh 四档）、`shell_type` = `unified_exec`、`visibility` = `list`、`supported_in_api` = `true`、`priority`（从 1 递增）、`support_verbosity` = `true`、`truncation_policy` = `{"mode":"bytes","limit":10000}`、`experimental_supported_tools` = `[]`、`base_instructions` = `""`。
 - 目录文件顶层结构必须是对象 `{"models":[...]}`，不能是裸数组。
 - 目录文件编码为 UTF-8，不带 BOM。
@@ -54,9 +59,11 @@
 
 ## UI / 交互要求
 
-- 不新增、不删除、不移动任何界面元素。
-- 「模型映射」区块的提示文案、列头、placeholder、空态保持原样，本次只让后端行为与文案一致。
-- 保存与切换后的成功/失败通知语义不变。
+- 不新增、不删除、不移动「模型映射」区块的列与行结构。
+- 列头「最大上下文」改为「最大上下文（K）」；输入框只接受数字并带 `K` 单位后缀。
+- 「最大上下文」输入框默认值 `256`（256K）；勾选「1M 上下文」时该输入框禁用并显示 `1000`（1000K = 1M），取消勾选后恢复用户原值。
+- 1M 开关与 K 输入框的语义写进区块提示文案：勾 1M 落 1M，不勾按 K 值生效。
+- 空态与保存/切换的成功、失败通知语义不变。
 
 ## 数据与接口要求
 
@@ -80,5 +87,14 @@
 - `crates/claude-codex-pro-core/src/model_catalog.rs`：向 crate 内暴露映射解析结果，并提供目录 JSON 构造。
 - `crates/claude-codex-pro-core/src/relay_config.rs`：目录文件写入、根键注入、三个应用函数接线。
 - `crates/claude-codex-pro-core/tests/relay_config.rs`：新增覆盖映射投影、空映射、路径净化、清除回滚的测试。
+- `apps/claude-codex-pro-manager/src/lib/supplier.ts`：映射行的 K 单位读写与目录 JSON 序列化（2026-10-22 变更）。
+- `apps/claude-codex-pro-manager/src/components/supplier/SupplierScreen.tsx`：K 输入框、1M 禁用态与 `contextWindow` 派生（2026-10-22 变更）。
+- `apps/claude-codex-pro-manager/src/styles.css`：K 输入框单位后缀样式；同区块既有死 CSS 同族清理（2026-10-22 变更）。
+- `apps/claude-codex-pro-manager/src/workspace.css`：同区块既有死 CSS 同族清理（2026-10-22 变更）。
 - `spec/codex-native-model-catalog-from-supplier-mapping.md` 与 `acceptance/codex-native-model-catalog-from-supplier-mapping.md`。
 - 同步修订 `spec/remove-codex-model-selection-injection.md` 与 `acceptance/remove-codex-model-selection-injection.md` 的非目标表述，避免新旧规格冲突。
+
+## 变更记录
+
+- 2026-10-22：把「最大上下文」从字节数改为 K 单位（默认 256K），并修正「勾了 1M 却因同行 maxContextWindow 更小而被 `min()` 压回 256K」的问题；同时让未勾 1M 时的 K 值真正落到目录条目与 `config.toml` 的 `model_context_window`。依据：用户反馈 `config.toml` 仍为 1000000 且要求「不勾 1M 填多少落多少、勾了 1M 就落 1M」。
+- 2026-10-22：清理「模型映射 / 直连模型」区块内已无 TSX 引用的死 CSS（`styles.css` 与 `workspace.css` 各 5 处：`.supplier-direct-model-list*`、`.supplier-direct-model-empty`、`.supplier-mapping-card`）；`SupplierScreen.tsx` 现使用 `.supplier-direct-model-section` 等活跃选择器。依据：本区块 UI 重构后遗留，用户裁决「清理」。

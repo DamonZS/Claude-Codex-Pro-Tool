@@ -184,13 +184,37 @@ fn relay_profile_model_ids(profile: &RelayProfile) -> Vec<String> {
 pub(crate) fn relay_profile_catalog_models(
     profile: &RelayProfile,
 ) -> Vec<RelayProfileCatalogModel> {
+    let mapped = relay_profile_mapped_catalog_models(profile);
+    if !mapped.is_empty() {
+        return mapped;
+    }
+
+    let mut seen = HashSet::new();
+    std::iter::once(profile.model.as_str())
+        .chain(profile.model_list.split(['\r', '\n', ',']))
+        .map(str::trim)
+        .filter(|model| !model.is_empty() && seen.insert((*model).to_string()))
+        .map(|model| {
+            let max_context_window =
+                codex_model_max_context_window(model).unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW);
+            RelayProfileCatalogModel {
+                model: model.to_string(),
+                display_name: model.to_string(),
+                context_window: Some(DEFAULT_CODEX_CONTEXT_WINDOW.min(max_context_window)),
+                max_context_window: Some(max_context_window),
+            }
+        })
+        .collect()
+}
+
+/// 显式「模型映射」投影出的目录条目；映射为空时由调用方回落到模型列表。
+fn relay_profile_mapped_catalog_models(profile: &RelayProfile) -> Vec<RelayProfileCatalogModel> {
     let rows = serde_json::from_str::<Value>(&profile.codex_catalog_json)
         .ok()
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
     let mut seen = HashSet::new();
-    let mapped = rows
-        .into_iter()
+    rows.into_iter()
         .filter_map(|row| {
             let model = row.get("model")?.as_str()?.trim();
             if model.is_empty() || !seen.insert(model.to_string()) {
@@ -208,47 +232,58 @@ pub(crate) fn relay_profile_catalog_models(
                 json_positive_u64(&row, &["contextWindow", "context_window"]);
             let explicit_max_context_window =
                 json_positive_u64(&row, &["maxContextWindow", "max_context_window"]);
-            let supports_1m = row
+            let one_m_explicit = row
                 .get("supports1m")
                 .or_else(|| row.get("supports_1m"))
-                .and_then(Value::as_bool)
-                .unwrap_or(true);
-            let max_context_window = explicit_max_context_window
-                .or(explicit_context_window)
-                .or_else(|| codex_model_max_context_window(model))
-                .unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW);
-            let context_window = supports_1m.then(|| {
-                explicit_context_window
-                    .unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW)
-                    .min(max_context_window)
-            });
+                .and_then(Value::as_bool);
+            // 显式 { true }：勾了 1M 就落 1M，忽略同行更小的「最大上下文」。
+            // 显式 { false }：不勾，「最大上下文」就是生效窗口。
+            // 缺省（历史行）：沿用旧的 min() 语义。
+            let (context_window, max_context_window) = match one_m_explicit {
+                Some(true) => {
+                    let max = DEFAULT_CODEX_CONTEXT_WINDOW;
+                    (
+                        Some(explicit_context_window.unwrap_or(max).min(max)),
+                        Some(max),
+                    )
+                }
+                Some(false) => (
+                    explicit_max_context_window.or(explicit_context_window),
+                    explicit_max_context_window.or(explicit_context_window),
+                ),
+                None => {
+                    let max = explicit_max_context_window
+                        .or(explicit_context_window)
+                        .or_else(|| codex_model_max_context_window(model))
+                        .unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW);
+                    (
+                        Some(
+                            explicit_context_window
+                                .unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW)
+                                .min(max),
+                        ),
+                        Some(max),
+                    )
+                }
+            };
             Some(RelayProfileCatalogModel {
                 model: model.to_string(),
                 display_name,
                 context_window,
-                max_context_window: Some(explicit_max_context_window.unwrap_or(max_context_window)),
+                max_context_window,
             })
         })
-        .collect::<Vec<_>>();
-    if !mapped.is_empty() {
-        return mapped;
-    }
+        .collect::<Vec<_>>()
+}
 
-    std::iter::once(profile.model.as_str())
-        .chain(profile.model_list.split(['\r', '\n', ',']))
-        .map(str::trim)
-        .filter(|model| !model.is_empty() && seen.insert((*model).to_string()))
-        .map(|model| {
-            let max_context_window =
-                codex_model_max_context_window(model).unwrap_or(DEFAULT_CODEX_CONTEXT_WINDOW);
-            RelayProfileCatalogModel {
-                model: model.to_string(),
-                display_name: model.to_string(),
-                context_window: Some(DEFAULT_CODEX_CONTEXT_WINDOW.min(max_context_window)),
-                max_context_window: Some(max_context_window),
-            }
-        })
-        .collect()
+/// Codex 目录首行对应的实际生效上下文窗口；仅当存在显式模型映射时返回，
+/// 无映射时返回 `None`，让调用方沿用供应商自己的上下文设置。
+pub(crate) fn codex_catalog_effective_context_window(profile: &RelayProfile) -> Option<String> {
+    relay_profile_mapped_catalog_models(profile)
+        .into_iter()
+        .next()
+        .and_then(|model| model.context_window)
+        .map(|window| window.to_string())
 }
 
 fn json_positive_u64(row: &Value, keys: &[&str]) -> Option<u64> {
@@ -1006,7 +1041,13 @@ pub async fn discover_relay_profile_model_ids(
     if source.base_url.is_empty() {
         anyhow::bail!("Base URL 不能为空");
     }
-    let client = crate::http_client::proxied_client(&profile.user_agent)?;
+    // Model discovery hits the user's own relay when `base_url` is loopback;
+    // an ambient HTTP proxy would otherwise answer for it with a synthetic
+    // failure instead of reaching the local relay.
+    let client = crate::http_client::proxied_client_for(
+        &profile.user_agent,
+        crate::http_client::url_target_is_loopback(&source.base_url),
+    )?;
     let (models, status) = fetch_models_from_source(&client, &source).await;
     let models_request_succeeded = status.get("status").and_then(Value::as_str) == Some("ok");
     if !models_request_succeeded {

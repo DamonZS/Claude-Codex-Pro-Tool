@@ -1053,7 +1053,6 @@ fn pangu_memory_public_surfaces_are_removed() {
             "memory_assist",
             "memoryAssist",
             "codexMemory",
-            "/memory/",
             "claude-codex-pro-mcp",
             ".memory-",
             "overview-memory",
@@ -1070,7 +1069,7 @@ fn pangu_memory_public_surfaces_are_removed() {
 fn selected_pages_omit_redundant_heading_band() {
     let shell = normalize_source(include_str!("../../src/components/AppShell.tsx").to_string());
     assert!(shell.contains(
-        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" && route !== \"tools\" && route !== \"maintenance\" && route !== \"settings\" && route !== \"clients\" ? (\n            <div className=\"ops-page-heading\">"
+        "{route !== \"prompts\" && route !== \"overview\" && route !== \"sessions\" && route !== \"supplier\" && route !== \"themes\" && route !== \"tools\" && route !== \"maintenance\" && route !== \"settings\" && route !== \"clients\" && route !== \"memory\" ? (\n            <div className=\"ops-page-heading\">"
     ));
 }
 
@@ -1349,13 +1348,14 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         primary_routes.matches("id: \"").count(),
-        8,
-        "the sidebar must expose exactly eight primary destinations"
+        9,
+        "the sidebar must expose exactly nine primary destinations"
     );
     for (id, label) in [
         ("overview", "概览"),
         ("supplier", "供应商与路由"),
         ("clients", "蒸馏工作台"),
+        ("memory", "记忆库"),
         ("sessions", "会话"),
         ("tools", "插件、Skills 与 MCP"),
         ("settings", "设置"),
@@ -1370,7 +1370,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     assert!(primary_routes.contains("id: \"prompts\""));
     assert!(primary_routes.contains("icon: FileText"));
     assert!(!primary_routes.contains("id: \"models\""));
-    assert!(!primary_routes.contains("id: \"memory\""));
+    assert!(primary_routes.contains("id: \"memory\""));
     assert!(!primary_routes.contains("id: \"about\""));
 
     let compatibility_routes = source_section(
@@ -1399,8 +1399,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let document_title = &routes[routes
         .find("export function routeDocumentTitle")
         .expect("document title helper")..];
-    assert!(document_title.contains("\"CCP 管理工具\""));
-    assert!(document_title.contains("- CCP 管理工具"));
+    assert!(document_title.contains("? \"管理工具\""));
+    assert!(document_title.contains("- 管理工具"));
     assert!(!document_title.contains("Claude Codex Pro 管理工具"));
     assert!(routes.contains("normalizeRoute(window.__CLAUDE_CODEX_PRO_INITIAL_ROUTE)"));
     assert!(routes.contains("new URLSearchParams(window.location.search).get(\"view\")"));
@@ -1448,7 +1448,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "<section className=\"ops-screen\" data-route={route}>",
         "{routes.map((item) => {",
         "const activePrimaryRoute = primaryRoute(route);",
-        "aria-label=\"Agent 范围\"",
+        "ops-agent-scope-control",
         "activeSupplierName",
         "proxyHealth",
     ] {
@@ -1504,8 +1504,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     let about_screen = &screens[screens
         .find("export const AboutScreen")
         .expect("About screen")..];
-    assert!(about_screen.contains("<Panel title=\"关于 CCP\""));
-    assert!(about_screen.contains("detail=\"CCP 本地供应商、客户端、会话与维护控制台。\""));
+    assert!(about_screen.contains("<Panel title=\"关于\""));
+    assert!(about_screen.contains("detail=\"本地供应商、客户端、会话与维护控制台。\""));
     assert!(!about_screen.contains("<Panel title=\"关于 Claude Codex Pro\""));
     assert!(
         !app_shell.contains("onRefresh"),
@@ -1545,8 +1545,15 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
             "topbar context control must remain left of client actions: {control}"
         );
     }
-    assert!(commandbar.contains("[\"codex\", \"Codex\"]"));
-    assert!(commandbar.contains("[\"claude\", \"Claude\"]"));
+    // The inline [["codex","Codex"],["claude","Claude"]] toggle became an
+    // AGENT_APPS-driven scope dropdown; the shared catalog still offers codex
+    // and claude and never an "all" scope.
+    let agent_contract = read_frontend_file("components/settings/contract.ts");
+    assert!(agent_contract.contains("{ id: \"codex\", label: \"Codex\", routable: true }"));
+    assert!(agent_contract.contains("{ id: \"claude\", label: \"Claude Code\", routable: true }"));
+    assert!(!agent_contract.contains("id: \"all\""));
+    assert!(commandbar.contains("<div className=\"ops-agent-scope-control\""));
+    assert!(commandbar.contains("{AGENT_APPS.map((app) => {"));
     assert!(!commandbar.contains("[\"all\", \"全部\"]"));
     assert!(!commandbar.contains("ops-runtime-chip health"));
     for (handler, label) in [
@@ -1572,7 +1579,12 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert!(app.contains("const [agentScope, setAgentScope] = useState<AgentScope>(\"codex\")"));
     assert!(app.contains("onAgentScopeChange={setAgentScope}"));
-    assert!(app_shell.contains("export type AgentScope = \"codex\" | \"claude\";"));
+    // Agent scopes now alias the shared AGENT_APPS catalog instead of a
+    // two-value inline union; "all" still must not exist.
+    assert!(app_shell.contains("export type AgentScope = AgentAppId;"));
+    assert!(
+        app_shell.contains("import type { AgentAppId } from \"@/components/settings/contract\";")
+    );
     assert!(!app_shell.contains("export type AgentScope = \"all\""));
 
     let overview_screen = source_section(
@@ -1580,7 +1592,8 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "export function OverviewScreen",
         "const CONTACT_QQ_GROUP_PRIMARY_URL",
     );
-    assert!(screens.contains("type OverviewAgentScope = \"codex\" | \"claude\";"));
+    // Overview scope follows the shared agent catalog too.
+    assert!(screens.contains("type OverviewAgentScope = AgentAppId;"));
     assert!(overview_screen.contains("<OverviewDataDashboard agentScope={agentScope}"));
     assert!(overview_screen.contains("<AgentOverview capabilities={aitrackerCapabilities}"));
     assert!(!overview_screen.contains("overview-legacy-route"));
@@ -3843,11 +3856,18 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("source-parity"));
     assert!(supplier_screen.contains("supplier-ccswitch-form-card"));
     assert!(supplier_screen.contains("supplier-form-avatar"));
-    assert!(supplier_screen.contains("supplier-mapping-card"));
-    assert!(supplier_screen.contains("关闭时按原始模型 ID 直传"));
+    // Commit 40da83e replaced the Claude "需要模型映射" toggle card with the
+    // cc-switch style 接入方式 select; the direct/proxy switch must stay real.
+    assert!(supplier_screen.contains("<div className=\"supplier-model-config-section\">"));
+    assert!(supplier_screen.contains("<label htmlFor=\"claude-desktop-mode\">接入方式</label>"));
+    assert!(supplier_screen.contains("<option value=\"direct\">直连</option>"));
+    assert!(supplier_screen.contains("<option value=\"proxy\">模型映射</option>"));
     assert!(supplier_screen.contains(
-        "checked={!!generated.modelMappingEnabled} onChange={(value) => updateDraft({ modelMappingEnabled: value })}"
+        "onChange={(event) => updateDraft({ modelMappingEnabled: event.target.value === \"proxy\" })}"
     ));
+    assert!(
+        supplier_screen.contains("value={generated.modelMappingEnabled ? \"proxy\" : \"direct\"}")
+    );
     assert!(
         !supplier_screen.contains("<ToggleSwitch checked disabled onChange={() => undefined} />")
     );
@@ -3872,10 +3892,16 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("const updateSupplierCodexCatalogModel = ("));
     assert!(supplier_screen.contains("const removeSupplierCodexCatalogModel = ("));
     assert!(supplier_screen.contains("supplierCodexCatalogJson(rows)"));
-    assert!(supplier_screen.contains("if (draft.targetApp === \"codex\") return;"));
+    // e05ff36 turned the codex bail-out into a real codex-catalog merge branch.
+    assert!(supplier_screen.contains("if (draft.targetApp === \"codex\") {"));
+    assert!(supplier_screen.contains("writeSupplierCodexCatalogModels(mergedRows);"));
     assert!(supplier_screen.contains("例如: DeepSeek V4 Flash"));
     assert!(supplier_screen.contains("例如: deepseek-v4-flash"));
-    assert!(supplier_screen.contains("例如: 128000"));
+    // 最大上下文已改为 K 单位：K 包装 + K 后缀 + 勾 1M 时禁用并显示 1000。
+    assert!(supplier_screen.contains("<div className=\"supplier-codex-catalog-limit\">"));
+    assert!(supplier_screen.contains("placeholder=\"256\""));
+    assert!(supplier_screen.contains("<span aria-hidden=\"true\">K</span>"));
+    assert!(supplier_screen.contains("value={row.supports1m ? \"1000\" : row.maxContextWindow}"));
     assert!(supplier_screen.contains("SUPPLIER_USER_AGENT_PRESETS"));
     assert!(screens_file.contains("claude-cli/2.1.161 (external, cli)"));
     assert!(screens_file.contains("claude-cli/2.1.161"));
@@ -3904,8 +3930,12 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     );
     assert!(supplier_lib.contains("modelList: hasExplicitModelList ? modelList : model,"));
     assert!(supplier_screen.contains("generated.modelMappingEnabled ? ("));
-    assert!(supplier_screen.contains("手动指定 Claude Desktop 模型列表（高级，可选）"));
-    assert!(supplier_screen.contains("supplier-direct-model-list"));
+    // 40da83e 把「手动指定…（高级，可选）」折叠区改为常显的模型列表区块。
+    assert!(supplier_screen.contains("<div className=\"supplier-direct-model-section\">"));
+    assert!(supplier_screen.contains("<strong>模型列表</strong>"));
+    // 同上：折叠区容器已改为 supplier-direct-model-head / -rows。
+    assert!(supplier_screen.contains("<div className=\"supplier-direct-model-head\">"));
+    assert!(supplier_screen.contains("<div className=\"supplier-direct-model-rows\">"));
     assert!(supplier_screen.contains("const addSupplierDirectModel = () =>"));
     assert!(supplier_screen.contains("const updateSupplierDirectModel = ("));
     assert!(supplier_screen.contains("const removeSupplierDirectModel = ("));
@@ -3924,7 +3954,8 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_lib.contains("\"password\""));
     assert!(supplier_lib.contains("\"privatekey\""));
     assert!(supplier_lib.contains("normalized.endsWith(\"secret\")"));
-    assert!(supplier_screen.contains("获取模型列表"));
+    // 40da83e 起按钮文案统一为「获取模型」。
+    assert!(supplier_screen.contains("<Download className=\"h-4 w-4\" />获取模型"));
     assert!(supplier_screen.contains("添加模型"));
     assert!(supplier_screen.contains("aria-label=\"删除模型\""));
     assert!(!supplier_screen.contains("modelMappingEnabled: true, modelList:"));
@@ -3957,11 +3988,9 @@ fn supplier_screen_matches_ccswitch_style_layout_and_drag_sorting() {
     assert!(supplier_screen.contains("const routeEnabled = !!generated.routeEnabled;"));
     assert!(supplier_lib.contains("export function supplierRouteEnabled(profile: RelayProfile)"));
     assert!(supplier_lib.contains("return !!profile.routeEnabled;"));
-    assert!(
-        supplier_lib.contains(
-            "claudeDesktopMode: supplierRouteEnabled(generated) ? \"proxy\" : \"direct\""
-        )
-    );
+    // ac1d81b：直连判定下沉为 isDirectMode（关映射且无模型列表），meta 随之落 direct/proxy。
+    assert!(supplier_lib.contains("const isDirectMode = !generated.modelMappingEnabled"));
+    assert!(supplier_lib.contains("claudeDesktopMode: isDirectMode ? \"direct\" : \"proxy\","));
 
     assert!(supplier_screen.contains("聚合策略"));
     assert!(app_tsx.contains("失败切换"));

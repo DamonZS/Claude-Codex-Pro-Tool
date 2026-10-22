@@ -7,7 +7,7 @@
 1. Codex 目标 profile 的模型映射非空时，应用该 profile 会在 `<home>/model-catalogs/relay-<id>.json` 生成目录文件，顶层为 `{"models":[...]}`，条目数等于去重后的映射行数。
 2. 生成的 `config.toml` 含有根键 `model_catalog_json`，其值为该目录文件的绝对路径。
 3. 目录文件条目中 `slug` 等于「实际请求模型」，`display_name` 等于「菜单显示名」，`visibility` 为 `list`，`supported_in_api` 为 `true`。
-4. 映射中带上下文窗口时条目含 `context_window` 与 `max_context_window`；不带时不出现这两个字段。
+4. 不勾「1M 上下文」时，目录条目的 `context_window` 与 `max_context_window` 都等于该行「最大上下文」K 值 × 1000（K 为空按默认 `256` → 256000），且 `config.toml` 的 `model_context_window` 等于首行同一数值。
 5. 映射为空时 `config.toml` 不出现 `model_catalog_json`，且不生成 `model-catalogs/` 目录。
 6. profile 原有 `model_catalog_json`（用户自配）在映射为空时被原样保留。
 7. 清除中转配置后 `config.toml` 不再包含 `model_catalog_json`（回归既有行为）。
@@ -15,6 +15,9 @@
 9. 目录文件先于 `config.toml` 落盘：不存在“config.toml 引用了尚未写出的目录文件”的中间态。
 10. 映射解析与去重规则与 `crate::model_catalog::relay_profile_catalog_models` 完全一致，未引入第二套解析实现。
 11. 未新增或改动 `assets/inject/` 下任何文件，未新增任何 DOM / 状态 / `model/list` 注入路径。
+12. 勾「1M 上下文」时，目录条目 `context_window` 与 `max_context_window` 均为 `1000000`，`config.toml` 的 `model_context_window` 为 `1000000`，同行 K 输入框填写的数值不影响结果。
+13. 前端「最大上下文」列头为「最大上下文（K）」，输入框带 `K` 后缀、只接受数字、默认 `256`；勾选 1M 时输入框禁用并显示 `1000`，取消勾选后恢复用户原值。
+14. 映射/直连模型区块既有死 CSS 已清理：`.supplier-direct-model-list`、`.supplier-direct-model-list-body`、`.supplier-direct-model-list-head`、`.supplier-direct-model-empty`、`.supplier-mapping-card` 在 `apps/claude-codex-pro-manager/src/styles.css` 与 `src/workspace.css` 中无残留；清理后 `tsc` 与 `vite:build` 通过，同区块活跃选择器（`.supplier-codex-catalog-*`、`.supplier-direct-model-section`、`.supplier-direct-fields-*`、`.supplier-direct-toggle-*`、`.supplier-advanced-card`、`.supplier-ccswitch-savebar`）未受影响。
 
 ## 必需验证方式
 
@@ -127,3 +130,40 @@ $home2 = Join-Path $env:TEMP "ccp-catalog-e2e"
 
 - 未重启 Codex 桌面端做人工下拉目视确认（需用户侧操作，属环境限制，非代码问题）。
 - 仅 Windows 本机验证，未覆盖多平台。
+
+---
+
+## 执行记录（2026-10-22：最大上下文改 K 单位与 1M 语义）
+
+背景：用户反馈在「模型映射」把最大上下文填成 `256000` 后，`config.toml` 预览仍是 `model_context_window = 1000000`；要求「单位改成 K、默认 256K，不勾 1M 填多少落多少，勾了 1M 就落 1M」。
+
+规则变更：旧「第 4 条」按下述新语义生效（旧语义 = 不勾 1M 时只写 `max_context_window`、`config.toml` 恒为 1000000）。
+
+### 1. 判据命令（2026-10-22 实跑）
+
+| 命令 | 结果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | 通过（退出码 0） |
+| `cargo test -p claude-codex-pro-core --manifest-path Cargo.toml --test relay_config` | 117 passed；0 failed |
+| `cargo test -p claude-codex-pro-core --manifest-path Cargo.toml --test model_catalog` | 20 passed；0 failed |
+| `npm --prefix apps/claude-codex-pro-manager run check` | `tsc --noEmit` 退出码 0 |
+| `npm --prefix apps/claude-codex-pro-manager run vite:build` | 构建成功（7.99s） |
+| `cargo build --release` | 成功；`target/release/claude-codex-pro.exe` 27,950,080 字节 @ 2026-10-22 17:14（含本轮全部改动） |
+| `cargo test --workspace --no-fail-fast` | **全绿（退出码 0）**：`--test windows_subsystem` 90 passed/0 failed、`--test request_telemetry` 15/0（无代理与带 7897 代理两种环境）、`--test launcher` 67/0、`--test relay_config` 117/0、`--test model_catalog` 20/0、`--lib` 568/0（16 ignored） |
+| 集成期附带修复（各有独立文档） | ① `launcher.rs` 删除被 `eadfe32` 废弃的陈旧单测（用户裁决）；② `--test launcher` 补 8 处 `provider-sync` 期望（既有失败，`FakeHooks` 漏记 `settings.rs:564` 默认值）；③ `--test windows_subsystem` 对齐 12 处既有漂移（`40da83e`/`e05ff36`/`ac1d81b`/`0e697e7`，产品代码零改动）；④ `request_telemetry` 既有失败由环回代理绕过修复，见 `spec/relay-loopback-ambient-proxy-bypass.md` |
+
+### 2. 逐条对照
+
+| # | 验收项 | 状态 | 证据 |
+| --- | --- | --- | --- |
+| 4 | 不勾 1M 时 `context_window` = `max_context_window` = K×1000 | 通过 | `apply_relay_profile_respects_disabled_codex_one_m_context`（256000/256000）；`supplierCodexCatalogJson` 不勾分支写 `supports1m:false` + `maxContextWindow` |
+| 4 | 不勾 1M 时 `config.toml` 的 `model_context_window` 同步 | 通过 | 同一用例断言 `model_context_window = 256000`；`relay_profile_context_window` 改用 `codex_catalog_effective_context_window` |
+| 12 | 勾 1M 时条目与 `config.toml` 均为 1000000，忽略更小的 K 值 | 通过 | `apply_relay_profile_codex_one_m_ignores_smaller_max_context`（`supports1m:true` + `maxContextWindow:256000` → 1000000/1000000） |
+| 13 | 前端 K 输入框（列头、（K）后缀、默认 256、勾 1M 禁用显示 1000） | 通过 | `SupplierScreen.tsx` 映射行改用 `.supplier-codex-catalog-limit` 包装；`styles.css` 新增该规则；`npm run check` 与 `vite:build` 通过 |
+| 14 | 映射/直连区块既有死 CSS 清理 | 通过 | `grep -rn` 上述 5 个选择器在 `apps/claude-codex-pro-manager/src` 的 `.css` 中只命中 `styles.css.bak`（预先存在的备份文件，不属清理范围）；`styles.css` 5 处、`workspace.css` 5 处删除；删除后 `npm run check`=0、`vite:build` ✓ 3.72s、`cargo test --workspace --no-fail-fast` 仍全绿 |
+
+### 3. 已知取舍
+
+- `config.toml` 只有一个 `model_context_window`，多行映射时沿用既有「取首行」约定。
+- 历史行（无 `supports1m` 字段）保持旧的 `min()` 语义，避免影响既有 cc-switch 导入行。
+- 前端判定纯函数 `supplierCodexEffectiveContextWindow` 与后端 `codex_catalog_effective_context_window` 同规则双实现，用于让弹窗预览与实际落盘一致。
