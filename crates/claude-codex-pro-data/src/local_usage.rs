@@ -224,6 +224,91 @@ pub fn session_id_from_relative_file(source: &str, identity: &str) -> String {
     private_id(source, "file", &identity.replace('\\', "/"))
 }
 
+/// The raw session identity of a DeepSeek Harness transcript: the id its
+/// `session` record states, otherwise the directory the transcript lives in
+/// (DSH names that directory after the session). The usage reader stores this
+/// raw value and the event carries its hashed form, like the other readers.
+pub fn dsh_session_identity(identity: Option<&str>, path: &Path) -> String {
+    if let Some(value) = identity.map(str::trim).filter(|value| !value.is_empty()) {
+        return value.to_string();
+    }
+    let directory = dsh_directory_identity(path);
+    if !directory.is_empty() {
+        return directory;
+    }
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// A DSH session directory is named after its session id; the transcript inside
+/// is not (`session.jsonl.zstd`).
+fn dsh_directory_identity(path: &Path) -> String {
+    path.parent()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Session resolution for one usage file.
+///
+/// A file below a `subagents/` directory records a subagent's transcript, but
+/// the session a user sees is the one that owns that directory: those events,
+/// and the tokens they report, belong to the parent session instead of a
+/// session of their own.
+#[derive(Debug, Clone, Default)]
+pub struct SessionScope {
+    fallback: Option<String>,
+    parent: Option<String>,
+}
+
+impl From<Option<String>> for SessionScope {
+    fn from(fallback: Option<String>) -> Self {
+        Self {
+            fallback,
+            parent: None,
+        }
+    }
+}
+
+impl SessionScope {
+    fn for_file(source: &str, path: &Path) -> Self {
+        Self {
+            fallback: Some(session_id_from_relative_file(
+                source,
+                &path.to_string_lossy(),
+            )),
+            parent: subagent_parent_session_id(source, path),
+        }
+    }
+
+    fn resolve(&self, record: &Value, adapter: &UsageAdapter) -> Option<String> {
+        self.parent
+            .clone()
+            .or_else(|| {
+                session_id_from_structured(
+                    &adapter.source,
+                    first_value(record, &adapter.mapping.session_id),
+                )
+            })
+            .or_else(|| self.fallback.clone())
+    }
+}
+
+/// The parent session of a `subagents/` usage file, keyed the same way native
+/// session ids are keyed, so it matches the agent's own title source.
+fn subagent_parent_session_id(source: &str, path: &Path) -> Option<String> {
+    let mut parent: Option<String> = None;
+    for component in path.components() {
+        let value = component.as_os_str().to_string_lossy().to_string();
+        if value == "subagents" {
+            return parent.map(|parent| private_id(source, "structured", &parent));
+        }
+        parent = Some(value);
+    }
+    None
+}
+
 /// Return the display-safe project identity used by usage aggregation.
 ///
 /// AITracker keeps non-path project references as their own bucket. Absolute
@@ -344,6 +429,29 @@ fn claude_worktree_parent(path: &Path) -> Option<PathBuf> {
     Some(components[..index].iter().collect())
 }
 
+/// Display name for an agent, used when nothing can name its project.
+fn agent_display_name(source: &str) -> String {
+    match source {
+        "workbuddy" => "WorkBuddy".to_string(),
+        "codex" => "Codex".to_string(),
+        "claude-code" => "Claude Code".to_string(),
+        "dsh" => "DeepSeek Harness".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Project label for a session. Neither `cwd` nor a project segment is known
+/// for some rows; the agent's own name is a truthful label, while an `unknown`
+/// placeholder only looks like a project.
+fn session_project_label(source: &str, value: Option<&Value>) -> String {
+    let label = project_label(value);
+    if label == "unknown" {
+        agent_display_name(source)
+    } else {
+        label
+    }
+}
+
 pub fn project_label(value: Option<&Value>) -> String {
     value
         .and_then(Value::as_str)
@@ -399,8 +507,9 @@ fn records_from_json(value: &Value, mapping: &UsageFieldMapping) -> Vec<Value> {
 pub fn event_from_record(
     record: &Value,
     adapter: &UsageAdapter,
-    fallback_session_id: Option<String>,
+    session_scope: impl Into<SessionScope>,
 ) -> Option<LocalUsageEvent> {
+    let session_scope = session_scope.into();
     let timestamp = timestamp_value(record, &adapter.mapping)?;
     let input_tokens = token_value(record, &adapter.mapping.input_tokens);
     let cached_input_tokens = token_value(record, &adapter.mapping.cached_input_tokens);
@@ -421,11 +530,7 @@ pub fn event_from_record(
     if total_tokens == 0 {
         return None;
     }
-    let session_id = session_id_from_structured(
-        &adapter.source,
-        first_value(record, &adapter.mapping.session_id),
-    )
-    .or(fallback_session_id);
+    let session_id = session_scope.resolve(record, adapter);
     let event_identity = identifier(first_value(record, &adapter.mapping.event_id))
         .unwrap_or_else(|| format!("{timestamp}:{total_tokens}"));
     let id = private_id(
@@ -447,7 +552,10 @@ pub fn event_from_record(
             .unwrap_or_else(|| "observed".into()),
         duration_ms: first_value(record, &adapter.mapping.duration_ms)
             .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok())),
-        project: project_label(first_value(record, &adapter.mapping.project)),
+        project: session_project_label(
+            &adapter.source,
+            first_value(record, &adapter.mapping.project),
+        ),
         session_id,
         input_tokens,
         cached_input_tokens,
@@ -469,15 +577,12 @@ pub fn event_from_record(
 fn session_marker_from_record(
     record: &Value,
     adapter: &UsageAdapter,
-    fallback_session_id: Option<String>,
+    session_scope: impl Into<SessionScope>,
     fallback_timestamp: DateTime<Utc>,
 ) -> Option<LocalUsageEvent> {
+    let session_scope = session_scope.into();
     let timestamp = timestamp_value(record, &adapter.mapping).unwrap_or(fallback_timestamp);
-    let session_id = session_id_from_structured(
-        &adapter.source,
-        first_value(record, &adapter.mapping.session_id),
-    )
-    .or(fallback_session_id)?;
+    let session_id = session_scope.resolve(record, adapter)?;
     let event_identity = identifier(first_value(record, &adapter.mapping.event_id))
         .unwrap_or_else(|| timestamp.to_rfc3339());
     Some(LocalUsageEvent {
@@ -497,7 +602,10 @@ fn session_marker_from_record(
         timestamp: timestamp.to_rfc3339(),
         model: identifier(first_value(record, &adapter.mapping.model))
             .unwrap_or_else(|| "unknown".into()),
-        project: project_label(first_value(record, &adapter.mapping.project)),
+        project: session_project_label(
+            &adapter.source,
+            first_value(record, &adapter.mapping.project),
+        ),
         session_id: Some(session_id),
         input_tokens: 0,
         cached_input_tokens: 0,
@@ -515,8 +623,9 @@ fn session_marker_from_record(
 fn workbuddy_event_from_record(
     record: &Value,
     adapter: &UsageAdapter,
-    fallback_session_id: Option<String>,
+    session_scope: impl Into<SessionScope>,
 ) -> Option<LocalUsageEvent> {
+    let session_scope = session_scope.into();
     let raw_usage = value_at_path(record, "providerData.rawUsage")?;
     if !raw_usage.is_object() {
         return None;
@@ -557,11 +666,7 @@ fn workbuddy_event_from_record(
     if total_tokens == 0 {
         return None;
     }
-    let session_id = session_id_from_structured(
-        &adapter.source,
-        first_value(record, &adapter.mapping.session_id),
-    )
-    .or(fallback_session_id);
+    let session_id = session_scope.resolve(record, adapter);
     let event_identity = identifier(first_value(record, &adapter.mapping.event_id))
         .or_else(|| identifier(value_at_path(record, "providerData.messageId")))
         .unwrap_or_else(|| format!("{timestamp}:{total_tokens}"));
@@ -584,7 +689,10 @@ fn workbuddy_event_from_record(
             .or_else(|| identifier(value_at_path(record, "providerData.requestModelName")))
             .or_else(|| identifier(value_at_path(record, "providerData.requestModelId")))
             .unwrap_or_else(|| "auto".into()),
-        project: project_label(first_value(record, &adapter.mapping.project)),
+        project: session_project_label(
+            &adapter.source,
+            first_value(record, &adapter.mapping.project),
+        ),
         session_id,
         input_tokens,
         cached_input_tokens,
@@ -753,9 +861,8 @@ fn scan_sqlite_file(
             break;
         }
         if let Ok(value) = row {
-            let fallback =
-                session_id_from_relative_file(&adapter.source, &file_path.to_string_lossy());
-            if let Some(event) = event_from_record(&value, adapter, Some(fallback)) {
+            let scope = SessionScope::for_file(&adapter.source, file_path);
+            if let Some(event) = event_from_record(&value, adapter, scope) {
                 events.push(event);
             }
         }
@@ -835,7 +942,7 @@ pub fn scan_adapter(
             if usage_path.format == UsageFormat::Jsonl
                 && matches!(
                     adapter.source.as_str(),
-                    "codex" | "claude-code" | "every-code"
+                    "codex" | "claude-code" | "every-code" | "dsh"
                 )
             {
                 let (records, warnings) = crate::request_history::read_native_usage_file(
@@ -905,12 +1012,12 @@ pub fn scan_adapter(
                     Vec::new()
                 }
             };
-            let fallback = session_id_from_relative_file(&adapter.source, &path.to_string_lossy());
+            let scope = SessionScope::for_file(&adapter.source, &path);
             for value in values {
                 let event = if adapter.source == "workbuddy" {
-                    workbuddy_event_from_record(&value, adapter, Some(fallback.clone()))
+                    workbuddy_event_from_record(&value, adapter, scope.clone())
                 } else {
-                    event_from_record(&value, adapter, Some(fallback.clone()))
+                    event_from_record(&value, adapter, scope.clone())
                 };
                 if let Some(event) = event {
                     events.push(event);
@@ -1010,7 +1117,7 @@ fn scan_jsonl_file_inner(
         });
         return;
     }
-    let fallback = session_id_from_relative_file(&adapter.source, &path.to_string_lossy());
+    let scope = SessionScope::for_file(&adapter.source, path);
     let fallback_timestamp = file
         .metadata()
         .ok()
@@ -1036,19 +1143,16 @@ fn scan_jsonl_file_inner(
         match serde_json::from_slice::<Value>(&line) {
             Ok(value) => {
                 let event = if adapter.source == "workbuddy" {
-                    workbuddy_event_from_record(&value, adapter, Some(fallback.clone()))
+                    workbuddy_event_from_record(&value, adapter, scope.clone())
                 } else {
-                    event_from_record(&value, adapter, Some(fallback.clone()))
+                    event_from_record(&value, adapter, scope.clone())
                 };
                 if let Some(event) = event {
                     events.push(event);
                     bound_scan_events(events, adapter, diagnostics);
-                } else if let Some(marker) = session_marker_from_record(
-                    &value,
-                    adapter,
-                    Some(fallback.clone()),
-                    fallback_timestamp,
-                ) {
+                } else if let Some(marker) =
+                    session_marker_from_record(&value, adapter, scope.clone(), fallback_timestamp)
+                {
                     events.push(marker);
                     bound_scan_events(events, adapter, diagnostics);
                 }
@@ -1107,7 +1211,7 @@ pub fn event_from_request_record(record: &RequestRecord) -> LocalUsageEvent {
             .project
             .as_deref()
             .and_then(canonical_project_label)
-            .unwrap_or_else(|| "unknown".into()),
+            .unwrap_or_else(|| agent_display_name(source)),
         session_id: record
             .session_id
             .as_deref()
@@ -1236,6 +1340,33 @@ pub fn workbuddy_session_titles(home: &Path) -> Vec<(String, String)> {
     rows.filter_map(Result::ok).collect()
 }
 
+/// DeepSeek Harness session names, keyed by the raw session id
+/// (`session-<uuid>`), read from the head of each transcript: the title record
+/// is written early, so the usage reader's snapshot never has to be reused.
+pub fn dsh_session_titles(home: &Path) -> Vec<(String, String)> {
+    let mut titles = Vec::new();
+    let mut diagnostics = Vec::new();
+    for adapter in definition_adapters(home) {
+        if adapter.source != "dsh" {
+            continue;
+        }
+        for path in adapter
+            .paths
+            .iter()
+            .filter(|path| path.format == UsageFormat::Jsonl)
+            .flat_map(|path| collect_files(path, &adapter.source, &mut diagnostics))
+        {
+            let (identity, title) = crate::request_history::dsh_head_identity_and_title(&path);
+            let Some(title) = title.filter(|title| !title.trim().is_empty()) else {
+                continue;
+            };
+            let identity = identity.unwrap_or_else(|| dsh_session_identity(None, &path));
+            titles.push((identity, title));
+        }
+    }
+    titles
+}
+
 pub fn collect_workbuddy_sessions(home: &Path) -> Vec<LocalUsageSession> {
     let path = home.join(".workbuddy").join("workbuddy.db");
     let Ok(connection) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -1257,7 +1388,7 @@ pub fn collect_workbuddy_sessions(home: &Path) -> Vec<LocalUsageSession> {
         let project = cwd
             .as_deref()
             .map(|value| project_label(Some(&Value::String(value.to_string()))))
-            .unwrap_or_else(|| "unknown".into());
+            .unwrap_or_else(|| agent_display_name("workbuddy"));
         Ok(LocalUsageSession {
             id: private_id("workbuddy", "structured", &id),
             source: "workbuddy".into(),
@@ -1711,7 +1842,9 @@ fn definition_adapters(home: &Path) -> Vec<UsageAdapter> {
                 continue;
             };
             let glob = path.get("glob").and_then(Value::as_str).unwrap_or("*");
-            if glob.ends_with(".zstd") {
+            // A compressed transcript is only usable by an agent whose native
+            // reader decompresses it; every other agent still cannot read it.
+            if glob.ends_with(".zstd") && *source != "dsh" {
                 continue;
             }
             let base = path.get("base").and_then(Value::as_str).unwrap_or("home");
@@ -1839,6 +1972,7 @@ pub fn builtin_adapters(home: &Path) -> Vec<UsageAdapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn adapter(source: &str) -> UsageAdapter {
@@ -1870,6 +2004,158 @@ mod tests {
         );
         assert!(left.starts_with("session_"));
         assert!(!left.contains("real-session"));
+    }
+
+    /// Writes a DSH transcript: the log concatenates one zstd frame per JSONL
+    /// envelope, which is what the reader has to decode.
+    fn dsh_transcript(path: &Path, envelopes: &[Value]) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let mut bytes = Vec::new();
+        for envelope in envelopes {
+            let mut line = serde_json::to_vec(envelope).unwrap();
+            line.push(b'\n');
+            bytes.extend(zstd::stream::encode_all(line.as_slice(), 3).unwrap());
+        }
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn dsh_transcript_yields_usage_model_project_and_session() {
+        let directory = tempdir().unwrap();
+        dsh_transcript(
+            &directory
+                .path()
+                .join("session-11111111-2222-3333-4444-555555555555")
+                .join("session.v4.jsonl.zstd"),
+            &[
+                json!({
+                    "type": "session",
+                    "version": 4,
+                    "id": "session-11111111-2222-3333-4444-555555555555",
+                    "createdAt": 1_792_600_000_000u64,
+                    "cwd": "D:\\Project\\Claude-Codex-Pro-Tool"
+                }),
+                json!({
+                    "type": "session/title",
+                    "seq": 1,
+                    "time": 1_792_600_001_000u64,
+                    "data": {"title": "看下本项目：并且遵从以下规则"}
+                }),
+                json!({
+                    "type": "assistant/message",
+                    "seq": 2,
+                    "time": 1_792_600_002_000u64,
+                    "data": {
+                        "message": {
+                            "id": "msg-1",
+                            "source": {"provider": "deepseek-account", "model": "deepseek-flash"}
+                        },
+                        "usage": {"inputTokens": 7, "outputTokens": 5, "totalTokens": 12}
+                    }
+                }),
+            ],
+        );
+        let mut adapter = adapter("dsh");
+        adapter.paths.push(UsagePath {
+            root: directory.path().to_path_buf(),
+            glob: "**/session.v*.jsonl.zstd".into(),
+            format: UsageFormat::Jsonl,
+            query: None,
+        });
+        let (events, diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(events.len(), 1);
+        let event = &events[0];
+        assert_eq!(event.total_tokens, 12);
+        assert_eq!(event.model, "deepseek-flash");
+        assert_eq!(event.provider, "deepseek-account");
+        assert_eq!(event.project, "Claude-Codex-Pro-Tool");
+        assert_eq!(
+            event.session_id,
+            session_id_from_structured(
+                "dsh",
+                Some(&Value::String(
+                    "session-11111111-2222-3333-4444-555555555555".into()
+                ))
+            )
+        );
+    }
+
+    #[test]
+    fn dsh_titles_come_from_the_title_record_or_the_session_directory() {
+        let home = tempdir().unwrap();
+        let project = home
+            .path()
+            .join(".dsh")
+            .join("sessions")
+            .join("--D-Project-Claude-Codex-Pro-Tool--");
+        dsh_transcript(
+            &project
+                .join("session-11111111-2222-3333-4444-555555555555")
+                .join("session.v4.jsonl.zstd"),
+            &[
+                json!({
+                    "type": "session",
+                    "data": {
+                        "type": "session",
+                        "id": "session-11111111-2222-3333-4444-555555555555"
+                    }
+                }),
+                json!({
+                    "type": "session/title",
+                    "data": {"title": "看下本项目：并且遵从以下规则"}
+                }),
+            ],
+        );
+        dsh_transcript(
+            &project
+                .join("dc9296da-1637-49d4-9182-f1233fb09d1e")
+                .join("session.v3.jsonl.zstd"),
+            &[json!({
+                "type": "user/message",
+                "data": {"content": [{"type": "text", "text": "请先看下这个位置"}]}
+            })],
+        );
+        let mut titles = dsh_session_titles(home.path());
+        titles.sort();
+        assert_eq!(
+            titles,
+            vec![
+                (
+                    "dc9296da-1637-49d4-9182-f1233fb09d1e".to_string(),
+                    "请先看下这个位置".to_string()
+                ),
+                (
+                    "session-11111111-2222-3333-4444-555555555555".to_string(),
+                    "看下本项目：并且遵从以下规则".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn only_the_dsh_adapters_keep_compressed_transcripts() {
+        let home = tempdir().unwrap();
+        let adapters = builtin_adapters(home.path());
+        let dsh = adapters
+            .iter()
+            .find(|adapter| adapter.source == "dsh")
+            .expect("the dsh definition ships usage paths");
+        assert!(
+            dsh.paths
+                .iter()
+                .any(|path| path.glob.ends_with(".jsonl.zstd"))
+        );
+        assert!(
+            adapters
+                .iter()
+                .filter(|adapter| adapter.source != "dsh")
+                .flat_map(|adapter| adapter.paths.iter())
+                .all(|path| !path.glob.ends_with(".zstd")),
+            "an agent that cannot decompress must not advertise a compressed transcript"
+        );
     }
 
     #[test]
@@ -1955,7 +2241,7 @@ mod tests {
     fn mapping_counts_all_token_components() {
         let adapter = adapter("claude-code");
         let value = serde_json::json!({"timestamp":"2026-09-27T00:00:00Z","sessionId":"s1","model":"m","cwd":"C:\\work\\demo","usage":{"input_tokens":10,"cache_read_input_tokens":2,"output_tokens":3,"reasoning_tokens":4}});
-        let event = event_from_record(&value, &adapter, None).unwrap();
+        let event = event_from_record(&value, &adapter, SessionScope::default()).unwrap();
         assert_eq!(event.total_tokens, 19);
         assert_eq!(event.project, "demo");
     }
@@ -1978,7 +2264,7 @@ mod tests {
                 "usage": {"inputTokens": 52606, "outputTokens": 324, "totalTokens": 52930}
             }
         });
-        let event = event_from_record(&value, &adapter, None).unwrap();
+        let event = event_from_record(&value, &adapter, SessionScope::default()).unwrap();
         assert_eq!(event.agent, "workbuddy");
         assert_eq!(event.model, "auto");
         assert_eq!(event.total_tokens, 52930);
@@ -2055,7 +2341,7 @@ mod tests {
     fn duplicate_event_keeps_larger_snapshot() {
         let adapter = adapter("fixture");
         let value = serde_json::json!({"timestamp":"2026-09-27T00:00:00Z","sessionId":"s1","model":"m","usage":{"input_tokens":2,"output_tokens":3}});
-        let event = event_from_record(&value, &adapter, None).unwrap();
+        let event = event_from_record(&value, &adapter, SessionScope::default()).unwrap();
         let mut larger = event.clone();
         larger.total_tokens = 8;
         let snapshot = aggregate(vec![event, larger], Vec::new());
@@ -2071,8 +2357,8 @@ mod tests {
         let later = serde_json::json!({"id":"message-1","sessionId":"session-1","timestamp":"2026-09-27T00:00:01Z","input_tokens":8});
         let snapshot = aggregate(
             vec![
-                event_from_record(&first, &adapter, None).unwrap(),
-                event_from_record(&later, &adapter, None).unwrap(),
+                event_from_record(&first, &adapter, SessionScope::default()).unwrap(),
+                event_from_record(&later, &adapter, SessionScope::default()).unwrap(),
             ],
             Vec::new(),
         );
@@ -2132,6 +2418,127 @@ mod tests {
         assert_eq!(snapshot.totals.tokens.total_tokens, 9);
         assert_eq!(snapshot.by_source[0].key, "claude-code");
         assert_eq!(snapshot.details[0].agent, "claude-code");
+    }
+
+    #[test]
+    fn subagent_transcripts_merge_into_their_parent_session() {
+        let directory = tempdir().unwrap();
+        let parent = directory
+            .path()
+            .join(".workbuddy/projects/project-1/session-parent");
+        fs::create_dir_all(parent.join("subagents")).unwrap();
+        fs::write(
+            parent.join("session-parent.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "message",
+                    "sessionId": "session-parent",
+                    "cwd": "C:/work/project-1",
+                    "timestamp": 1_790_467_200_000_i64,
+                    "providerData": {"rawUsage": {"prompt_tokens": 10, "completion_tokens": 2}}
+                })
+            ),
+        )
+        .unwrap();
+        fs::write(
+            parent.join("subagents/agent-child.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "message",
+                    "sessionId": "session-child",
+                    "cwd": "C:/work/project-1",
+                    "timestamp": 1_790_467_260_000_i64,
+                    "providerData": {"rawUsage": {"prompt_tokens": 30, "completion_tokens": 4}}
+                })
+            ),
+        )
+        .unwrap();
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "workbuddy")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let parent_id =
+            session_id_from_structured("workbuddy", Some(&Value::String("session-parent".into())))
+                .unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.session_id.as_deref() == Some(parent_id.as_str()))
+        );
+        assert_eq!(
+            aggregate(events, Vec::new()).totals.tokens.total_tokens,
+            12 + 34
+        );
+    }
+
+    #[test]
+    fn claude_subagent_events_belong_to_the_parent_session() {
+        let directory = tempdir().unwrap();
+        let parent = directory
+            .path()
+            .join(".claude/projects/project-1/session-parent");
+        fs::create_dir_all(parent.join("subagents")).unwrap();
+        fs::write(
+            parent.join("subagents/agent-child.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "assistant",
+                    "sessionId": "session-parent",
+                    "cwd": "C:/work/project-1",
+                    "timestamp": "2026-09-27T00:00:00Z",
+                    "message": {
+                        "id": "message-1",
+                        "model": "model-1",
+                        "usage": {"input_tokens": 5, "output_tokens": 1}
+                    }
+                })
+            ),
+        )
+        .unwrap();
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "claude-code")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let parent_id = session_id_from_structured(
+            "claude-code",
+            Some(&Value::String("session-parent".into())),
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session_id, parent_id);
+        assert_eq!(events[0].project, "project-1");
+    }
+
+    #[test]
+    fn transcript_without_cwd_is_labelled_with_its_agent_name() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join(".workbuddy/projects/project-1");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("session-1.jsonl"),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "message",
+                    "sessionId": "session-1",
+                    "timestamp": 1_790_467_200_000_i64,
+                    "providerData": {"rawUsage": {"prompt_tokens": 10, "completion_tokens": 2}}
+                })
+            ),
+        )
+        .unwrap();
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "workbuddy")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].project, "WorkBuddy");
     }
 
     #[test]

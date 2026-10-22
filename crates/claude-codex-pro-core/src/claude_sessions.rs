@@ -285,6 +285,75 @@ pub fn list_claude_sessions_from_home(home: &Path) -> anyhow::Result<ClaudeSessi
     })
 }
 
+/// Titles for every Claude transcript below `~/.claude/projects`, keyed by the
+/// session id the local-usage scan derives from the same records.
+///
+/// `list_claude_sessions` only reports the sources its discovery recognises,
+/// while a usage scan reads every transcript in that tree; without this wider
+/// map the extra rows fall back to their project name. Transcripts inside a
+/// `subagents/` directory describe a subagent's turn, so they are skipped and
+/// the owning session's own transcript supplies the title.
+pub fn list_claude_session_titles_from_home(home: &Path) -> BTreeMap<String, String> {
+    let root = home.join(".claude").join("projects");
+    let mut titles = BTreeMap::new();
+    if !root.exists() {
+        return titles;
+    }
+    let trusted_root = fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+    let mut sources = BTreeMap::new();
+    let mut warnings = Vec::new();
+    let mut pending = vec![(root, 0usize)];
+    while let Some((directory, depth)) = pending.pop() {
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                let is_subagent_directory = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy() == "subagents")
+                    .unwrap_or(false);
+                if !is_subagent_directory && depth < 8 {
+                    pending.push((path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() || !has_extension(&path, "jsonl") {
+                continue;
+            }
+            let fallback_project = path
+                .parent()
+                .and_then(Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| PROJECT_SOURCE_KIND.to_string());
+            insert_source(
+                path,
+                &trusted_root,
+                PROJECT_SOURCE_KIND,
+                fallback_project,
+                &mut sources,
+                &mut warnings,
+            );
+        }
+    }
+    for source in sources.values() {
+        for session in parse_source(source).sessions {
+            if !session.title.trim().is_empty() {
+                titles.entry(session.id).or_insert(session.title);
+            }
+        }
+    }
+    titles
+}
+
 pub fn load_claude_session_context(
     session_id: &str,
     source_path: &Path,
@@ -1994,6 +2063,44 @@ mod tests {
             "filename-fallback"
         );
         assert_eq!(session_by_id(&inventory, "filename-session").cwd, project);
+    }
+
+    #[test]
+    fn session_titles_cover_transcripts_the_inventory_skips() {
+        let temp = tempfile::tempdir().expect("temp home");
+        let nested = temp
+            .path()
+            .join(".claude")
+            .join("projects")
+            .join("-workspace-nested")
+            .join("parent-session");
+        // A forked transcript below a session directory: the inventory reads
+        // top-level transcripts only, while a usage scan still sees this one.
+        write_jsonl(
+            &nested.join("nested-session.jsonl"),
+            &[json!({
+                "type": "user",
+                "sessionId": "nested-session",
+                "message": {"content": "Nested session title"}
+            })],
+        );
+        // A subagent transcript belongs to the session that owns the directory,
+        // so it must not name a session of its own.
+        write_jsonl(
+            &nested.join("subagents").join("agent-child.jsonl"),
+            &[json!({
+                "type": "user",
+                "sessionId": "parent-session",
+                "message": {"content": "Subagent prompt"}
+            })],
+        );
+
+        let titles = list_claude_session_titles_from_home(temp.path());
+        assert_eq!(
+            titles.get("nested-session").map(String::as_str),
+            Some("Nested session title")
+        );
+        assert!(!titles.contains_key("parent-session"));
     }
 
     #[test]

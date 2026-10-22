@@ -1,10 +1,11 @@
 use claude_codex_pro_core::request_telemetry::RequestRecord;
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -14,6 +15,12 @@ const MAX_DATABASES: usize = 32;
 const MAX_FILES: usize = 1_200;
 const MAX_RECORDS: usize = 4_096;
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+/// Decompressed DeepSeek Harness text is bounded: a damaged or hostile stream
+/// must not be able to exhaust memory while it is decoded.
+const MAX_DSH_TEXT_BYTES: usize = 64 * 1024 * 1024;
+/// A DSH title is written early in its transcript, so the title lookup only
+/// decompresses this much of each file.
+const MAX_DSH_HEAD_BYTES: usize = 1024 * 1024;
 const MAX_ENTRIES: usize = 30_000;
 const MAX_DEPTH: usize = 32;
 /// Candidate file lists (rollouts/Claude transcripts) are reused this long.
@@ -262,6 +269,7 @@ pub(crate) fn read_native_usage_file(
     match source {
         "codex" | "every-code" => read_codex(path, &mut records, &mut warnings),
         "claude-code" => read_claude(path, &mut records, &mut warnings),
+        "dsh" => read_dsh(path, &mut records, &mut warnings),
         _ => return (records, warnings),
     }
     trim_records(&mut records, limit, &mut warnings);
@@ -666,6 +674,294 @@ fn record(id: String, time: u64, source: &str, agent: &str, usage: &Usage) -> Re
         reasoning_tokens: usage.reasoning_output_tokens,
         total_tokens: usage.total_tokens,
         streaming: false,
+    }
+}
+
+/// DeepSeek Harness writes one transcript per session: a zstd stream of JSONL
+/// envelopes `{type, seq, time, data}` where a single file holds many
+/// concatenated frames. A `session` record states its id and cwd at the
+/// envelope level; the records after it keep their payload under `data`.
+#[derive(Default, Deserialize)]
+struct DshEnvelope {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    time: Option<Value>,
+    // A `session` record states its fields at the envelope level, while the
+    // records after it keep theirs under `data`.
+    id: Option<String>,
+    cwd: Option<String>,
+    data: Option<DshData>,
+}
+
+#[derive(Default, Deserialize)]
+struct DshData {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    id: Option<String>,
+    cwd: Option<String>,
+    title: Option<String>,
+    content: Option<Value>,
+    message: Option<DshMessage>,
+    usage: Option<DshUsage>,
+}
+
+#[derive(Default, Deserialize)]
+struct DshMessage {
+    id: Option<String>,
+    source: Option<DshSource>,
+}
+
+#[derive(Default, Deserialize)]
+struct DshSource {
+    provider: Option<String>,
+    model: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct DshUsage {
+    #[serde(rename = "inputTokens", alias = "input_tokens")]
+    input_tokens: Option<u64>,
+    #[serde(rename = "outputTokens", alias = "output_tokens")]
+    output_tokens: Option<u64>,
+    #[serde(rename = "cacheReadTokens", alias = "cached_input_tokens")]
+    cached_input_tokens: Option<u64>,
+    #[serde(rename = "cacheWriteTokens", alias = "cache_creation_input_tokens")]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(rename = "reasoningTokens", alias = "reasoning_output_tokens")]
+    reasoning_output_tokens: Option<u64>,
+    #[serde(rename = "totalTokens", alias = "total_tokens")]
+    total_tokens: Option<u64>,
+}
+
+impl DshEnvelope {
+    /// Records carry their kind either at the top level or inside `data`.
+    fn kind(&self) -> Option<&str> {
+        self.kind
+            .as_deref()
+            .or_else(|| self.data.as_ref().and_then(|data| data.kind.as_deref()))
+    }
+
+    fn data(&self) -> Option<&DshData> {
+        self.data.as_ref()
+    }
+
+    fn id(&self) -> Option<&str> {
+        self.id
+            .as_deref()
+            .or_else(|| self.data.as_ref().and_then(|data| data.id.as_deref()))
+    }
+
+    fn cwd(&self) -> Option<&str> {
+        self.cwd
+            .as_deref()
+            .or_else(|| self.data.as_ref().and_then(|data| data.cwd.as_deref()))
+    }
+
+    /// DSH writes epoch milliseconds; an ISO string is accepted as a fallback.
+    fn time_ms(&self) -> Option<u64> {
+        self.time.as_ref().and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| timestamp(Some(text))))
+        })
+    }
+}
+
+/// Session identity and title carried by a DSH transcript. The usage reader and
+/// the title lookup share it, so both derive the same session id.
+fn dsh_identity_and_title(envelopes: &[DshEnvelope]) -> (Option<String>, Option<String>) {
+    let mut identity = None;
+    let mut title = None;
+    for envelope in envelopes {
+        match envelope.kind() {
+            Some("session") => identity = envelope.id().map(str::to_string).or(identity),
+            Some("session/title") => {
+                title = envelope
+                    .data()
+                    .and_then(|data| data.title.clone())
+                    .or(title);
+            }
+            // A log without a title record still names its session: the first
+            // user message is a truthful label, and a real title record wins.
+            Some("user/message") if title.is_none() => {
+                title = envelope.data().and_then(|data| {
+                    data.content.as_ref().and_then(|content| {
+                        content.as_array().and_then(|items| {
+                            items.iter().find_map(|item| {
+                                item.get("text").and_then(Value::as_str).map(str::to_string)
+                            })
+                        })
+                    })
+                });
+            }
+            _ => {}
+        }
+    }
+    (identity, title)
+}
+
+/// Decompressed DSH transcript text. The streaming decoder reads through every
+/// concatenated frame; decoding stops at `max_bytes`.
+fn dsh_text(path: &Path, max_bytes: usize, warnings: &mut Vec<String>) -> Option<String> {
+    let opened = File::open(path).and_then(|file| Ok((file.metadata()?.len(), file)));
+    let (len, file) = match opened {
+        Ok(value) => value,
+        Err(_) => {
+            warn(warnings, READ_ERROR);
+            return None;
+        }
+    };
+    if len > MAX_FILE_BYTES {
+        warn(warnings, TRUNCATED);
+        return None;
+    }
+    let decoder = match zstd::stream::read::Decoder::new(BufReader::new(file)) {
+        Ok(decoder) => decoder,
+        Err(_) => {
+            warn(warnings, READ_ERROR);
+            return None;
+        }
+    };
+    let mut bytes = Vec::new();
+    if decoder
+        .take(max_bytes as u64)
+        .read_to_end(&mut bytes)
+        .is_err()
+    {
+        warn(warnings, READ_ERROR);
+    }
+    if bytes.len() as u64 >= max_bytes as u64 {
+        // The decoder stopped at the byte budget, so the rest of the
+        // transcript was dropped instead of parsed.
+        warn(warnings, TRUNCATED);
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn dsh_envelopes<'a>(
+    text: &'a str,
+    warnings: &'a mut Vec<String>,
+) -> impl Iterator<Item = DshEnvelope> + 'a {
+    text.lines().filter_map(|line| {
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        match serde_json::from_str::<DshEnvelope>(line) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                warn(warnings, PARSE_ERROR);
+                None
+            }
+        }
+    })
+}
+
+/// Identity and title of a DSH transcript, read from the head of the file so the
+/// whole log never has to be decompressed for a title.
+pub(crate) fn dsh_head_identity_and_title(path: &Path) -> (Option<String>, Option<String>) {
+    let mut warnings = Vec::new();
+    let Some(text) = dsh_text(path, MAX_DSH_HEAD_BYTES, &mut warnings) else {
+        return (None, None);
+    };
+    let envelopes: Vec<DshEnvelope> = dsh_envelopes(&text, &mut warnings).collect();
+    dsh_identity_and_title(&envelopes)
+}
+
+fn read_dsh(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {
+    if let Some((cached, cached_warnings)) =
+        crate::file_cache::cached::<(Vec<RequestRecord>, Vec<String>)>(path)
+    {
+        records.extend(cached);
+        warnings.extend(cached_warnings);
+        return;
+    }
+    let record_start = records.len();
+    let warning_start = warnings.len();
+    read_dsh_inner(path, records, warnings);
+    crate::file_cache::store(
+        path,
+        &(
+            records[record_start..].to_vec(),
+            warnings[warning_start..].to_vec(),
+        ),
+    );
+}
+
+fn read_dsh_inner(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {
+    let Some(text) = dsh_text(path, MAX_DSH_TEXT_BYTES, warnings) else {
+        return;
+    };
+    let envelopes: Vec<DshEnvelope> = dsh_envelopes(&text, warnings).collect();
+    let (identity, _) = dsh_identity_and_title(&envelopes);
+    // The raw identity is stored here; the event layer hashes it, exactly as the
+    // Codex and Claude readers do.
+    let session_identity = crate::local_usage::dsh_session_identity(identity.as_deref(), path);
+    let mut project = None;
+    let mut provider = None;
+    let mut model = None;
+    let mut messages: HashMap<String, RequestRecord> = HashMap::new();
+    for envelope in &envelopes {
+        match envelope.kind() {
+            Some("session") => {
+                project = envelope
+                    .cwd()
+                    .map(str::to_string)
+                    .and_then(sanitize_project)
+                    .or(project);
+            }
+            Some("assistant/message") => {
+                let Some(data) = envelope.data() else {
+                    continue;
+                };
+                let Some(time) = envelope.time_ms() else {
+                    continue;
+                };
+                let Some(usage) = data.usage.as_ref() else {
+                    continue;
+                };
+                let usage = Usage {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    cached_input_tokens: usage.cached_input_tokens,
+                    cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                    reasoning_output_tokens: usage.reasoning_output_tokens,
+                    total_tokens: usage.total_tokens,
+                };
+                if !has_positive_usage(&usage) {
+                    continue;
+                }
+                let message = data.message.as_ref();
+                if let Some(source) = message.and_then(|message| message.source.as_ref()) {
+                    provider = telemetry_identifier(source.provider.clone(), 128).or(provider);
+                    model = telemetry_identifier(source.model.clone(), 200).or(model);
+                }
+                let key = match message
+                    .and_then(|message| message.id.clone())
+                    .filter(|id| !id.is_empty())
+                {
+                    Some(id) => opaque_id(id),
+                    None => opaque_id((path, time, &usage)),
+                };
+                // The source is already the agent id: the event layer hashes it
+                // into the session id, which must match the title lookup's key.
+                let mut item = record(format!("dsh-local-{key}"), time, "dsh", "dsh", &usage);
+                item.provider = provider.clone();
+                item.model = model.clone();
+                // Repeated fragments of one assistant message are snapshots.
+                if let Some(previous) = messages.get_mut(&key) {
+                    merge_snapshot(previous, item);
+                } else {
+                    messages.insert(key, item);
+                }
+            }
+            _ => {}
+        }
+    }
+    for mut item in messages.into_values() {
+        item.session_id = Some(session_identity.clone());
+        item.project = project.clone();
+        records.push(item);
     }
 }
 

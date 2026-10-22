@@ -640,7 +640,7 @@ function UnifiedToolInventoryPanel({
   const inventory = result?.inventory;
   const inventoryAgents = useMemo(
     () => {
-      const preferred = ["claude-code", "codex", "workbuddy", "cursor", "openclaw"];
+      const preferred = ["claude-code", "codex", "workbuddy", "dsh", "cursor", "openclaw"];
       return [...(aitrackerCapabilities?.snapshot.registry ?? []).filter((agent) => agent.detected || (agent.skillCount ?? 0) > 0)].sort((left, right) => {
         const leftOrder = preferred.indexOf(left.id);
         const rightOrder = preferred.indexOf(right.id);
@@ -1063,6 +1063,7 @@ const sessionAgentLogos: Record<string, string> = {
   "claude-code": claudeLogo,
   workbuddy: workbuddyLogo,
   cursor: cursorLogo,
+  dsh: deepseekLogo,
   "deepseek-harness": deepseekLogo,
   openclaw: openclawLogo,
 };
@@ -1072,6 +1073,7 @@ const inventoryAgentLogos: Record<string, string> = {
   "claude-code": claudeLogo,
   workbuddy: workbuddyLogo,
   cursor: cursorLogo,
+  dsh: deepseekLogo,
   "deepseek-harness": deepseekLogo,
   openclaw: openclawLogo,
 };
@@ -1141,7 +1143,7 @@ function AitrackerSessionPanel({
       ...sessions.map((item) => item.agent),
     ].filter(Boolean));
     const detected = agentRegistry.filter((item) => item.detected || item.events > 0).map((item) => item.id);
-    const priority = new Map([["codex", 0], ["claude-code", 1], ["workbuddy", 2]]);
+    const priority = new Map([["codex", 0], ["claude-code", 1], ["workbuddy", 2], ["dsh", 3]]);
     return Array.from(new Set([...observed, ...detected])).sort((left, right) => {
       const priorityDelta = (priority.get(left) ?? 10) - (priority.get(right) ?? 10);
       if (priorityDelta) return priorityDelta;

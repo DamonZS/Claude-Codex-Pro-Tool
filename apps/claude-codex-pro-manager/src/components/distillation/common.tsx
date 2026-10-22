@@ -14,6 +14,7 @@ const AGENT_LOGOS: Record<string, string> = {
   "claude-desktop": claudeLogo,
   workbuddy: workbuddyLogo,
   cursor: cursorLogo,
+  dsh: deepseekLogo,
   "deepseek-harness": deepseekLogo,
   openclaw: openclawLogo,
 };
@@ -25,6 +26,7 @@ const AGENT_LABELS: Record<string, string> = {
   workbuddy: "WorkBuddy",
   cursor: "Cursor",
   openclaw: "OpenClaw",
+  dsh: "DeepSeek Harness",
   "deepseek-harness": "DeepSeek",
 };
 
@@ -36,6 +38,7 @@ const AGENT_COLORS: Record<string, string> = {
   cursor: "var(--dw-chart-4)",
   workbuddy: "var(--dw-chart-1)",
   openclaw: "var(--dw-chart-5)",
+  dsh: "var(--dw-chart-4)",
 };
 
 export function agentLabel(agent: string) {

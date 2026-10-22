@@ -7106,8 +7106,11 @@ fn scan_unified_usage_snapshot() -> UnifiedUsageSnapshot {
     claude_codex_pro_data::file_cache::save();
     // Rebuild the SQLite session index from the same projection the JSON
     // snapshot persists. The index is only a cache: a write failure must not
-    // change the scan result.
-    let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+    // change the scan result. Usage events carry no name of their own, so the
+    // projection gets the same titles the 会话 page overlays at read time;
+    // otherwise every indexed row falls back to its project name.
+    let mut snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
+    apply_session_titles(&mut snapshot.sessions, &current_session_titles());
     let _ = claude_codex_pro_data::usage_index::write_usage(&usage, &snapshot);
     (records, warnings, usage)
 }
@@ -7629,6 +7632,18 @@ fn distillation_session_titles(
             insert("claude-code", &session.id, &session.title);
         }
     }
+    // The inventory only covers the sources its discovery recognises, while
+    // the usage scan reads every transcript below `~/.claude/projects`, so the
+    // titles come from the transcripts themselves as well.
+    let user_home = claude_code_home_dir()
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    for (raw_id, title) in
+        claude_codex_pro_core::claude_sessions::list_claude_session_titles_from_home(&user_home)
+    {
+        insert("claude-code", &raw_id, &title);
+    }
     for db_path in session_candidate_db_paths(None) {
         if let Ok(sessions) = local_session_adapter(&db_path).list_local_sessions() {
             for session in &sessions {
@@ -7640,13 +7655,13 @@ fn distillation_session_titles(
         }
     }
     // WorkBuddy keeps its short session names in its own SQLite database.
-    let user_home = claude_code_home_dir()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
     for (raw_id, title) in claude_codex_pro_data::local_usage::workbuddy_session_titles(&user_home)
     {
         insert("workbuddy", &raw_id, &title);
+    }
+    // DeepSeek Harness writes its session name into the transcript itself.
+    for (raw_id, title) in claude_codex_pro_data::local_usage::dsh_session_titles(&user_home) {
+        insert("dsh", &raw_id, &title);
     }
     titles
 }
@@ -7816,7 +7831,14 @@ fn workbench_session_data() -> WorkbenchSessionData {
 /// Agents whose transcripts the distillation pipeline can actually read. The
 /// workbench lists only these; scanning the other agents' stores was most of
 /// its load time and produced rows that cannot be distilled.
-const DISTILLABLE_AGENTS: &[&str] = &["codex", "claude-code", "workbuddy", "cursor", "openclaw"];
+const DISTILLABLE_AGENTS: &[&str] = &[
+    "codex",
+    "claude-code",
+    "workbuddy",
+    "cursor",
+    "openclaw",
+    "dsh",
+];
 
 /// Usage snapshot for the workbench. The request history already covers Codex
 /// and Claude, so their generic adapters are skipped instead of reading the
