@@ -47,3 +47,6 @@ Thumbs.db
 /package.json
 
 # Only the pinned workflow UI dependency closure is vendored in the surface package.
+
+# DSH 会话工作区临时产物（看板快照等，可重新生成，不入库）
+/.dsh-ops/
