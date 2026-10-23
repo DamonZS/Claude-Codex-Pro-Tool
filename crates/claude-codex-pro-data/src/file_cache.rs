@@ -21,7 +21,7 @@ use serde_json::Value;
 /// Bump whenever the parsers change how they derive an event: a cached payload
 /// is keyed by `(path, mtime, size)` only, so a semantics change that keeps
 /// `CACHE_VERSION` would keep serving events built by the previous rules.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 const CACHE_FILE: &str = "file-parse-cache-v1.json";
 /// Minimum time between two persistence passes of the parse cache.
 const SAVE_INTERVAL: Duration = Duration::from_secs(300);

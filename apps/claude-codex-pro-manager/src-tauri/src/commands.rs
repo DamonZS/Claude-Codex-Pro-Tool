@@ -7152,6 +7152,11 @@ const WORKBENCH_SNAPSHOT_FILE: &str = "workbench-snapshot-v1.json";
 /// the (currently ~60 MB) JSON file.
 const USAGE_SNAPSHOT_MEMORY_TTL: Duration = Duration::from_secs(600);
 
+/// Bump when a persisted projection changes shape or when the rules that build
+/// it change. A snapshot written by an older build must not be rendered: it
+/// would keep showing rows produced by the previous rules until it expires.
+const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+
 static USAGE_SNAPSHOT_REFRESHING: AtomicBool = AtomicBool::new(false);
 static USAGE_MEMORY: OnceLock<Mutex<Option<(Instant, std::sync::Arc<UsageSnapshotFile>)>>> =
     OnceLock::new();
@@ -7173,6 +7178,8 @@ fn workbench_build_lock() -> &'static Mutex<()> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageSnapshotFile {
+    #[serde(default)]
+    version: u32,
     saved_at_ms: u64,
     usage: claude_codex_pro_data::local_usage::LocalUsageSnapshot,
     snapshot: claude_codex_pro_data::aitracker::AitrackerSnapshot,
@@ -7216,6 +7223,23 @@ fn read_snapshot_file<T: DeserializeOwned>(name: &str) -> Option<T> {
     read_json_at(&snapshot_cache_dir().join(name))
 }
 
+/// The persisted usage snapshot, when the build that wrote it used the current
+/// projection rules. A missing or older snapshot is treated as absent, so the
+/// page scans once instead of rendering rows the current rules would not build.
+fn read_usage_snapshot() -> Option<UsageSnapshotFile> {
+    read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE)
+        .filter(|file| snapshot_is_current(file.version))
+}
+
+fn read_workbench_snapshot() -> Option<WorkbenchSnapshotFile> {
+    read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE)
+        .filter(|file| snapshot_is_current(file.version))
+}
+
+fn snapshot_is_current(version: u32) -> bool {
+    version == SNAPSHOT_SCHEMA_VERSION
+}
+
 fn write_snapshot_file<T: Serialize>(name: &str, value: &T) {
     write_json_at(&snapshot_cache_dir().join(name), value);
 }
@@ -7228,6 +7252,7 @@ fn build_usage_snapshot_file() -> UsageSnapshotFile {
     let (_, _, usage) = collect_unified_usage_snapshot();
     let snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
     UsageSnapshotFile {
+        version: SNAPSHOT_SCHEMA_VERSION,
         saved_at_ms: now_ms_u64(),
         usage,
         snapshot,
@@ -7281,7 +7306,7 @@ fn cached_usage_snapshot() -> std::sync::Arc<UsageSnapshotFile> {
             return file.clone();
         }
     }
-    if let Some(file) = read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE) {
+    if let Some(file) = read_usage_snapshot() {
         if snapshot_is_stale(file.saved_at_ms) {
             refresh_usage_snapshot_in_background();
         }
@@ -7294,7 +7319,7 @@ fn cached_usage_snapshot() -> std::sync::Arc<UsageSnapshotFile> {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        match read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE) {
+        match read_usage_snapshot() {
             Some(file) => file,
             None => {
                 let file = build_usage_snapshot_file();
@@ -7309,7 +7334,7 @@ fn cached_usage_snapshot() -> std::sync::Arc<UsageSnapshotFile> {
 /// Called once from the Tauri setup hook so the heavy scan runs while the user is
 /// still on the overview page instead of when they first open 会话 / 蒸馏工作台.
 pub fn warm_snapshots_in_background() {
-    let usage_stale = read_snapshot_file::<UsageSnapshotFile>(USAGE_SNAPSHOT_FILE)
+    let usage_stale = read_usage_snapshot()
         .map(|file| snapshot_is_stale(file.saved_at_ms))
         .unwrap_or(true);
     if usage_stale {
@@ -7718,6 +7743,8 @@ type WorkbenchSessionData = (
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkbenchSnapshotFile {
+    #[serde(default)]
+    version: u32,
     saved_at_ms: u64,
     sessions: Vec<DistillationWorkbenchSession>,
     skill_agents: Vec<DistillationSkillAgent>,
@@ -7735,6 +7762,7 @@ fn persist_workbench_snapshot(value: &WorkbenchSessionData) {
     write_snapshot_file(
         WORKBENCH_SNAPSHOT_FILE,
         &WorkbenchSnapshotFile {
+            version: SNAPSHOT_SCHEMA_VERSION,
             saved_at_ms: now_ms_u64(),
             sessions: value.0.clone(),
             skill_agents: value.1.clone(),
@@ -7769,7 +7797,7 @@ fn refresh_workbench_snapshot_in_background() {
 
 /// Warm the workbench snapshot at app start when the persisted copy is stale.
 fn warm_workbench_snapshot_in_background() {
-    let stale = read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE)
+    let stale = read_workbench_snapshot()
         .map(|file| snapshot_is_stale(file.saved_at_ms))
         .unwrap_or(true);
     if stale {
@@ -7791,7 +7819,7 @@ fn workbench_session_data() -> WorkbenchSessionData {
     }
     // A persisted snapshot renders the page immediately after a restart; the
     // expensive rescan then happens in the background.
-    if let Some(file) = read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE) {
+    if let Some(file) = read_workbench_snapshot() {
         let value = (file.sessions, file.skill_agents);
         let mut slot = match workbench_memory_cache().lock() {
             Ok(guard) => guard,
@@ -7811,7 +7839,7 @@ fn workbench_session_data() -> WorkbenchSessionData {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        match read_snapshot_file::<WorkbenchSnapshotFile>(WORKBENCH_SNAPSHOT_FILE) {
+        match read_workbench_snapshot() {
             Some(file) => (file.sessions, file.skill_agents),
             None => {
                 let value = scan_workbench_session_data();
@@ -13477,10 +13505,18 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_from_an_older_build_are_not_rendered() {
+        assert!(snapshot_is_current(SNAPSHOT_SCHEMA_VERSION));
+        assert!(!snapshot_is_current(SNAPSHOT_SCHEMA_VERSION - 1));
+        assert!(!snapshot_is_current(0));
+    }
+
+    #[test]
     fn snapshot_files_roundtrip_and_ignore_corruption() {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("snapshot.json");
         let value = WorkbenchSnapshotFile {
+            version: SNAPSHOT_SCHEMA_VERSION,
             saved_at_ms: 42,
             sessions: vec![DistillationWorkbenchSession {
                 agent: "codex".into(),

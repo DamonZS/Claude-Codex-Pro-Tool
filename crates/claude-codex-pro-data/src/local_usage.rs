@@ -274,10 +274,7 @@ impl From<Option<String>> for SessionScope {
 impl SessionScope {
     fn for_file(source: &str, path: &Path) -> Self {
         Self {
-            fallback: Some(session_id_from_relative_file(
-                source,
-                &path.to_string_lossy(),
-            )),
+            fallback: Some(session_id_from_file_fallback(source, path)),
             parent: subagent_parent_session_id(source, path),
         }
     }
@@ -293,6 +290,37 @@ impl SessionScope {
             })
             .or_else(|| self.fallback.clone())
     }
+}
+
+/// The identity of a usage file whose records do not name their session.
+///
+/// WorkBuddy writes one transcript per session, named after the session id, but
+/// repeats that id only on some record kinds. Those records used to fall back to
+/// the file path, so the row could never match the title WorkBuddy stores per
+/// session and rendered the project name instead. On this machine 56 of the 86
+/// untitled workbuddy rows recover their title once the file name is used.
+fn session_id_from_file_fallback(source: &str, path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if looks_like_session_file_stem(&stem) {
+        return private_id(source, "structured", &stem);
+    }
+    session_id_from_relative_file(source, &path.to_string_lossy())
+}
+
+/// Whether a transcript file name is the session id rather than a generic name.
+///
+/// WorkBuddy names the file after the session (a UUID); DSH (`session.jsonl`)
+/// and WorkBuddy subagent transcripts (`agent-….jsonl`) carry descriptive names
+/// and keep their own identity.
+fn looks_like_session_file_stem(value: &str) -> bool {
+    value.len() >= 16
+        && value
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() || character == '-')
+        && value.chars().any(|character| character.is_ascii_digit())
 }
 
 /// The parent session of a `subagents/` usage file, keyed the same way native
@@ -2473,6 +2501,39 @@ mod tests {
             aggregate(events, Vec::new()).totals.tokens.total_tokens,
             12 + 34
         );
+    }
+
+    #[test]
+    fn transcript_named_after_the_session_keeps_that_session_id() {
+        // WorkBuddy repeats the session id on some record kinds only. The file
+        // name still carries it, so the row matches the title stored per
+        // session instead of rendering the project name.
+        let directory = tempdir().unwrap();
+        let session = "01a1627a-96e4-7bf0-948e-6eb7d86c8992";
+        let parent = directory.path().join(".workbuddy/projects/project-1");
+        fs::create_dir_all(&parent).unwrap();
+        fs::write(
+            parent.join(format!("{session}.jsonl")),
+            format!(
+                "{}",
+                serde_json::json!({
+                    "type": "message",
+                    "cwd": "C:/work/project-1",
+                    "timestamp": 1_790_467_200_000_i64,
+                    "providerData": {"rawUsage": {"prompt_tokens": 10, "completion_tokens": 2}}
+                })
+            ),
+        )
+        .unwrap();
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "workbuddy")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let expected =
+            session_id_from_structured("workbuddy", Some(&Value::String(session.into()))).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].session_id.as_deref(), Some(expected.as_str()));
     }
 
     #[test]
