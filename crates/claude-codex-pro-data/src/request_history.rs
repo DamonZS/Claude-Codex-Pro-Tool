@@ -550,7 +550,7 @@ fn lines<'a>(
     }))
 }
 
-fn timestamp(value: Option<&str>) -> Option<u64> {
+pub(crate) fn timestamp(value: Option<&str>) -> Option<u64> {
     chrono::DateTime::parse_from_rfc3339(value?)
         .ok()?
         .timestamp_millis()
@@ -690,6 +690,9 @@ struct DshEnvelope {
     // records after it keep theirs under `data`.
     id: Option<String>,
     cwd: Option<String>,
+    /// Set by DSH subagent sessions and pointing at the session they belong to.
+    #[serde(rename = "parentSession")]
+    parent_session: Option<String>,
     data: Option<DshData>,
 }
 
@@ -866,6 +869,26 @@ pub(crate) fn dsh_head_identity_and_title(path: &Path) -> (Option<String>, Optio
     };
     let envelopes: Vec<DshEnvelope> = dsh_envelopes(&text, &mut warnings).collect();
     dsh_identity_and_title(&envelopes)
+}
+
+/// Session id and parent session id of a DSH transcript, read from the head of
+/// the file. Subagent sessions record the session they derive from, so the
+/// lineage of a log is known without decompressing all of it.
+pub(crate) fn dsh_head_session_lineage(path: &Path) -> (Option<String>, Option<String>) {
+    let mut warnings = Vec::new();
+    let Some(text) = dsh_text(path, MAX_DSH_HEAD_BYTES, &mut warnings) else {
+        return (None, None);
+    };
+    let mut identity = None;
+    let mut parent = None;
+    for envelope in dsh_envelopes(&text, &mut warnings) {
+        if envelope.kind() != Some("session") {
+            continue;
+        }
+        identity = identity.or_else(|| envelope.id().map(str::to_string));
+        parent = parent.or_else(|| envelope.parent_session.clone());
+    }
+    (identity, parent)
 }
 
 fn read_dsh(path: &Path, records: &mut Vec<RequestRecord>, warnings: &mut Vec<String>) {

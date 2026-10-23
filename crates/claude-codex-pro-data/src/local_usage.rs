@@ -9,8 +9,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_FILES: usize = 1_200;
@@ -940,6 +942,308 @@ fn collect_files(
     files
 }
 
+/// How long the head lineage scan of one source root is reused. The scan reads
+/// a few kilobytes per file, and both the usage scan and the workbench scan ask
+/// for the same two roots.
+const LINEAGE_TTL: Duration = Duration::from_secs(60);
+const LINEAGE_MAX_FILES: usize = 4_000;
+/// Claude writes the title a session is shown under when the user names it,
+/// which is not necessarily near the start of the transcript: in the local store
+/// the record sits up to 500 KB in. A megabyte bounds the search.
+const LINEAGE_HEAD_BYTES: u64 = 1024 * 1024;
+/// Longest title a transcript head may contribute. `claude_sessions` truncates
+/// the title it shows the same way, so lineage groups the conversations that
+/// the session list labels alike.
+const LINEAGE_TITLE_MAX_CHARS: usize = 120;
+
+/// Sessions that belong to the session they continue: Claude carries a
+/// conversation on in a new transcript once its context window is full, and DSH
+/// records the session every subagent session derives from. Both would
+/// otherwise be counted as separate rows that share a title.
+#[derive(Debug, Clone, Default)]
+pub struct SessionLineage {
+    roots: HashMap<String, String>,
+}
+
+impl SessionLineage {
+    /// Point a record at the session it continues, if it does.
+    pub fn rewrite_record(&self, record: &mut RequestRecord) {
+        let Some(session_id) = record.session_id.as_deref() else {
+            return;
+        };
+        if let Some(root) = self.roots.get(session_id) {
+            record.session_id = Some(root.clone());
+        }
+    }
+}
+
+/// Lineage of one source root: `~/.claude/projects` for Claude, `~/.dsh/sessions`
+/// for DSH. Other sources keep one session per transcript.
+pub fn session_lineage(root: &Path, source: &str) -> SessionLineage {
+    static CACHE: OnceLock<Mutex<HashMap<(PathBuf, String), (Instant, SessionLineage)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let key = (root.to_path_buf(), source.to_string());
+    if let Ok(guard) = cache.lock()
+        && let Some((stamped, lineage)) = guard.get(&key)
+        && stamped.elapsed() < LINEAGE_TTL
+    {
+        return lineage.clone();
+    }
+    let lineage = match source {
+        "claude-code" => claude_lineage(root),
+        "dsh" => dsh_lineage(root),
+        _ => SessionLineage::default(),
+    };
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(key, (Instant::now(), lineage.clone()));
+    }
+    lineage
+}
+
+/// One Claude transcript considered as a copy of another.
+struct ClaudeTranscript {
+    /// The id the transcript reader puts on a record, before it is private-hashed.
+    session_id: String,
+    title: String,
+    /// Timestamp of the transcript's first record, used to pick the oldest copy.
+    first_ms: Option<u64>,
+}
+
+fn claude_lineage(root: &Path) -> SessionLineage {
+    let mut projects = HashMap::<PathBuf, Vec<ClaudeTranscript>>::new();
+    for path in lineage_files(root) {
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Some(transcript) = claude_transcript(&path) else {
+            continue;
+        };
+        let project = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        projects.entry(project).or_default().push(transcript);
+    }
+    let mut parents = HashMap::new();
+    for transcripts in projects.values() {
+        // A project directory names every copy of one conversation with the same
+        // title: Claude writes a new transcript once the context window fills up
+        // and when a session is resumed elsewhere, and each copy carries the
+        // conversation it inherited. The copies under one title are therefore one
+        // session, and the copy whose records start first is the session they
+        // continue. A transcript without a title stays on its own.
+        let mut oldest = HashMap::<&str, &ClaudeTranscript>::new();
+        for transcript in transcripts {
+            if transcript.title.is_empty() {
+                continue;
+            }
+            let title = transcript.title.as_str();
+            let Some(previous) = oldest.get(title).copied() else {
+                oldest.insert(title, transcript);
+                continue;
+            };
+            let (parent, copy) = if leads(transcript, previous) {
+                (transcript, previous)
+            } else {
+                (previous, transcript)
+            };
+            oldest.insert(title, parent);
+            parents.insert(copy.session_id.clone(), parent.session_id.clone());
+        }
+    }
+    SessionLineage {
+        roots: resolve_roots(&parents),
+    }
+}
+
+/// Whether `left` is the copy the conversation started in, judged by its first
+/// record. Transcripts without a timestamp sort last.
+fn leads(left: &ClaudeTranscript, right: &ClaudeTranscript) -> bool {
+    (left.first_ms.unwrap_or(u64::MAX), left.session_id.as_str())
+        <= (
+            right.first_ms.unwrap_or(u64::MAX),
+            right.session_id.as_str(),
+        )
+}
+
+fn dsh_lineage(root: &Path) -> SessionLineage {
+    let mut parents = HashMap::new();
+    for path in lineage_files(root) {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !name.contains("session") || !name.contains(".jsonl") {
+            continue;
+        }
+        let (identity, parent) = crate::request_history::dsh_head_session_lineage(&path);
+        let (Some(parent), session_id) = (parent, dsh_session_identity(identity.as_deref(), &path))
+        else {
+            continue;
+        };
+        if session_id != parent {
+            parents.insert(session_id, parent);
+        }
+    }
+    SessionLineage {
+        roots: resolve_roots(&parents),
+    }
+}
+
+/// Follow every direct parent link to its oldest root.
+fn resolve_roots(parents: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut roots = HashMap::new();
+    for child in parents.keys() {
+        let mut current = child.clone();
+        for _ in 0..64 {
+            let Some(parent) = parents.get(&current) else {
+                break;
+            };
+            current.clone_from(parent);
+        }
+        if current != *child {
+            roots.insert(child.clone(), current);
+        }
+    }
+    roots
+}
+
+fn lineage_files(root: &Path) -> Vec<PathBuf> {
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut files = Vec::new();
+    while let Some((directory, depth)) = pending.pop() {
+        if files.len() >= LINEAGE_MAX_FILES {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() {
+                // Claude stores a subagent transcript next to the one it belongs to.
+                if depth < 8
+                    && path.file_name().and_then(|value| value.to_str()) != Some("subagents")
+                {
+                    pending.push((path, depth + 1));
+                }
+            } else if kind.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
+/// What the head of a Claude transcript says about the session it belongs to.
+#[derive(Default)]
+struct ClaudeHead {
+    /// The title record Claude writes when the user names a session.
+    title: Option<String>,
+    /// The first user message, which is the title the session list falls back to
+    /// when a transcript carries no title record.
+    fallback_title: Option<String>,
+    first_ms: Option<u64>,
+}
+
+/// Scans the head of a transcript for the title Claude shows it under and for
+/// the timestamp of its first record. Claude writes the title record when the
+/// user names the session, which can happen well after the session started, so
+/// the scan does not stop at the first user record: it stops once it has both
+/// answers or when the window runs out. Copies that were never renamed carry no
+/// title record at all, so the first user message is kept as the fallback title
+/// rather than leaving the copy untitled and outside the lineage.
+fn claude_head(path: &Path) -> Option<ClaudeHead> {
+    let mut reader = BufReader::new(fs::File::open(path).ok()?.take(LINEAGE_HEAD_BYTES));
+    let mut head = ClaudeHead::default();
+    let mut line = String::new();
+    loop {
+        if head.title.is_some() && head.first_ms.is_some() {
+            return Some(head);
+        }
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return Some(head);
+        }
+        let Ok(record) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if head.first_ms.is_none() {
+            head.first_ms =
+                crate::request_history::timestamp(record.get("timestamp").and_then(Value::as_str));
+        }
+        if head.title.is_none()
+            && record.get("type").and_then(Value::as_str) == Some("custom-title")
+        {
+            head.title = record
+                .get("customTitle")
+                .and_then(Value::as_str)
+                .filter(|title| !title.trim().is_empty())
+                .map(str::to_string);
+        }
+        if head.fallback_title.is_none()
+            && record.get("type").and_then(Value::as_str) == Some("user")
+        {
+            head.fallback_title = user_record_title(&record);
+        }
+    }
+}
+
+/// The title the session list shows a transcript under when it was never
+/// renamed: the first user message, whitespace-collapsed and truncated the same
+/// way `claude_sessions` truncates it.
+fn user_record_title(record: &Value) -> Option<String> {
+    let content = record
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .or_else(|| record.get("content"))?;
+    let normalized = readable_record_text(content)?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.is_empty() {
+        return None;
+    }
+    let mut chars = normalized.chars();
+    let title = chars
+        .by_ref()
+        .take(LINEAGE_TITLE_MAX_CHARS)
+        .collect::<String>();
+    Some(if chars.next().is_some() {
+        format!("{title}...")
+    } else {
+        title
+    })
+}
+
+/// The first text a message carries, whatever shape Claude wrote it in: a
+/// string, a list of blocks, or the nested `content` of a block.
+fn readable_record_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(values) => values.iter().find_map(readable_record_text),
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| object.get("content").and_then(readable_record_text)),
+        _ => None,
+    }
+}
+
+/// The title Claude shows a transcript under together with the timestamp its
+/// records start at, which is what decides whether it continues another copy.
+fn claude_transcript(path: &Path) -> Option<ClaudeTranscript> {
+    let session_id = path.file_stem().and_then(|value| value.to_str())?;
+    let head = claude_head(path)?;
+    Some(ClaudeTranscript {
+        session_id: session_id.to_string(),
+        title: head.title.or(head.fallback_title).unwrap_or_default(),
+        first_ms: head.first_ms,
+    })
+}
+
 pub fn scan_adapter(
     adapter: &UsageAdapter,
     limit: usize,
@@ -973,11 +1277,17 @@ pub fn scan_adapter(
                     "codex" | "claude-code" | "every-code" | "dsh"
                 )
             {
-                let (records, warnings) = crate::request_history::read_native_usage_file(
+                let (mut records, warnings) = crate::request_history::read_native_usage_file(
                     &path,
                     &adapter.source,
                     MAX_EVENTS,
                 );
+                if matches!(adapter.source.as_str(), "claude-code" | "dsh") {
+                    let lineage = session_lineage(&usage_path.root, &adapter.source);
+                    for record in records.iter_mut() {
+                        lineage.rewrite_record(record);
+                    }
+                }
                 events.extend(records.iter().map(|record| {
                     let mut event = event_from_request_record(record);
                     event.source = adapter.source.clone();
@@ -2573,6 +2883,289 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].session_id, parent_id);
         assert_eq!(events[0].project, "project-1");
+    }
+
+    /// Writes one Claude transcript: the title Claude shows for it and one
+    /// assistant turn with usage, which is what the usage scan reads.
+    fn claude_transcript(path: &Path, session_id: &str, title: &str, timestamp: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let mut lines = vec![
+            serde_json::json!({
+                "type": "custom-title",
+                "customTitle": title,
+                "sessionId": session_id
+            })
+            .to_string(),
+        ];
+        lines.push(
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": session_id,
+                "cwd": "C:/work/project-1",
+                "timestamp": timestamp,
+                "message": {
+                    "id": format!("message-{session_id}"),
+                    "model": "model-1",
+                    "usage": {"input_tokens": 5, "output_tokens": 1}
+                }
+            })
+            .to_string(),
+        );
+        fs::write(path, format!("{}\n", lines.join("\n"))).unwrap();
+    }
+
+    /// Writes one Claude transcript that was never renamed: no `custom-title`
+    /// record, only the user message the session list falls back to.
+    fn claude_untitled_transcript(
+        path: &Path,
+        session_id: &str,
+        first_message: &str,
+        timestamp: &str,
+    ) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let lines = [
+            serde_json::json!({
+                "type": "user",
+                "sessionId": session_id,
+                "cwd": "C:/work/project-1",
+                "timestamp": timestamp,
+                "message": {
+                    "role": "user",
+                    "content": [{"type": "text", "text": first_message}]
+                }
+            })
+            .to_string(),
+            serde_json::json!({
+                "type": "assistant",
+                "sessionId": session_id,
+                "cwd": "C:/work/project-1",
+                "timestamp": timestamp,
+                "message": {
+                    "id": format!("message-{session_id}"),
+                    "model": "model-1",
+                    "usage": {"input_tokens": 5, "output_tokens": 1}
+                }
+            })
+            .to_string(),
+        ];
+        fs::write(path, format!("{}\n", lines.join("\n"))).unwrap();
+    }
+
+    #[test]
+    fn claude_copies_of_one_conversation_merge_into_the_session_it_started_in() {
+        let directory = tempdir().unwrap();
+        let project = directory.path().join(".claude/projects/project-1");
+        claude_transcript(
+            &project.join("session-first.jsonl"),
+            "session-first",
+            "CCP 蒸馏工作台复刻",
+            "2026-09-27T00:00:00Z",
+        );
+        claude_transcript(
+            &project.join("session-second.jsonl"),
+            "session-second",
+            "CCP 蒸馏工作台复刻",
+            "2026-09-27T01:00:00Z",
+        );
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "claude-code")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let first =
+            session_id_from_structured("claude-code", Some(&Value::String("session-first".into())));
+        let second = session_id_from_structured(
+            "claude-code",
+            Some(&Value::String("session-second".into())),
+        );
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.session_id == first));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.session_id == second)
+                .count(),
+            0
+        );
+        let mut ids = events
+            .iter()
+            .filter_map(|event| event.session_id.as_ref())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn a_copy_that_was_never_renamed_joins_the_renamed_copy_of_its_conversation() {
+        let directory = tempdir().unwrap();
+        let project = directory.path().join(".claude/projects/project-1");
+        claude_transcript(
+            &project.join("session-first.jsonl"),
+            "session-first",
+            "查看参考图",
+            "2026-10-14T08:18:58Z",
+        );
+        claude_untitled_transcript(
+            &project.join("session-second.jsonl"),
+            "session-second",
+            "查看参考图",
+            "2026-10-14T13:09:10Z",
+        );
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "claude-code")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let first =
+            session_id_from_structured("claude-code", Some(&Value::String("session-first".into())));
+        let second = session_id_from_structured(
+            "claude-code",
+            Some(&Value::String("session-second".into())),
+        );
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.session_id == first));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.session_id == second)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn transcripts_with_the_same_title_in_different_projects_stay_separate() {
+        let directory = tempdir().unwrap();
+        let first_project = directory.path().join(".claude/projects/project-1");
+        let second_project = directory.path().join(".claude/projects/project-2");
+        claude_transcript(
+            &first_project.join("session-one.jsonl"),
+            "session-one",
+            "Thread",
+            "2026-09-27T00:00:00Z",
+        );
+        claude_transcript(
+            &second_project.join("session-two.jsonl"),
+            "session-two",
+            "Thread",
+            "2026-09-27T01:00:00Z",
+        );
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "claude-code")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let second =
+            session_id_from_structured("claude-code", Some(&Value::String("session-two".into())));
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.session_id == second)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn an_untitled_transcript_keeps_its_own_session() {
+        let directory = tempdir().unwrap();
+        let project = directory.path().join(".claude/projects/project-1");
+        claude_transcript(
+            &project.join("session-named.jsonl"),
+            "session-named",
+            "Thread",
+            "2026-09-27T00:00:00Z",
+        );
+        claude_transcript(
+            &project.join("session-untitled.jsonl"),
+            "session-untitled",
+            "",
+            "2026-09-27T01:00:00Z",
+        );
+        let adapter = builtin_adapters(directory.path())
+            .into_iter()
+            .find(|adapter| adapter.source == "claude-code")
+            .unwrap();
+        let (events, _diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        let untitled = session_id_from_structured(
+            "claude-code",
+            Some(&Value::String("session-untitled".into())),
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.session_id == untitled)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn dsh_subagent_session_merges_into_the_session_it_derives_from() {
+        let directory = tempdir().unwrap();
+        let root = directory.path().join(".dsh/sessions/project");
+        let usage_record = |session: &str, time: u64| {
+            json!({
+                "type": "assistant/message",
+                "seq": 2,
+                "time": time,
+                "data": {
+                    "message": {
+                        "id": format!("msg-{session}"),
+                        "source": {"provider": "deepseek-account", "model": "deepseek-flash"}
+                    },
+                    "usage": {"inputTokens": 7, "outputTokens": 5, "totalTokens": 12}
+                }
+            })
+        };
+        dsh_transcript(
+            &root.join("session-parent/session.v4.jsonl.zstd"),
+            &[
+                json!({
+                    "type": "session",
+                    "version": 4,
+                    "id": "session-parent",
+                    "createdAt": 1_792_600_000_000u64,
+                    "cwd": "D:\\Project\\Claude-Codex-Pro-Tool"
+                }),
+                usage_record("session-parent", 1_792_600_002_000u64),
+            ],
+        );
+        dsh_transcript(
+            &root.join("subagent/session.v4.jsonl.zstd"),
+            &[
+                json!({
+                    "type": "session",
+                    "version": 4,
+                    "id": "66aed498-4299-408b-a6e9-28c9b0e11392",
+                    "parentSession": "session-parent",
+                    "delegationDepth": 1,
+                    "createdAt": 1_792_600_001_000u64,
+                    "cwd": "D:\\Project\\Claude-Codex-Pro-Tool"
+                }),
+                usage_record("session-child", 1_792_600_003_000u64),
+            ],
+        );
+        let mut adapter = adapter("dsh");
+        adapter.paths.push(UsagePath {
+            root: directory.path().to_path_buf(),
+            glob: "**/session.v*.jsonl.zstd".into(),
+            format: UsageFormat::Jsonl,
+            query: None,
+        });
+        let (events, diagnostics) = scan_adapter(&adapter, MAX_EVENTS);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let parent =
+            session_id_from_structured("dsh", Some(&Value::String("session-parent".into())));
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|event| event.session_id == parent));
     }
 
     #[test]

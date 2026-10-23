@@ -7063,12 +7063,24 @@ fn collect_unified_usage_snapshot() -> UnifiedUsageSnapshot {
 }
 
 fn scan_unified_usage_snapshot() -> UnifiedUsageSnapshot {
+    let claude_projects_dir =
+        claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir());
     let (mut records, mut warnings) =
         claude_codex_pro_data::request_history::read_recent_local_requests(
             &session_candidate_db_paths(None),
-            &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
+            &claude_projects_dir,
             4_096,
         );
+    // Claude leaves several transcripts for one conversation — it writes a new
+    // one once the context window fills up and when the session is resumed
+    // elsewhere — and the copies it names with one title belong to the session
+    // they started in. These records and the adapter events scanned below must
+    // fold onto the same session, so both go through the same lineage.
+    let lineage =
+        claude_codex_pro_data::local_usage::session_lineage(&claude_projects_dir, "claude-code");
+    for record in records.iter_mut() {
+        lineage.rewrite_record(record);
+    }
     match claude_codex_pro_core::request_telemetry::read_recent_requests(500) {
         Ok(proxy_records) => records.extend(proxy_records),
         Err(_) => warnings.push("代理请求记录读取失败。".to_string()),
@@ -7155,7 +7167,11 @@ const USAGE_SNAPSHOT_MEMORY_TTL: Duration = Duration::from_secs(600);
 /// Bump when a persisted projection changes shape or when the rules that build
 /// it change. A snapshot written by an older build must not be rendered: it
 /// would keep showing rows produced by the previous rules until it expires.
-const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
+/// Bumped whenever the projection a persisted snapshot holds stops matching what
+/// the current code would compute: an old file is then ignored instead of being
+/// rendered, so a stale row never survives an upgrade.
+/// 2 added the title map to the usage projection; 3 merges continued sessions.
+const SNAPSHOT_SCHEMA_VERSION: u32 = 3;
 
 static USAGE_SNAPSHOT_REFRESHING: AtomicBool = AtomicBool::new(false);
 static USAGE_MEMORY: OnceLock<Mutex<Option<(Instant, std::sync::Arc<UsageSnapshotFile>)>>> =
@@ -7876,11 +7892,22 @@ fn scan_workbench_usage() -> claude_codex_pro_data::local_usage::LocalUsageSnaps
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let (records, _) = claude_codex_pro_data::request_history::read_recent_local_requests(
+    let (mut records, _) = claude_codex_pro_data::request_history::read_recent_local_requests(
         &session_candidate_db_paths(None),
         &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
         4_096,
     );
+    // Claude leaves several transcripts for one conversation — it writes a new
+    // one once the context window fills up and when the session is resumed
+    // elsewhere — and the copies it names with one title belong to the session
+    // they started in, exactly as in the usage scan.
+    let lineage = claude_codex_pro_data::local_usage::session_lineage(
+        &claude_codex_pro_data::claude_code_projects_dir(&claude_code_home_dir()),
+        "claude-code",
+    );
+    for record in records.iter_mut() {
+        lineage.rewrite_record(record);
+    }
     let mut events = records
         .iter()
         .map(claude_codex_pro_data::local_usage::event_from_request_record)
