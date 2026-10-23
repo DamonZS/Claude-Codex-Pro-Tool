@@ -73,7 +73,7 @@ select agent,  count(*), sum(coalesce(title,'') <> ''),
 select source, count(*) from sessions where project = '' or project = 'unknown' group by source;
 ```
 
-界面证据（标准 9）：待应用重启后截「会话」页与「蒸馏工作台」列表；release 产物路径与构建时间见最终交付汇报。
+界面证据（标准 9）：2026-10-23 12:32 替换安装版 exe 并重启后，由用户在界面核对（见执行记录末尾）。release 产物路径与构建时间见最终交付汇报。
 
 原生数据未被改动（标准 11）：改造前后抽样计数一致——`~/.claude/projects` `.jsonl` 167 个 / `subagents/` 目录 12 个；`~/.codex/sessions` `.jsonl` 0 个（255 个 rollout 在 `sessions.ccp-backup-20261013-104614-7770/`，非本次扫描路径）；`~/.workbuddy/projects` 2062 个文件（302 个 `.jsonl`、199 个位于 `subagents/`）、`subagents/` 目录 21 个。期间有 9 个原生文件在 20:00 之后被写入，来自各 Agent 客户端的自身运行；本次改造的代码路径全部是只读（代码审查：`local_usage.rs` / `claude_sessions.rs` / `commands.rs` 的新增逻辑只做 `read_dir`、`fs::read`、SQLite `mode=ro` 查询）。
 
@@ -98,6 +98,22 @@ select source, count(*) from sessions where project = '' or project = 'unknown' 
 - `file_cache::CACHE_VERSION` 由 2 递增到 3：文件名回退改变了派生规则，不递增则未变更日志会继续复用旧载荷，修复在用户机上不可见。
 - 代码审查：`session_id_from_file_fallback` 只在取不到原生会话 id 时生效；`looks_like_session_file_stem`（长度 ≥ 16、只含 `[0-9a-f-]`、至少一个数字）挡住 `agent-child` 这类语义文件名；`snapshot_is_current` 同时作用于内存与磁盘两条读取路径，构造端（`build_usage_snapshot_file`、`persist_workbench_snapshot`）写入当前版本。
 - 已知偏差：用户当前运行的是 `H:\Claude Codex Pro\claude-codex-pro.exe`（28,035,072 字节，2026-10-23 01:06:42），**不含本次两处修复**；界面上看到修复效果需要替换该二进制并重启应用。
+
+### 应用重启后复核 SQL（2026-10-23 12:32 替换 exe + 重启，PID 10584）
+
+新构建启动后 12:33:31–12:33:34 自动重写了三份缓存（`file-parse-cache-v1.json` 84.2 MB、`usage-snapshot-v1.json` 65.5 MB、`usage-index-v1.db`、`workbench-snapshot-v1.json`），证明版本守卫确实让旧投影失效并重新采集。随后复核（标准 2–8）：
+
+| 指标 | 修复前（10:39 旧进程写入） | 重启后（12:34） |
+| --- | --- | --- |
+| `workbench` workbuddy 行数 / 其中「标题 == 项目名」 | 229 / **183** | 86 / **17** |
+| `workbench` codex 行数 / 其中「标题 == 项目名」 | 67 / 8 | 67 / 8 |
+| `workbench` claude-code / dsh 行数（标题非空） | 4 / 4（dsh 为 0，尚未接入） | 4 / 4、26 / 26 |
+| `sessions` workbuddy 行数 / 标题非空 | 156 / 69 | 86 / 69 |
+| `sessions` claude-code / codex / dsh 标题非空 | 0 / 32、0 / 67、— | 32 / 32、59 / 67、26 / 26 |
+| `sessions` 中 `project` 为空或 `unknown` | 21（workbuddy） | **0** |
+| 两条路径同一 `session_id` 标题不一致 | — | **0** |
+
+仍显示项目名的 25 行经逐行核对，全部是**原生就没有标题**的会话，符合「已知非目标」（Codex 侧 8 行是 `threads.name` 为空的会话；WorkBuddy 侧 17 行是以时间戳/目录名命名的 scratch 工作区，如 `2026-10-09-20-42-54`、`nixiang`、`gpt-code…`）。如需把这批也补上标题，只能取会话首条用户消息作回退，属新增需求。
 
 ## 已知非目标（不在本次检查范围）
 
