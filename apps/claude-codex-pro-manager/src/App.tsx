@@ -38,6 +38,8 @@ import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShe
 import type { AgentAppId } from "@/components/settings/contract";
 import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
 import { MemoryLibraryPage } from "@/components/memory/MemoryLibraryPage";
+import { CardLibraryPage } from "@/components/cards/CardLibraryPage";
+import { DEFAULT_CARD_QUERY } from "@/components/cards/types";
 import { CodexThemeCenterScreen } from "@/components/CodexThemeCenterScreen";
 import { SystemPromptScreen } from "@/components/SystemPromptScreen";
 import { listen } from "@tauri-apps/api/event";
@@ -217,6 +219,11 @@ import type {
   ContextEntriesResult,
   ContextEntry,
   ContextKind,
+  CardExportResult,
+  CardLibraryResult,
+  CardPayloadResult,
+  CardQueryInput,
+  CardSaveInput,
   CreateSkillResult,
   DeleteClaudeSessionResult,
   DeleteLocalSessionResult,
@@ -308,6 +315,7 @@ export function App() {
   const [distillationCandidates, setDistillationCandidates] = useState<DistillationCandidatesResult | null>(null);
   const [distillationWorkbench, setDistillationWorkbench] = useState<DistillationWorkbenchResult | null>(null);
   const [memoryLibrary, setMemoryLibrary] = useState<MemoryLibraryResult | null>(null);
+  const [cardLibrary, setCardLibrary] = useState<CardLibraryResult | null>(null);
   const [timelineLogs, setTimelineLogs] = useState<TimelineLogsState>({ logs: null, loading: false, error: null, updatedAtMs: null });
   const requestTimelineInFlight = useRef(false);
   const capabilitiesInFlight = useRef(false);
@@ -890,6 +898,61 @@ export function App() {
     );
 
   const openMemoryLibrary = () => setRoute("memory");
+
+  const loadCardLibrary = async (query: CardQueryInput = DEFAULT_CARD_QUERY) => {
+    const result = await run(
+      () => call<CardLibraryResult>("load_card_library", { request: query }),
+      "卡片库",
+      { trackBusy: false, notify: false },
+    );
+    if (result) {
+      setCardLibrary(result);
+      return result;
+    }
+    // The invoke itself failed (command missing / IPC error); surface a retryable
+    // error state instead of leaving the page stuck on its loading state.
+    const failure: CardLibraryResult = {
+      cards: [],
+      total: 0,
+      kinds: {},
+      status: "failed",
+      message: "读取卡片库失败：命令未返回结果。",
+    };
+    setCardLibrary(failure);
+    return failure;
+  };
+
+  const saveCard = async (input: CardSaveInput) =>
+    run(
+      () =>
+        call<CardPayloadResult>("save_card", {
+          // `id` is a plain String on the Rust side: "" means create, never null.
+          request: { ...input, id: input.id ?? "" },
+        }),
+      "保存卡片",
+      { trackBusy: false, notify: false },
+    );
+
+  const deleteCards = async (ids: string[]) =>
+    run(
+      () => call<CardPayloadResult>("delete_cards", { request: { ids } }),
+      "删除卡片",
+      { trackBusy: false, notify: false },
+    );
+
+  const exportCard = async (id: string) =>
+    run(
+      () => call<CardExportResult>("export_card", { request: { id } }),
+      "导出卡片",
+      { trackBusy: false, notify: false },
+    );
+
+  const installCardSkill = async (id: string, agents: string[]) =>
+    run(
+      () => call<CardExportResult>("install_card_skill", { request: { id, agents } }),
+      "安装卡片为 Skill",
+      { trackBusy: false, notify: false },
+    );
 
   const queryDistillationTask = async (taskId: string) => call<DistillationRunResult>("query_distillation_task", { request: { taskId } });
 
@@ -2523,6 +2586,8 @@ export function App() {
       await Promise.all([refreshSettings(true), loadDistillationWorkbench()]);
     } else if (target === "memory") {
       await loadMemoryLibrary();
+    } else if (target === "cards") {
+      await Promise.all([loadCardLibrary(DEFAULT_CARD_QUERY), loadDistillationWorkbench()]);
     } else if (target === "themes") {
       await Promise.all([refreshCodexThemes(true), refreshCodexThemeBackground(), refreshCodexManagerBackgrounds(true)]);
     } else if (target === "prompts") {
@@ -2724,6 +2789,11 @@ export function App() {
       deleteMemoryLibraryEntries,
       exportMemoryLibraryEntry,
       openMemoryLibrary,
+      loadCardLibrary,
+      saveCard,
+      deleteCards,
+      exportCard,
+      installCardSkill,
       readDistillationTranscript,
       applyRelayMode,
       applyPureApiMode,
@@ -2865,6 +2935,11 @@ export function App() {
       deleteMemoryLibraryEntries: (...args) => actionsRef.current!.deleteMemoryLibraryEntries(...args),
       exportMemoryLibraryEntry: (...args) => actionsRef.current!.exportMemoryLibraryEntry(...args),
       openMemoryLibrary: (...args) => actionsRef.current!.openMemoryLibrary(...args),
+      loadCardLibrary: (...args) => actionsRef.current!.loadCardLibrary(...args),
+      saveCard: (...args) => actionsRef.current!.saveCard(...args),
+      deleteCards: (...args) => actionsRef.current!.deleteCards(...args),
+      exportCard: (...args) => actionsRef.current!.exportCard(...args),
+      installCardSkill: (...args) => actionsRef.current!.installCardSkill(...args),
       readDistillationTranscript: (...args) => actionsRef.current!.readDistillationTranscript(...args),
       applyRelayMode: (...args) => actionsRef.current!.applyRelayMode(...args),
       applyPureApiMode: (...args) => actionsRef.current!.applyPureApiMode(...args),
@@ -3000,6 +3075,13 @@ export function App() {
           ) : null}
           {route === "memory" ? (
             <MemoryLibraryPage actions={actions} data={memoryLibrary} />
+          ) : null}
+          {route === "cards" ? (
+            <CardLibraryPage
+              actions={actions}
+              agents={distillationWorkbench?.skillAgents ?? []}
+              data={cardLibrary}
+            />
           ) : null}
           {route === "themes" ? (
             <CodexThemeCenterScreen

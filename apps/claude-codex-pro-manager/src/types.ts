@@ -1391,6 +1391,67 @@ export type MemoryLibraryResult = CommandResult<{
 
 export type MemoryExportResult = CommandResult<{ path: string }>;
 
+/** Knowledge card as returned by `load_card_library` / `save_card` / `delete_cards`. */
+export type KnowledgeCard = {
+  id: string;
+  kind: string;
+  title: string;
+  body: string;
+  tags: string[];
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** Flat `CardQueryRequest`: empty strings mean "no filter". */
+export type CardQueryInput = {
+  kind?: string;
+  tag?: string;
+  keyword?: string;
+  offset?: number;
+  limit?: number;
+};
+
+/**
+ * `total` and `kinds` are whole-library statistics and ignore the active
+ * filter; `cards` is the filtered, newest-first page. The backend exposes no
+ * "filtered total", so the UI only counts the page it received.
+ */
+export type CardLibraryResult = CommandResult<{
+  cards: KnowledgeCard[];
+  total: number;
+  kinds: Record<string, number>;
+}>;
+
+/**
+ * Flat `CardSaveRequest`. `id` is a plain string on the Rust side (never
+ * `null`): pass `""` to create a new card.
+ */
+export type CardSaveInput = {
+  id?: string | null;
+  kind: string;
+  title?: string;
+  body: string;
+  tags?: string[];
+  source?: string;
+  annotation?: string;
+};
+
+export type CardPayload = {
+  cards: KnowledgeCard[];
+  card?: KnowledgeCard | null;
+};
+
+export type CardPayloadResult = CommandResult<CardPayload>;
+
+export type CardExportFile = { path: string; content: string };
+
+export type CardExportResult = CommandResult<{
+  markdown: string;
+  path: string;
+  files: CardExportFile[];
+}>;
+
 export type LogsResult = CommandResult<{
   path: string;
   text: string;
@@ -1446,6 +1507,7 @@ export type Route =
   | "supplier"
   | "clients"
   | "memory"
+  | "cards"
   | "themes"
   | "prompts"
   | "tools"

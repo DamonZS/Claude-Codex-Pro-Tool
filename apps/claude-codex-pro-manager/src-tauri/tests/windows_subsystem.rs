@@ -1348,14 +1348,15 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         primary_routes.matches("id: \"").count(),
-        9,
-        "the sidebar must expose exactly nine primary destinations"
+        10,
+        "the sidebar must expose exactly ten primary destinations"
     );
     for (id, label) in [
         ("overview", "概览"),
         ("supplier", "供应商与路由"),
         ("clients", "蒸馏工作台"),
         ("memory", "记忆库"),
+        ("cards", "卡片库"),
         ("sessions", "会话"),
         ("tools", "插件、Skills 与 MCP"),
         ("settings", "设置"),

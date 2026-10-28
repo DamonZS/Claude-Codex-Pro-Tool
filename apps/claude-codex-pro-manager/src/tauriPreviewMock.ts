@@ -616,6 +616,53 @@ const previewDistilledCandidates = () => {
   ];
 };
 
+const previewKnowledgeCards = () => {
+  const now = Date.now();
+  const stamp = (offsetHours: number) => new Date(now - offsetHours * 3_600_000).toISOString();
+  return [
+    {
+      id: "preview-card-1",
+      kind: "experience",
+      title: "vite:build 前先跑 tsc",
+      body: "前端改动交付前必须先跑 `npm run check`，再跑 `vite:build`；否则类型错误会被 Vite 的 esbuild 转译静默吞掉。",
+      tags: ["frontend", "verify"],
+      source: "docs/harness-engineering-theory.md",
+      createdAt: stamp(30),
+      updatedAt: stamp(2),
+    },
+    {
+      id: "preview-card-2",
+      kind: "pitfall",
+      title: "save_card 的 id 不能传 null",
+      body: "`CardSaveRequest.id` 在 Rust 侧是 String 而不是 Option，新建卡片必须传空字符串，传 null 会直接反序列化失败。",
+      tags: ["backend", "contract"],
+      source: "commands.rs",
+      createdAt: stamp(26),
+      updatedAt: stamp(5),
+    },
+    {
+      id: "preview-card-3",
+      kind: "guidance",
+      title: "过滤参数空串表示不过滤",
+      body: "kind 过滤会 `normalize_card_kind`，非法值一律归一到 experience，所以「全部」只能传空串，不能传 all。",
+      tags: ["frontend", "filter"],
+      source: "card_library.rs",
+      createdAt: stamp(12),
+      updatedAt: stamp(1),
+    },
+    {
+      id: "preview-card-4",
+      kind: "architecture",
+      title: "卡片库单 JSON 存储",
+      body: "卡片统一存放在单一 JSON 文件里，写入走 write_cards 整体覆盖；写成功后需要重新 load_card_library 才能刷新总数与分类计数。",
+      tags: ["storage", "architecture"],
+      source: "spec/distillation-agent-and-card-library.md",
+      createdAt: stamp(48),
+      updatedAt: stamp(9),
+    },
+  ];
+};
+
 export async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
   if (command === "inspect_leila_status") return previewLeilaStatus();
@@ -1487,6 +1534,68 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
         { id: "codex", label: "Codex", root: "~/.codex/skills" },
       ],
     });
+  }
+  if (command === "load_card_library") {
+    const request = (_args?.request ?? {}) as {
+      kind?: string;
+      tag?: string;
+      keyword?: string;
+      offset?: number;
+      limit?: number;
+    };
+    const library = previewKnowledgeCards();
+    const kind = (request.kind ?? "").trim();
+    const tag = (request.tag ?? "").trim().toLowerCase();
+    const keyword = (request.keyword ?? "").trim().toLowerCase();
+    const filtered = library.filter((card) => {
+      if (kind && card.kind !== kind) return false;
+      if (tag && !card.tags.some((value) => value.toLowerCase() === tag)) return false;
+      if (keyword) {
+        const haystack = [card.kind, card.title, card.body, card.tags.join(" ")].join(" ").toLowerCase();
+        if (!haystack.includes(keyword)) return false;
+      }
+      return true;
+    });
+    const offset = Math.max(0, request.offset ?? 0);
+    const limit = Math.min(200, Math.max(1, request.limit ?? 50));
+    const kinds = library.reduce<Record<string, number>>((counts, card) => {
+      counts[card.kind] = (counts[card.kind] ?? 0) + 1;
+      return counts;
+    }, {});
+    return ok("预览模式卡片库已加载。", {
+      cards: filtered.slice(offset, offset + limit),
+      total: library.length,
+      kinds,
+    });
+  }
+  if (command === "save_card") {
+    const library = previewKnowledgeCards();
+    return ok("预览模式已记录卡片保存。", { cards: library, card: library[0] ?? null });
+  }
+  if (command === "delete_cards") {
+    return ok("预览模式已记录卡片删除。", { cards: [], card: null });
+  }
+  if (command === "export_card") {
+    const library = previewKnowledgeCards();
+    const id = String((_args?.request as { id?: unknown } | undefined)?.id ?? library[0]?.id ?? "");
+    return ok("预览模式不会写入卡片导出目录。", {
+      markdown: `# 预览卡片\n\n${library[0]?.body ?? ""}\n`,
+      path: `~/Downloads/card-exports/${id}.md`,
+      files: [],
+    });
+  }
+  if (command === "install_card_skill") {
+    const library = previewKnowledgeCards();
+    const id = String((_args?.request as { id?: unknown } | undefined)?.id ?? "");
+    if (id === library[0]?.id) {
+      // Deliberate partial conflict so the "已存在同名目录，未覆盖" path stays visible in preview.
+      return ok("卡片已安装为 Skill：preview-card-skill；以下 Agent 已存在同名目录，未覆盖：codex。", {
+        markdown: "",
+        path: "",
+        files: [],
+      });
+    }
+    return ok("卡片已安装为 Skill：preview-card-skill。", { markdown: "", path: "", files: [] });
   }
   if (command === "run_distillation_workbench") {
     return { status: "failed", message: "预览模式未连接蒸馏执行器。", taskId: "preview", phase: "failed", percent: 0, candidate: null };

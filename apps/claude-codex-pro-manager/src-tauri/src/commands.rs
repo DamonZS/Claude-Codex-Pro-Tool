@@ -53,6 +53,10 @@ use toml_edit::DocumentMut;
 use crate::install;
 #[path = "aitracker_distillation.rs"]
 mod aitracker_distillation;
+#[path = "card_library.rs"]
+mod card_library;
+#[path = "distill_agent.rs"]
+mod distill_agent;
 #[path = "distill_budget.rs"]
 mod distill_budget;
 #[path = "distill_model_client.rs"]
@@ -1166,6 +1170,112 @@ pub struct DistillationFileInput {
 #[serde(rename_all = "camelCase")]
 pub struct DistillationDeleteRequest {
     pub ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardLibraryPayload {
+    pub cards: Vec<card_library::KnowledgeCard>,
+    pub total: usize,
+    pub kinds: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardPayload {
+    pub cards: Vec<card_library::KnowledgeCard>,
+    pub card: Option<card_library::KnowledgeCard>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardQueryRequest {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub tag: String,
+    #[serde(default)]
+    pub keyword: String,
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardSaveRequest {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub source: String,
+    /// Raw model annotation JSON (`{"kind":"pitfall","tags":[...],"title":"..."}`);
+    /// an unparsable value degrades to an experience card with a diagnostic.
+    #[serde(default)]
+    pub annotation: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardIdRequest {
+    pub id: String,
+    #[serde(default)]
+    pub agents: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardFilePayload {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardExportPayload {
+    pub markdown: String,
+    pub path: String,
+    pub files: Vec<CardFilePayload>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillAgentRequest {
+    #[serde(default)]
+    pub instruction: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
+    #[serde(default)]
+    pub selections: Vec<DistillationSessionSelection>,
+    #[serde(default)]
+    pub provider_id: String,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillAgentPayload {
+    pub intent: String,
+    pub kind: String,
+    pub confidence: u8,
+    pub skipped: bool,
+    pub reason: String,
+    pub run: Option<DistillationRunPayload>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -8196,6 +8306,232 @@ pub async fn save_distillation_output(
                 },
             )
         })
+}
+
+/// Distillation agent: user instruction -> intent decision -> pipeline run.
+#[tauri::command]
+pub async fn run_distillation_agent(
+    request: DistillAgentRequest,
+) -> CommandResult<DistillAgentPayload> {
+    distill_agent::run_distillation_agent(request).await
+}
+
+#[tauri::command]
+pub async fn load_card_library(request: CardQueryRequest) -> CommandResult<CardLibraryPayload> {
+    tauri::async_runtime::spawn_blocking(move || card_library::query_cards(&request))
+        .await
+        .unwrap_or_else(|_| {
+            failed(
+                "读取卡片库失败。",
+                CardLibraryPayload {
+                    cards: Vec::new(),
+                    total: 0,
+                    kinds: BTreeMap::new(),
+                },
+            )
+        })
+}
+
+#[tauri::command]
+pub async fn save_card(request: CardSaveRequest) -> CommandResult<CardPayload> {
+    tauri::async_runtime::spawn_blocking(move || card_library::upsert_card(request))
+        .await
+        .unwrap_or_else(|_| {
+            failed(
+                "卡片保存失败。",
+                CardPayload {
+                    cards: Vec::new(),
+                    card: None,
+                },
+            )
+        })
+}
+
+#[tauri::command]
+pub async fn delete_cards(request: DistillationDeleteRequest) -> CommandResult<CardPayload> {
+    tauri::async_runtime::spawn_blocking(move || card_library::delete_cards(request.ids))
+        .await
+        .unwrap_or_else(|_| {
+            failed(
+                "卡片删除失败。",
+                CardPayload {
+                    cards: Vec::new(),
+                    card: None,
+                },
+            )
+        })
+}
+
+/// Export one card as Markdown plus its Skill files (used by the card library UI).
+#[tauri::command]
+pub async fn export_card(request: CardIdRequest) -> CommandResult<CardExportPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = request.id.trim().to_string();
+        let Some(card) = card_library::load_cards()
+            .into_iter()
+            .find(|card| card.id == id)
+        else {
+            return failed(
+                "未找到该卡片。",
+                CardExportPayload {
+                    markdown: String::new(),
+                    path: String::new(),
+                    files: Vec::new(),
+                },
+            );
+        };
+        let markdown = card_library::export_card_markdown(&card);
+        let files = card_library::card_skill_files(&card);
+        let dir = card_library::card_store_path()
+            .parent()
+            .map(|parent| parent.join("card-exports"))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            return failed(
+                &format!("导出目录创建失败：{error}"),
+                CardExportPayload {
+                    markdown,
+                    path: String::new(),
+                    files: files
+                        .into_iter()
+                        .map(|file| CardFilePayload {
+                            path: file.path,
+                            content: file.content,
+                        })
+                        .collect(),
+                },
+            );
+        }
+        let path = dir.join(format!("{}.md", id));
+        match std::fs::write(&path, &markdown) {
+            Ok(()) => ok(
+                &format!("卡片已导出：{}", path.display()),
+                CardExportPayload {
+                    markdown,
+                    path: path.display().to_string(),
+                    files: files
+                        .into_iter()
+                        .map(|file| CardFilePayload {
+                            path: file.path,
+                            content: file.content,
+                        })
+                        .collect(),
+                },
+            ),
+            Err(error) => failed(
+                &format!("卡片导出失败：{error}"),
+                CardExportPayload {
+                    markdown,
+                    path: String::new(),
+                    files: files
+                        .into_iter()
+                        .map(|file| CardFilePayload {
+                            path: file.path,
+                            content: file.content,
+                        })
+                        .collect(),
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "卡片导出失败。",
+            CardExportPayload {
+                markdown: String::new(),
+                path: String::new(),
+                files: Vec::new(),
+            },
+        )
+    })
+}
+
+/// Install one card as a Skill package into the selected agents' skill roots.
+#[tauri::command]
+pub async fn install_card_skill(request: CardIdRequest) -> CommandResult<CardExportPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let id = request.id.trim().to_string();
+        let Some(card) = card_library::load_cards()
+            .into_iter()
+            .find(|card| card.id == id)
+        else {
+            return failed(
+                "未找到该卡片。",
+                CardExportPayload {
+                    markdown: String::new(),
+                    path: String::new(),
+                    files: Vec::new(),
+                },
+            );
+        };
+        let name = card_library::card_skill_name(&card);
+        let inputs = card_library::card_skill_files(&card);
+        let files = match distill_pipeline::validate_skill_files(&name, Some(inputs), &card.body) {
+            Ok(files) => files,
+            Err(message) => {
+                return failed(
+                    &message,
+                    CardExportPayload {
+                        markdown: card_library::export_card_markdown(&card),
+                        path: String::new(),
+                        files: Vec::new(),
+                    },
+                );
+            }
+        };
+        let roots = unified_inventory_roots().agent_skill_roots;
+        let agents = request.agents.unwrap_or_default();
+        match distill_pipeline::install_skill_files(&name, &files, &agents, &roots, "skill") {
+            Ok(outcome) => {
+                let written = outcome
+                    .written
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<_>>();
+                let mut message = format!("卡片已安装为 Skill：{}", name);
+                if !outcome.skipped.is_empty() {
+                    message.push_str(&format!(
+                        "；以下 Agent 已存在同名目录，未覆盖：{}。",
+                        outcome.skipped.join("、")
+                    ));
+                }
+                ok(
+                    &message,
+                    CardExportPayload {
+                        markdown: card_library::export_card_markdown(&card),
+                        path: written.first().cloned().unwrap_or_default(),
+                        files: files
+                            .iter()
+                            .map(|file| CardFilePayload {
+                                path: file.path.clone(),
+                                content: file.content.clone(),
+                            })
+                            .collect(),
+                    },
+                )
+            }
+            Err(message) => failed(
+                &message,
+                CardExportPayload {
+                    markdown: card_library::export_card_markdown(&card),
+                    path: String::new(),
+                    files: Vec::new(),
+                },
+            ),
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        failed(
+            "卡片安装为 Skill 失败。",
+            CardExportPayload {
+                markdown: String::new(),
+                path: String::new(),
+                files: Vec::new(),
+            },
+        )
+    })
 }
 
 /// Distill-only transcript read (2000-message window) for the material drawer,
