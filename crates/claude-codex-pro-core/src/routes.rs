@@ -168,6 +168,10 @@ pub async fn handle_bridge_request(
         );
     }
     let result = match path {
+        // 页面的 CSP 不允许直接 fetch helper，面板经 CDP 桥读取 codex-bot 数据。
+        _ if crate::codex_bot::is_codex_bot_path(path) => {
+            Ok(crate::codex_bot::bridge_payload(path))
+        }
         "/session-availability" => {
             let session_ids = payload
                 .get("session_ids")

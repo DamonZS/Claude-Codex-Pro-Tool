@@ -1211,6 +1211,55 @@ async fn handle_helper_connection(
         return Ok(());
     }
 
+    // The codex-bot routes (the injected panel's read-only view of the local DS-Bot
+    // snapshot) keep the same origin rule as the proxy routes above: a request that
+    // carries a browser `Origin`/`Referer` must present the process-local helper
+    // token, while a native client without an Origin passes. The check is separate
+    // only so the rejection message names the panel rather than the relay key.
+    if crate::codex_bot::is_codex_bot_path(path) && !proxy_request_is_authorized(method, &request) {
+        log_helper_response(
+            "helper.codex_bot_request_rejected",
+            method,
+            path,
+            "403 Forbidden",
+            remote_addr_text.clone(),
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "status": "failed",
+            "message": "浏览器来源的面板请求缺少有效增强令牌，已拒绝。"
+        }))?;
+        write_http_response(
+            &mut stream,
+            "403 Forbidden",
+            "application/json; charset=utf-8",
+            &body,
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
+    if crate::codex_bot::is_codex_bot_path(path) {
+        // raw_path (query included) is what tells the routes which session/limit to use.
+        let response = crate::codex_bot::handle_route(method, raw_path);
+        log_helper_response(
+            "helper.codex_bot_response",
+            method,
+            path,
+            response.status,
+            remote_addr_text,
+        );
+        write_http_response(
+            &mut stream,
+            response.status,
+            response.content_type,
+            &response.body,
+        )
+        .await?;
+        stream.shutdown().await?;
+        return Ok(());
+    }
+
     if crate::protocol_proxy::is_responses_proxy_path(path) && method == "POST" {
         return handle_protocol_proxy_connection(
             &mut stream,
