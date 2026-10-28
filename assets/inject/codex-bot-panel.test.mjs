@@ -569,6 +569,16 @@ test("mounts the rail entry right under the more (…) button and the bot view",
   const style = harness.document.getElementById("codex-bot-panel-style");
   assert.ok(style, "the view stylesheet must be installed in head");
   assert.ok(String(style.textContent).includes("--color-token-text-primary"), "the view reads Codex theme tokens");
+  assert.match(
+    String(style.textContent),
+    /background-color: var\(--bt-main, #fcfcfc\);\s*background-image: linear-gradient\(/,
+    "the view paints an opaque base before layering the host token, so a translucent token cannot show the native UI through",
+  );
+  assert.match(
+    String(style.textContent),
+    /:root\[data-theme="dark"\] #codex-bot-view \{\s*background-color: #17191d;/,
+    "the dark theme paints the same opaque base",
+  );
   assert.equal(harness.api.snapshot().mounted, true);
 });
 
@@ -970,4 +980,247 @@ test("keeps the error state when the bridge itself reports failure", async () =>
   assert.equal(harness.api.snapshot().phase, "error", "a failed bridge payload is not rendered as data");
   assert.equal(harness.statusNode().getAttribute("data-codex-bot-status"), "error");
   assert.equal(harness.panel().getAttribute("data-collapsed"), "false", "the panel keeps working");
+});
+
+// ------------------------------------------------- DS-Bot interface port
+// Every block below cites the DS-Bot client source it was ported from, so a
+// later shell redesign can re-check the original instead of the panel.
+
+test("rebuilds DS-Bot's sidebar head: brand row, round refresh, 返回聊天 pill", async () => {
+  // ds-bot/src/client/sidebar.js:655 (bt-brand-whale + BrandName), styles.js:119-122
+  // (.bt-side-top, .bt-brand, .bt-round).
+  const harness = createHarness({ collapsed: false });
+  harness.api.mount();
+  await harness.api.refresh();
+
+  const view = harness.panel();
+  assert.ok(byClass(view, "bt-side-top").length >= 1, "the head row uses DS-Bot's bt-side-top");
+  const brand = byClass(view, "bt-brand")[0];
+  assert.ok(brand, "the brand row exists");
+  assert.equal(brand.textContent, "DS Bot", "the brand name is DS-Bot's own");
+  assert.equal(byClass(view, "bt-brand-whale").length, 1, "the whale mark keeps its own slot");
+
+  const refresh = harness.actionButton("refresh");
+  assert.ok(refresh.classList.contains("bt-round"), "刷新 is a bt-round control");
+  const back = harness.actionButton("back");
+  assert.ok(back.classList.contains("bt-pill-btn"), "返回聊天 keeps its own words as a pill");
+  assert.equal(back.textContent, "返回聊天");
+});
+
+test("renders every Bot as a DS-Bot bt-row with its ink mark, role chip and preview", async () => {
+  // ds-bot/src/client/sidebar.js:543 (bt-row / bt-row-body / bt-row-name /
+  // bt-row-preview), styles.js:138-147, inks.js INKS deepseek.
+  const bot = localBot();
+  const harness = createHarness({
+    collapsed: false,
+    routes: {
+      "/codex-bot/summary": summaryPayload({ botCount: 1, roomCount: 0, mainBotId: bot.id }),
+      "/codex-bot/bots": [bot],
+      "/codex-bot/rooms": [],
+    },
+  });
+  harness.api.mount();
+  await harness.api.refresh();
+
+  const botsBody = harness.body("bots");
+  assert.equal(byClass(botsBody, "bt-row").length, 1, "the Bot row is a bt-row");
+  assert.equal(byClass(botsBody, "bt-row-body").length, 1);
+  assert.equal(byClass(botsBody, "bt-row-title")[0].textContent, "Chief");
+  assert.ok(byClass(botsBody, "bt-row-preview")[0].textContent.includes("MAIN"), "the role reads as the preview");
+  assert.equal(byClass(botsBody, "bt-chip")[0].textContent, "主 Bot", "the Main Bot wears DS-Bot's chip");
+
+  const mark = byClass(botsBody, "bt-mark")[0];
+  const initial = byClass(mark, "bt-mark-initial")[0];
+  assert.equal(initial.textContent, "C", "the mark shows the Bot's initial");
+  assert.equal(initial.style.color, "var(--bt-ink-deepseek)", "the mark is painted in the Bot's own ink");
+  assert.equal(
+    harness.createdNodeNames().includes("IMG"),
+    false,
+    "the mark is text, never an image request",
+  );
+
+  await harness.api.select("bot", bot.id, "Chief");
+  assert.equal(
+    byClass(harness.body("bots"), "bt-row")[0].getAttribute("aria-current"),
+    "page",
+    "the open session is marked with aria-current, as DS-Bot does",
+  );
+});
+
+test("lays the view out as DS-Bot's bt-side list beside the chat column", async () => {
+  // ds-bot/src/client/sidebar.js:251 (.bt-side) and app.js's sidebar + chat split.
+  const harness = createHarness({ collapsed: false });
+  harness.api.mount();
+  await harness.api.refresh();
+
+  const grid = byClass(harness.panel(), "codex-bot-grid")[0];
+  const side = byClass(grid, "bt-side")[0];
+  assert.ok(side, "the list column is a bt-side");
+  const main = byClass(grid, "codex-bot-pane-main")[0];
+  assert.ok(main, "the transcript column exists");
+  ["usage", "bots", "rooms"].forEach((key) => {
+    assert.ok(
+      byAttribute(side, "data-codex-bot-body", key).length === 1,
+      `${key} lives in the bt-side column`,
+    );
+  });
+  assert.equal(
+    byAttribute(main, "data-codex-bot-body", "messages").length,
+    1,
+    "messages live in the chat column",
+  );
+});
+
+test("renders the usage section as DS-Bot's bt-us stat cards and ranked card", async () => {
+  // ds-bot/src/client/usage-page.js:151-231 (.bt-us-stats / .bt-us-stat /
+  // .bt-us-card / .bt-us-row / .bt-us-track) and styles.js:16 tokens.
+  const bot = localBot({ usage: { input: 1200, output: 340, total: 1540 } });
+  const harness = createHarness({
+    collapsed: false,
+    routes: {
+      "/codex-bot/summary": summaryPayload({
+        botCount: 1,
+        roomCount: 0,
+        usage: {
+          today: { input: 1200, output: 340, total: 1540 },
+          week: { input: 9000, output: 1000, total: 10000 },
+        },
+      }),
+      "/codex-bot/bots": [bot],
+      "/codex-bot/rooms": [],
+    },
+  });
+  harness.api.mount();
+  await harness.api.refresh();
+
+  const body = harness.body("usage");
+  assert.equal(byClass(body, "bt-us-stats").length, 1, "the stat block is a bt-us-stats card");
+  assert.deepEqual(
+    byClass(body, "bt-us-stat-label").map((node) => node.textContent),
+    ["今日", "7 天"],
+    "the two ranges keep DS-Bot's labels",
+  );
+  assert.ok(byClass(body, "bt-us-stat-value")[0].textContent.startsWith("1,540"), "the total is the headline number");
+  assert.ok(
+    textOf(byClass(body, "bt-us-stat-value")[0]).includes("输入 1,200 · 输出 340 · 合计 1,540"),
+    "the input/output split stays readable",
+  );
+  assert.equal(byClass(body, "bt-us-card").length, 1, "the ranking is a bt-us-card");
+  assert.equal(byClass(body, "bt-us-row").length, 1, "each ranked Bot is a bt-us-row");
+  const ranked = byClass(body, "bt-us-row-num")[0];
+  assert.equal(ranked.children[0].textContent, "1,540", "the ranked total");
+  assert.equal(ranked.children[1].textContent, "100%", "its share of the ranking");
+  assert.equal(
+    byClass(body, "bt-us-track")[0].children[0].style.width,
+    "100%",
+    "the track fill is relative to the top Bot",
+  );
+});
+
+test("renders room rows with a bt-cluster and the member chip", async () => {
+  // ds-bot/src/client/sidebar.js:514 (group rows), mark.js:138 RoomAvatar,
+  // i18n.js t('{count} members') = '{count} 位成员'.
+  const room = {
+    id: "room-1",
+    name: "研究组",
+    memberCount: 3,
+    lastMessageAt: 1750000000000,
+    preview: "今天先对齐一下口径",
+  };
+  const harness = createHarness({
+    collapsed: false,
+    routes: {
+      "/codex-bot/summary": summaryPayload({ botCount: 0, roomCount: 1 }),
+      "/codex-bot/bots": [],
+      "/codex-bot/rooms": [room],
+    },
+  });
+  harness.api.mount();
+  await harness.api.refresh();
+
+  const roomsBody = harness.body("rooms");
+  assert.equal(byClass(roomsBody, "bt-row").length, 1);
+  assert.equal(byClass(roomsBody, "bt-row-title")[0].textContent, "研究组");
+  assert.equal(byClass(roomsBody, "bt-cluster").length, 1, "a group seats its members in a cluster");
+  assert.equal(byClass(roomsBody, "bt-chip")[0].textContent, "3 位成员");
+  assert.ok(
+    byClass(roomsBody, "bt-row-preview")[0].textContent.includes("今天先对齐一下口径"),
+    "the room preview is shown",
+  );
+});
+
+test("renders messages as DS-Bot bubbles and the user's own turn as a bt-ububble", async () => {
+  // ds-bot/src/client/cells.js:69 (bt-msg / bt-msg-line / bt-bubble),
+  // :413 (bt-urow / bt-ububble), :520 (bt-time-sep).
+  const bot = localBot();
+  const rows = [
+    { who: "Chief", text: "第一条", time: 1750000000000, seq: 1 },
+    { who: "你", text: "收到", time: 1750000100000, seq: 2 },
+  ];
+  const harness = createHarness({
+    collapsed: false,
+    routes: {
+      "/codex-bot/summary": summaryPayload({ botCount: 1, roomCount: 0, mainBotId: bot.id }),
+      "/codex-bot/bots": [bot],
+      "/codex-bot/rooms": [],
+      "/codex-bot/messages": (path) => (path.includes(encodeURIComponent(bot.id)) ? rows : []),
+    },
+  });
+  harness.api.mount();
+  await harness.api.refresh();
+  await harness.api.select("bot", bot.id, "Chief");
+
+  const body = harness.body("messages");
+  const bubbles = byClass(body, "bt-bubble");
+  assert.equal(bubbles.length, 1, "the Bot turn is a bt-bubble");
+  assert.equal(bubbles[0].textContent, "第一条");
+  assert.equal(
+    byClass(body, "codex-bot-message-text")[0],
+    bubbles[0],
+    "the test-facing hook stays on the bubble itself",
+  );
+  assert.equal(byClass(body, "bt-group-name").length, 1, "the Bot turn keeps a bt-group-name head");
+  assert.equal(byClass(body, "bt-msg-line").length, 1);
+  assert.equal(byClass(body, "bt-urow").length, 1, "the user's turn is right-aligned");
+  assert.equal(byClass(body, "bt-ububble")[0].textContent, "收到");
+  const seps = byClass(body, "bt-time-sep");
+  assert.equal(seps.length, 1, "one day separator for one day");
+  assert.match(seps[0].textContent, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test("keeps DS-Bot's own empty copy in every block", async () => {
+  // i18n.js t('Setting up your Main Bot…'), sidebar.js:296 .bt-hint,
+  // header.js:109 t('New chat').
+  const harness = createHarness({
+    collapsed: false,
+    routes: {
+      "/codex-bot/summary": summaryPayload({ botCount: 0, roomCount: 0 }),
+      "/codex-bot/bots": [],
+      "/codex-bot/rooms": [],
+      "/codex-bot/messages": [],
+    },
+  });
+  harness.api.mount();
+  await harness.api.refresh();
+
+  assert.ok(textOf(harness.body("bots")).includes("暂无 Bot"));
+  assert.equal(
+    byClass(harness.body("bots"), "bt-hint")[0].textContent,
+    "正在设置你的主 Bot…",
+    "the sidebar hint is DS-Bot's copy",
+  );
+  assert.ok(textOf(harness.body("rooms")).includes("暂无房间"));
+  assert.equal(
+    byClass(harness.panel(), "codex-bot-section-title")[3].textContent,
+    "新对话",
+    "with nothing open the chat head reads 新对话",
+  );
+  // An open session with no rows yet keeps DS-Bot's own empty copy.
+  await harness.api.select("bot", "session-empty", "空会话");
+  assert.ok(textOf(harness.body("messages")).includes("该会话暂无消息"));
+  assert.equal(
+    byClass(harness.panel(), "codex-bot-section-title")[3].textContent,
+    "空会话",
+    "the chat head wears the open session's name, as bt-pill-name does",
+  );
 });

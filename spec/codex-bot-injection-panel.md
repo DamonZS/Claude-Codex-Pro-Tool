@@ -12,7 +12,7 @@ CCP 已有成熟且在生产使用的 Codex 注入通道：`assets/inject/render
 
 包含：
 
-- Codex 左栏注入入口「codex-bot」，以及只读面板：Bot 列表、房间列表、最近消息、用量摘要。
+- Codex 左栏图标列注入入口「codex-bot」，以及只读面板：**原版外观复刻**（取自 DS-Bot 原版客户端源码）的 Bot 列表、群聊列表、最近消息、用量。
 - Rust 侧只读数据层与 helper 路由（`/codex-bot/*`）。
 - 空态、错误态与数据源未就绪时的降级；面板可收起并记住状态。
 - 单测（Rust 夹具 + 注入脚本 `node --test`）与真机验证。
@@ -59,8 +59,8 @@ CCP 已有成熟且在生产使用的 Codex 注入通道：`assets/inject/render
 - 契约：读取 `window.__CODEX_SESSION_DELETE_HELPER__`（helper 基址）与 `window.__CLAUDE_CODEX_PRO_HELPER_TOKEN__`（token，请求头 `x-claude-codex-pro-token`）。
 - 取数通道：优先走既有 CDP 桥 `window.__codexSessionDeleteBridge(path, payload)` —— 实测 Codex 页面（`app://-/index.html`）的 CSP 不允许直连 `http://127.0.0.1:<port>`，`fetch`/`no-cors` 一律 `Failed to fetch`；桥返回体与 helper 的 HTTP body 完全一致（`lib.rs` 同款 `handle_route` 结果），失败返回 `{status:"failed", message}`。桥不存在时（手工注入、单测）回退直连 helper 并带 token。
 - 桥侧路由：`crates/claude-codex-pro-core/src/routes.rs` 的 `handle_bridge_request` 命中 `codex_bot::is_codex_bot_path(path)` 时转到 `codex_bot::bridge_payload(path)`（含查询串，故 `?session=`/`?limit=` 语义与 helper 一致）。
-- 挂载锚点按既有选择器体系回退：`nav[role="navigation"] button.sidebar-item`、`aside.app-shell-left-panel button.sidebar-item`、`nav[role="navigation"] button.h-token-nav-row.w-full`；锚点缺失时不报错，最多重试若干次后放弃。
-- 面板结构：标题行（codex-bot、刷新、收起）、Bot 列表、房间列表、用量区、选中会话的最近消息；所有用户数据用 `createElement` / `textContent` 渲染。
+- 挂载锚点：**左侧图标列**优先 —— 取 `left ≤ 60` 且 `width/height ≤ 44` 的按钮，排除 Codex 左上角前进/后退一行（`top < 40`），再从该按钮向上找 ≤ 4 层的图标列容器（类含 `flex-col` 或 `nav-list`），把入口插到容器内最后一个原生图标之后；找不到容器时退化为「该列最靠下的按钮」，仍找不到时回退既有选择器体系（`nav[role="navigation"] button.sidebar-item` 等）。锚点缺失时不报错，最多重试若干次后放弃。
+- 面板结构（复刻 DS-Bot 原版客户端布局，源码见「复刻依据」）：左列 `bt-side`（品牌行 + 圆形刷新 + `返回聊天` pill + 分区列表）与右列聊天列；分区依次为 **用量**（`bt-us-stats` 两张区间卡 + `Token 用量 Top 5` 排行卡）、**Bot 列表**（`bt-row`：墨色圆标 + 名称 + 角色 chip + 预览）、**群聊**（`bt-cluster` + `N 位成员`）、**最近消息**（`bt-msg` 气泡、时间分隔、日期分隔、用户侧 `bt-ububble`）；所有用户数据用 `createElement` / `textContent` 渲染。
 - 开合状态存 `localStorage["codex-bot.panel.collapsed"]`。
 
 ### F4 降级与无侵入
@@ -71,11 +71,12 @@ CCP 已有成熟且在生产使用的 Codex 注入通道：`assets/inject/render
 
 ## UI / 交互要求
 
-- 入口：左栏一行，图标 + 文案「codex-bot」，与既有侧栏项同层级，沿用其 hover / active 样式。
-- 面板宽 320–420 px，可收起为入口行；滚动区独立；长文本省略号并带 `title`。
-- Bot 列表项：名称为主，角色 / 当前会话为副；房间项：名称 + 成员数 + 最后一条预览（`who：text`，截断 60 字）。
-- 用量区：今日 / 7 天合计（千位分隔，0 也要显示）+ 前 5 个 Bot 排行（条形）。
-- 状态：骨架屏（首次加载）、空态（无 Bot / 无房间 / 无消息）、错误态（未就绪 / 失败）。
+- 入口：**左侧图标列**内一个图标按钮（与 Codex 自己图标列同层级、沿用其原生 class），位于该列最后一个原生图标（含 `⋯`）之后；点击切换到 bot 视图，再点 `返回聊天` 回到原生聊天。
+- 外观来源：一律照抄 DS-Bot 原版客户端（`D:\DS-Bot-main\ds-bot\src\client\**`）的 `bt-*` 结构与配色（墨色取自 `inks.js` 的 INKS / LEGACY_INKS），不得自行设计视觉；文案沿用原版词汇（`主 Bot` / `Bot 列表` / `群聊` / `最近消息` / `N 位成员` / `新对话`）。
+- 面板宽 320–420 px，可收起为入口图标；滚动区独立；长文本省略号并带 `title`。
+- Bot 列表项：名称为主，角色 / 创建时间为副；群聊项：名称 + 成员数 + 最后一条预览（截断 60 字）。
+- 用量区：两张区间统计卡（今日 / 7 天，千位分隔，0 也要显示）+ 前 5 个 Bot 排行（条形）。
+- 状态：骨架屏（首次加载）、空态（无 Bot / 无群聊 / 无消息）、错误态（未就绪 / 失败）；空态文案取原版 `bt-hint`。
 - 主题：读取 Codex 主题变量（与既有注入脚本相同的取值方式），明暗主题都可读；不覆盖 Codex 原生控件。
 
 ## 数据与接口要求
@@ -85,6 +86,21 @@ CCP 已有成熟且在生产使用的 Codex 注入通道：`assets/inject/render
 - `reason` 取值：`missing-home`、`missing-state`、`missing-database`、`parse-error`、`busy`、`unsupported-schema`。
 - 错误处理：一律降级为 `available:false` + `reason`（分区缺失时用 `messagesAvailable:false` + 该区 `reason`）；日志仅在 debug 下打印路径，不打印消息内容。
 - 鉴权：沿用既有 helper 规则，不新增鉴权方式。
+
+## 已知取舍
+
+- 字符吉祥物 SVG（原版 `characters.js` 的 21 个角色 + 遮罩/渐变机件，约 29 KB）→ 用同槽位的「墨色首字圆盘」（`bt-mark` / `bt-mark-initial`）替代，颜色取自该 Bot 的真实墨色；内联整库会让注入脚本体积超过面板本身，且不影响功能。
+- 原版 `RoomAvatar` 的成员叠图 → `.bt-cluster` 槽位 + 成员数圆盘与 `N 位成员` chip（保留原版结构）。
+- 原版 `.bt-side-foot` 设置/账号页脚与「图标栏模式」不迁：本面板没有自己的设置面，且入口必须是 Codex 原生图标按钮的克隆。
+- 用量只取原版的两张区间卡 + `Token 用量 Top 5` 排行卡，不迁完整用量页（图表/明细表/区间切换）；两张卡在 320 px 列宽下改为纵向堆叠（并排会溢出 32–40 px）。
+- 聊天头部只保留会话名 pill（原版还有 buddy/memory chip 与 go 箭头），因为该行还必须容纳 `刷新` 与 `返回聊天`。
+- 输入框、工具行、表情条、折叠气泡与动效不迁：v1 面板只读。
+- `返回聊天` 保留既有文案（原版 `i18n.js:17` 为 `返回对话`），因为既有单测断言该字符串；如需完全一致请改文案 + 同步测试。
+- 暗色：沿用面板既有的暗色选择器翻转 `bt-*` token（Codex 页面无法设置原版的 `body[data-ds-dark-theme]`），不引入新的主题探测逻辑。
+- v1 只读：不能从面板发消息；写路径依赖 DSH 宿主在线与 `state.lock` 单写者。
+- 主键与 Bot 名称来自 `state.json`；DSH 升级若改变 schema，按 `unsupported-schema` 降级展示，不猜测字段。
+- 未打包 Tailwind：ReUI / AI Elements 的交互与视觉只取结构、状态与 tokens，用纯 DOM + CSS 变量实现，避免为单个面板引入前端构建链。
+- 本机 `chat-index.sqlite` 缺失属于数据源现状，不是本功能的缺陷；按分区降级处理并在面板上说明。
 
 ## 技术约束
 
@@ -104,6 +120,9 @@ CCP 已有成熟且在生产使用的 Codex 注入通道：`assets/inject/render
 
 ## 变更记录
 
+- 2026-10-29（三）：修掉面板底色被宿主半透明 token 污染的问题 —— 本机 `--color-token-bg-secondary` / `--color-token-bg-primary` 计算值带 0.92 alpha，直接当底色会让 Codex 原生界面透出来；亮色与暗色两条路径都改为「先铺实色底（`--bt-main` / `#17191d`），再用 `linear-gradient` 叠宿主 token」。真机截图确认入口落位与 bot 视图。
+
+- 2026-10-29（二）：面板升级为 **DS-Bot 原版外观复刻**（原话：你那是自己写的ds-bot界面，我要的是原版的界面，保留现有功能，把界面复刻过来）。入口位置改为左栏图标列（挂载锚点规则重写），面板版本 v4→v5，单测 16→23；非 1:1 项与理由见「已知取舍」，复刻依据逐条对应 `D:\DS-Bot-main\ds-bot\src\client\**` 的源码行。
 - 2026-10-28：初版（只读面板、不走 MCP、统一 codex-bot 命名）。
 - 2026-10-28（四）：真机验证发现 Codex 页面 CSP 阻断 `fetch` 直连 helper（`Failed to fetch`，`no-cors` 同样失败），取数通道改为 CDP 桥优先、直连回退；桥侧新增 codex-bot 路由转发。
 - 2026-10-28（三）：按实现落定分区字段名 —— `/summary` 用 `chatIndexAvailable` / `usageAvailable` 表示分区可用性（整体 `available` 不变）；`/messages` 在 chat index 缺失时返回对象而非裸数组。
