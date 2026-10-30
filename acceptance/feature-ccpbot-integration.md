@@ -199,3 +199,26 @@
 ### 版本状态说明
 
 `v0.2.0` 标签指向 `d67e273`（CI 修好后重打的那次），其后的 `87d1604` 只改了 `charts/ccpbot/values.yaml` 的注释，不影响镜像与 tarball 内容；因此没有再次重打标签，避免 digest 反复变化让文档失真。
+## A20 复验：下载链路只依赖能连通的三个主机
+
+复跑时 `github.com`（网页/重定向主机）在本机持续超时（`curl: (28) Connection timed out after 12009 ms`，三次连续），而 `codeload.github.com`（200，10,832,793 字节，1.8s）与 `api.github.com`（200）都正常。原实现有两处都落在不可达的主机上，于是把下载改成只走后两者：
+
+| 用途 | 之前 | 现在 |
+| --- | --- | --- |
+| 源码 tarball | `https://github.com/DamonZS/CCP-Bot/archive/refs/tags/v0.2.0.tar.gz`（302 → codeload） | `https://codeload.github.com/DamonZS/CCP-Bot/tar.gz/refs/tags/v0.2.0` |
+| 镜像清单 | `https://github.com/DamonZS/CCP-Bot/releases/download/v0.2.0/container-images.json` | `https://api.github.com/repos/DamonZS/CCP-Bot/releases/tags/v0.2.0` → `releases/assets/<id>`（`Accept: application/octet-stream`） |
+
+`desktop/src-tauri/src/deployment.rs` 的 `images_url` 因此改为返回 release JSON，新增 `release_asset(response, name)` 取 asset id、`get_asset(url)` 带 `Accept` 头；`fetch_images` 走这条两跳链路。清单文件本身仍是 `release` 里的 `container-images.json` 资产，格式未变，`pin()` 与 compose 变量生成都不受影响。
+
+| 项 | 结论 | 证据 |
+| --- | --- | --- |
+| A20（改后复跑，**直连、无代理**） | 通过 | `cargo test --lib live_latest_release_is_downloaded_and_pinned -- --include-ignored --nocapture` → `Downloaded and pinned v0.2.0; tagged source, image manifest, and offline reuse verified.`；`test result: ok. 1 passed; 0 failed`，用例 5.56s |
+| `deployment::` 单测 | 通过 | 21 passed / 0 failed（新增 `the_release_names_the_asset_the_id_points_at`：取 id、缺资产报错、非 JSON 报错） |
+
+### 全量单测的 3 个既有失败（与本次改动无关，如实记录）
+
+`cargo test --lib`（桌面 crate）→ **603 passed / 3 failed / 9 ignored**，失败项都不是本次改动引入：
+
+1. `harness::tests::every_image_is_one_a_release_publishes` → `published-images.json is not where this test expects it`：这个 fork 的 `.github/` 下只有 `workflows/publish-images.yml`，**没有** `published-images.json`（`git ls-files .github` 只列出工作流）。该用例要读它来校验 `shared/harnesses.json` 里 13 个 harness 镜像都已发布；文件补上与否取决于是否真的发布那 13 个镜像（我们只发 5 个），属独立议题。
+2. `provider_oauth::tests::credential_lock_excludes_bun_in_both_directions_and_recovers_after_kill` → `Error { kind: NotFound, message: "program not found" }`（用例要起 `bun`）。
+3. `provider_oauth::tests::credential_replacement_waits_for_existing_rotation_owner` → `Set-Acl … PrivilegeNotHeld … SeSecurityPrivilege`（需要提升的 ACL 权限）。

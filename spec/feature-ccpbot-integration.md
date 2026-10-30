@@ -163,3 +163,4 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 | 页面内嵌 + 源码启动 | `ccpbot_prepare` → `bun run dev` | live 用例 `live_prepare_downloads_and_seeds_env`（真实克隆 + `bun install`）、`live_start_serves_health_and_stop_frees_the_port`（真起真停 + 端口释放） |
 | 桌面安装器 | `deployment::fetch` 读 `container-images.json` | `live_latest_release_is_downloaded_and_pinned`：下载 `v0.2.0`、铺开、清单比对、离线复用 |
 | 集群 chart | `charts/ccpbot` + release 清单里的 digest | `helm template` 渲染出 `ghcr.io/damonzs/ccpbot:v0.2.0`（及 `@sha256:` 形式） |
+桌面安装器的下载只走两个能连通的主机：源码 tarball 直取 `codeload.github.com`（跳过 `github.com/…/archive` 这个同源重定向），镜像清单走 `api.github.com` 的 release JSON + `releases/assets/<id>`（`Accept: application/octet-stream`）。理由与实测见 acceptance 的 A20 复验：在本机 `github.com` 持续超时，而这两个主机正常。
