@@ -9,7 +9,7 @@ import type {
   CommandResult,
 } from "@/types";
 
-// Thin typed wrappers over the seven `ccpbot_*` Tauri commands. The screen owns its
+// Thin typed wrappers over the eight `ccpbot_*` Tauri commands. The screen owns its
 // own loading instead of going through `AppActions`: CCP-Bot is an embedded,
 // self-refreshing surface, and threading its state through the app shell would
 // re-render every screen in the workspace on each probe.
@@ -31,6 +31,14 @@ export function saveCcpBotConfig(config: CcpBotConfig) {
 // the returned message, because a progress-less spinner reads as a hang.
 export function prepareCcpBot(config: CcpBotConfig) {
   return invokeCommand<CommandResult<CcpBotAction>>("ccpbot_prepare", { config });
+}
+
+// Stage 3: the path for a machine that has no CCP-Bot at all. CCP asks the release
+// what the newest installer is, downloads it and runs it — no directory, no git, no
+// toolchain. Slow (a desktop bundle is ~1 GB) and therefore the one call in this
+// module with nothing to show for itself until it finishes.
+export function installCcpBotLatest() {
+  return invokeCommand<CommandResult<CcpBotAction>>("ccpbot_install_latest");
 }
 
 export function startCcpBot() {

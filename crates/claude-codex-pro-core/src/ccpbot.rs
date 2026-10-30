@@ -831,6 +831,312 @@ fn run_logged(program: &Path, args: &[&str], dir: &Path, log_file: &str) -> Resu
     Ok(())
 }
 
+/// Where a one-click install looks for the version to install.
+///
+/// The release itself, not its tags: only a published release carries the installers a person can
+/// run, and only a published release is what somebody without a token can download. `latest` is
+/// GitHub's own pointer to the newest non-draft release, so the button installs the newest version
+/// without CCP holding a version number that goes stale.
+pub const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/DamonZS/CCP-Bot/releases/latest";
+
+/// Log for a one-click install, kept apart from the preparation log so a failed download and a
+/// failed `bun install` are not interleaved in one file.
+pub const CCPBOT_INSTALL_LOG_FILE: &str = "ccpbot-install.log";
+
+/// Where the downloaded installer is kept before it runs.
+pub const CCPBOT_INSTALL_FOLDER: &str = "ccpbot-installers";
+
+/// Which release assets a one-click install may take on the machine it runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Platform {
+    Windows,
+    MacOs,
+    Unsupported,
+}
+
+fn host_platform() -> Platform {
+    if cfg!(windows) {
+        Platform::Windows
+    } else if cfg!(target_os = "macos") {
+        Platform::MacOs
+    } else {
+        Platform::Unsupported
+    }
+}
+
+/// One file attached to a release, as the GitHub API spells it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub browser_download_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReleaseInfo {
+    tag_name: String,
+    assets: Vec<ReleaseAsset>,
+}
+
+/// The architecture tokens a bundle's filename carries, most specific first.
+///
+/// The bundler writes one file per architecture and nothing else distinguishes them — two DMGs with
+/// the same version, and installing the one for the other machine does not run at all. So the pick
+/// reads the architecture out of the filename rather than "first file that ends in .dmg".
+fn arch_tokens() -> &'static [&'static str] {
+    if cfg!(target_arch = "aarch64") {
+        &["aarch64", "arm64"]
+    } else {
+        &["x64", "x86_64", "amd64"]
+    }
+}
+
+/// The tokens that name the *other* architecture, so a foreign bundle can be recognised as foreign.
+fn other_arch_tokens() -> &'static [&'static str] {
+    if cfg!(target_arch = "aarch64") {
+        &["x64", "x86_64", "amd64"]
+    } else {
+        &["aarch64", "arm64"]
+    }
+}
+
+/// Pick the installer for `platform` out of a release's assets.
+///
+/// Windows prefers the NSIS `.exe` over the `.msi` for one reason: the `.exe` takes `/S` and
+/// returns, while `msiexec` needs a log path and a restart policy to fail as quietly. Both are
+/// published, so this is a preference and not a requirement. macOS has only the `.dmg`.
+fn pick_installer(assets: &[ReleaseAsset], platform: Platform) -> Result<ReleaseAsset> {
+    let lower = |name: &str| name.to_lowercase();
+    let candidates: Vec<&ReleaseAsset> = match platform {
+        Platform::Windows => {
+            let setup: Vec<&ReleaseAsset> = assets
+                .iter()
+                .filter(|asset| lower(&asset.name).ends_with("-setup.exe"))
+                .collect();
+            if setup.is_empty() {
+                assets
+                    .iter()
+                    .filter(|asset| lower(&asset.name).ends_with(".msi"))
+                    .collect()
+            } else {
+                setup
+            }
+        }
+        Platform::MacOs => assets
+            .iter()
+            .filter(|asset| lower(&asset.name).ends_with(".dmg"))
+            .collect(),
+        Platform::Unsupported => Vec::new(),
+    };
+    if candidates.is_empty() {
+        bail!(
+            "这个版本没有适用于当前系统的安装包（Windows 要 .exe/.msi，macOS 要 .dmg）。可以在 CCP-Bot 目录里用「下载并准备」从源码启动。"
+        );
+    }
+    let tokens = arch_tokens();
+    if let Some(found) = candidates.iter().find(|asset| {
+        let name = lower(&asset.name);
+        tokens.iter().any(|token| name.contains(token))
+    }) {
+        return Ok((*found).clone());
+    }
+    // Nothing matched this machine's architecture. Before falling back to "first candidate", check
+    // whether the release publishes *only* the other architecture: an Apple-silicon `.dmg` on an
+    // Intel Mac is not a preference, it is a bundle that refuses to launch, so saying so beats
+    // installing it. A name with no architecture in it at all (a universal build) still passes.
+    let foreign: Vec<String> = candidates
+        .iter()
+        .map(|asset| lower(&asset.name))
+        .filter(|name| other_arch_tokens().iter().any(|token| name.contains(token)))
+        .collect();
+    if foreign.len() == candidates.len() {
+        let wanted = if cfg!(target_arch = "aarch64") {
+            "Apple 芯片（aarch64）"
+        } else {
+            "Intel（x64）"
+        };
+        bail!(
+            "这个版本只发布了给另一种架构的安装包（{}），而本机是 {wanted}：装了也起不来。可以在 CCP-Bot 目录里用「下载并准备」从源码启动。",
+            foreign.join("、")
+        );
+    }
+    Ok(candidates[0].clone())
+}
+
+fn installers_dir() -> PathBuf {
+    log_path(CCPBOT_INSTALL_FOLDER)
+}
+
+fn write_install_log(line: &str) {
+    use std::io::Write as _;
+
+    let log = log_path(CCPBOT_INSTALL_LOG_FILE);
+    if let Some(parent) = log.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log)
+    {
+        writeln!(file, "{line}").ok();
+    }
+}
+
+/// Download the newest published installer and hand it to the system.
+///
+/// This is the one-click path: no git, no toolchain, no directory to choose. What it installs is
+/// the desktop app, which is also what brings the stack up on the user's machine — so CCP's job
+/// stops at "get the newest build onto this computer and run its installer".
+pub async fn install_latest() -> Result<CcpBotAction> {
+    let (tag, asset, target) = download_latest_installer().await?;
+    let log = log_path(CCPBOT_INSTALL_LOG_FILE);
+    let outcome = run_installer(&target)?;
+    Ok(CcpBotAction {
+        changed: true,
+        pid: None,
+        message: format!(
+            "已下载 CCP-Bot {} 的 {}。{outcome}。文件：{}；日志：{}",
+            tag,
+            asset,
+            target.display(),
+            log.display()
+        ),
+        log_path: log.display().to_string(),
+    })
+}
+
+/// Fetch the newest installer and return `(tag, asset name, path on disk)`.
+///
+/// Split out from [install_latest] so the network half — which release, which asset, how big — can
+/// be proven without running an installer on the machine doing the proving.
+pub async fn download_latest_installer() -> Result<(String, String, PathBuf)> {
+    let platform = host_platform();
+    if matches!(platform, Platform::Unsupported) {
+        bail!(
+            "一键安装只提供 Windows 与 macOS 的安装包；这套系统请用「下载并准备」从源码启动。"
+        );
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(CCPBOT_USER_AGENT)
+        .no_proxy()
+        .connect_timeout(PROBE_CONNECT_TIMEOUT * 4)
+        .timeout(Duration::from_secs(600))
+        .build()
+        .context("创建 HTTP 客户端失败")?;
+
+    write_install_log(&format!("GET {LATEST_RELEASE_URL}"));
+    let response = client
+        .get(LATEST_RELEASE_URL)
+        .send()
+        .await
+        .with_context(|| format!("读取最新版本信息失败：{LATEST_RELEASE_URL}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("读取最新版本信息失败：HTTP {status}（{LATEST_RELEASE_URL}）");
+    }
+    let body = response.bytes().await.context("读取最新版本信息失败")?;
+    let release: ReleaseInfo =
+        serde_json::from_slice(&body).context("解析最新版本信息失败：响应不是预期的 JSON")?;
+    let asset = pick_installer(&release.assets, platform)?;
+
+    let folder = installers_dir();
+    fs::create_dir_all(&folder)
+        .with_context(|| format!("创建下载目录失败：{}", folder.display()))?;
+    let target = folder.join(&asset.name);
+    write_install_log(&format!("GET {}", asset.browser_download_url));
+    let response = client
+        .get(&asset.browser_download_url)
+        .send()
+        .await
+        .with_context(|| format!("下载安装包失败：{}", asset.browser_download_url))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("下载安装包失败：HTTP {status}（{}）", asset.name);
+    }
+    let bytes = response.bytes().await.context("下载安装包失败")?;
+    // A release asset can be a redirect or an error page; 100 KB is below every real bundle and
+    // above every message GitHub would answer with.
+    if bytes.len() < 100_000 {
+        bail!(
+            "下载到的 {} 只有 {} 字节，不像是完整的安装包。",
+            asset.name,
+            bytes.len()
+        );
+    }
+    fs::write(&target, &bytes)
+        .with_context(|| format!("写入安装包失败：{}", target.display()))?;
+    write_install_log(&format!("saved {} bytes to {}", bytes.len(), target.display()));
+    Ok((release.tag_name, asset.name, target))
+}
+
+/// Hand a downloaded installer to the system, and say what the person still has to do.
+fn run_installer(path: &Path) -> Result<String> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    #[cfg(windows)]
+    {
+        let mut command = if name.ends_with(".msi") {
+            let mut command = Command::new("msiexec");
+            command.args([
+                "/i",
+                &path.display().to_string(),
+                "/qn",
+                "/norestart",
+            ]);
+            command
+        } else {
+            // `/S` is the NSIS silent flag: present the installer's own progress UI would need a
+            // window CCP cannot see, and the user asked for it by pressing the button.
+            let mut command = Command::new(path);
+            command.arg("/S");
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        command.creation_flags(crate::windows_create_no_window());
+        let status = command
+            .status()
+            .with_context(|| format!("运行安装包失败：{}", path.display()))?;
+        if !status.success() {
+            bail!(
+                "安装包返回退出码 {:?}。可以手动双击 {} 再试一次。",
+                status.code(),
+                path.display()
+            );
+        }
+        return Ok("安装程序已静默完成".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg(path)
+            .status()
+            .with_context(|| format!("打开安装包失败：{}", path.display()))?;
+        if !status.success() {
+            bail!("打开 .dmg 失败，可以手动双击 {}", path.display());
+        }
+        // A DMG cannot install itself: mounting it is the furthest a process may go without the
+        // person dragging the app, so the message says exactly that instead of claiming success.
+        return Ok("已挂载磁盘映像，把 CCP-Bot 拖进「应用程序」即完成");
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = name;
+        bail!("这套系统没有可执行的安装包：请用「下载并准备」从源码启动。")
+    }
+}
+
+pub fn install_log_file() -> &'static str {
+    CCPBOT_INSTALL_LOG_FILE
+}
+
 pub fn running_pid() -> Option<u32> {
     let pid = read_pid(&pid_path())?;
     process_alive(pid).then_some(pid)
@@ -1308,5 +1614,92 @@ mod tests {
         assert!(action.message.contains("跳过下载"), "{}", action.message);
         assert!(action.message.contains("依赖已存在"), "{}", action.message);
         assert!(action.message.contains(".env 已存在"), "{}", action.message);
+    }
+
+    fn asset(name: &str) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.to_string(),
+            browser_download_url: format!("https://example.invalid/{name}"),
+        }
+    }
+
+    #[test]
+    fn a_windows_install_prefers_the_silent_setup_over_the_msi() {
+        let assets = vec![
+            asset("CCP-Bot_0.2.3_x64_en-US.msi"),
+            asset("CCP-Bot_0.2.3_x64-setup.exe"),
+        ];
+        let picked = pick_installer(&assets, Platform::Windows).expect("pick a Windows installer");
+        assert_eq!(picked.name, "CCP-Bot_0.2.3_x64-setup.exe");
+    }
+
+    #[test]
+    fn a_windows_install_falls_back_to_the_msi() {
+        let assets = vec![asset("CCP-Bot_0.2.3_x64_en-US.msi")];
+        let picked = pick_installer(&assets, Platform::Windows).expect("pick the msi");
+        assert_eq!(picked.name, "CCP-Bot_0.2.3_x64_en-US.msi");
+    }
+
+    #[test]
+    fn a_mac_install_takes_the_bundle_for_this_architecture() {
+        // Two DMGs with the same version differ only by architecture, so the pick has to read the
+        // filename rather than the extension.
+        let assets = vec![
+            asset("CCP-Bot_0.2.3_x64.dmg"),
+            asset("CCP-Bot_0.2.3_aarch64.dmg"),
+        ];
+        let picked = pick_installer(&assets, Platform::MacOs).expect("pick a dmg");
+        let wanted = if cfg!(target_arch = "aarch64") {
+            "aarch64"
+        } else {
+            "x64"
+        };
+        assert!(
+            picked.name.contains(wanted),
+            "{} should match {wanted}",
+            picked.name
+        );
+    }
+
+    #[test]
+    fn an_installer_for_the_other_architecture_is_refused_not_offered() {
+        // The release publishes only the other architecture: an Apple-silicon `.dmg` cannot run on
+        // an Intel Mac, so the honest answer is "no installer for this machine" rather than a
+        // download that fails at launch.
+        let foreign = if cfg!(target_arch = "aarch64") {
+            "CCP-Bot_0.2.3_x64.dmg"
+        } else {
+            "CCP-Bot_0.2.3_aarch64.dmg"
+        };
+        let assets = vec![asset(foreign)];
+        let error = pick_installer(&assets, Platform::MacOs).expect_err("refuse a foreign bundle");
+        let text = error.to_string();
+        assert!(text.contains("另一种架构"), "{text}");
+        assert!(text.to_lowercase().contains(&foreign.to_lowercase()), "{text}");
+    }
+    #[test]
+    fn a_release_without_an_installer_does_not_pretend_it_has_one() {
+        let assets = vec![asset("container-images.json"), asset("ccpbot.tar.gz")];
+        let error = pick_installer(&assets, Platform::Windows).expect_err("no installer here");
+        assert!(error.to_string().contains("没有适用于当前系统的安装包"));
+    }
+
+    /// Downloads the newest published installer for this machine, without running it.
+    ///
+    /// Ignored: it fetches about a gigabyte over the network. Run it on purpose, against a release
+    /// that actually publishes installers, to prove the selection and the download end to end —
+    /// the running half is exercised by `install_latest` when a person presses the button.
+    #[tokio::test]
+    #[ignore = "downloads the published installer (~1 GB)"]
+    async fn live_latest_release_offers_this_machines_installer() {
+        let (tag, asset, path) = download_latest_installer().await.expect("download it");
+        assert!(tag.starts_with('v'), "{tag}");
+        let bytes = fs::metadata(&path).expect("the installer is on disk").len();
+        assert!(bytes > 100_000, "{asset} is only {bytes} bytes");
+        let lower = asset.to_lowercase();
+        assert!(
+            lower.ends_with("-setup.exe") || lower.ends_with(".msi"),
+            "{asset} is not a Windows installer"
+        );
     }
 }

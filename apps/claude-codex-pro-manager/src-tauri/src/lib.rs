@@ -100,6 +100,7 @@ pub fn run() {
             commands::ccpbot_stop,
             commands::ccpbot_prepare,
             commands::ccpbot_log_tail,
+            commands::ccpbot_install_latest,
             commands::startup_options,
             commands::load_overview,
             commands::load_claude_desktop_status,

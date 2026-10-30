@@ -16831,3 +16831,30 @@ pub async fn ccpbot_log_tail(request: CcpBotLogRequest) -> CommandResult<CcpBotL
     let (path, text) = ccpbot::log_tail(ccpbot::dev_log_file(), lines);
     ok("CCP-Bot 日志已读取。", CcpBotLogPayload { path, text })
 }
+
+/// Download the newest published CCP-Bot installer and run it.
+///
+/// This is the path for somebody who does not have CCP-Bot at all: no directory to pick, no git,
+/// no toolchain. The release itself decides what gets installed, so CCP never carries a version
+/// that would go stale.
+#[tauri::command]
+pub async fn ccpbot_install_latest() -> CommandResult<CcpBotAction> {
+    match ccpbot::install_latest().await {
+        Ok(action) => {
+            let message = action.message.clone();
+            ok(&message, action)
+        }
+        Err(error) => {
+            let message = format!("{error}");
+            failed(
+                &message,
+                CcpBotAction {
+                    changed: false,
+                    pid: None,
+                    message: message.clone(),
+                    log_path: ccpbot::log_tail(ccpbot::install_log_file(), 0).0,
+                },
+            )
+        }
+    }
+}

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Bot, Download, ExternalLink, FolderOpen, Play, RefreshCw, Save, Square } from "lucide-react";
+import { Bot, Download, ExternalLink, FolderOpen, PackagePlus, Play, RefreshCw, Save, Square } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  installCcpBotLatest,
   loadCcpBot,
   prepareCcpBot,
   probeCcpBot,
@@ -16,7 +17,7 @@ import {
 import { invokeCommand } from "@/tauriBridge";
 import type { CcpBotMode, CcpBotSnapshot } from "@/types";
 
-type Busy = "load" | "prepare" | "probe" | "start" | "stop" | "save" | null;
+type Busy = "install" | "load" | "prepare" | "probe" | "start" | "stop" | "save" | null;
 
 type Notice = { text: string; ok: boolean };
 
@@ -145,6 +146,22 @@ export function CcpBotScreen() {
     }
   }, [adopt, address, mode, projectDir]);
 
+  const install = useCallback(async () => {
+    setBusy("install");
+    try {
+      // No address, no directory: this path exists for the machine that has no
+      // CCP-Bot yet, and the release decides which bundle fits this computer. The
+      // installer runs while the call is in flight, so there is nothing to poll
+      // afterwards — only the message it returns.
+      const result = await installCcpBotLatest();
+      setNotice({ text: result.message, ok: result.status === "ok" });
+    } catch (error) {
+      setNotice({ text: `安装最新版失败：${String(error)}`, ok: false });
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
   const openExternal = useCallback(async () => {
     try {
       await invokeCommand("open_external_url", { url: snapshot?.config.address ?? address });
@@ -248,7 +265,12 @@ export function CcpBotScreen() {
           <Button disabled={busy !== null} onClick={() => void download()} variant="secondary">
             <Download className="h-4 w-4" />
             {busy === "prepare" ? "下载中…" : "下载并准备"}
-          </Button>          <Button disabled={busy !== null} onClick={() => void save()} variant="ghost">
+          </Button>
+          <Button disabled={busy !== null} onClick={() => void install()} variant="secondary">
+            <PackagePlus className="h-4 w-4" />
+            {busy === "install" ? "安装中…" : "安装最新版"}
+          </Button>
+          <Button disabled={busy !== null} onClick={() => void save()} variant="ghost">
             <Save className="h-4 w-4" />
             保存
           </Button>
@@ -265,7 +287,7 @@ export function CcpBotScreen() {
 
       {projectDir.trim() === "" ? (
         <p className="ccpbot-notice">
-          还没选 CCP-Bot 目录。想直接用已在跑的实例就把地址填对、不用填目录；本机压根没有 CCP-Bot 的话，点「选择目录」挑一个空文件夹，再「下载并准备」——它会从 GitHub 拉中文化版本、装好依赖并生成 .env。
+          还没选 CCP-Bot 目录。想直接用已在跑的实例就把地址填对、不用填目录；本机压根没有 CCP-Bot 的话，「安装最新版」最省事——它会从 GitHub 取最新安装包并跑安装程序；走源码则点「选择目录」挑一个空文件夹，再「下载并准备」。
         </p>
       ) : runtime && !runtime.projectDirPresent ? (
         <p className="ccpbot-notice warn">

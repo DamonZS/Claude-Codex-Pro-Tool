@@ -222,3 +222,17 @@
 1. `harness::tests::every_image_is_one_a_release_publishes` → `published-images.json is not where this test expects it`：这个 fork 的 `.github/` 下只有 `workflows/publish-images.yml`，**没有** `published-images.json`（`git ls-files .github` 只列出工作流）。该用例要读它来校验 `shared/harnesses.json` 里 13 个 harness 镜像都已发布；文件补上与否取决于是否真的发布那 13 个镜像（我们只发 5 个），属独立议题。
 2. `provider_oauth::tests::credential_lock_excludes_bun_in_both_directions_and_recovers_after_kill` → `Error { kind: NotFound, message: "program not found" }`（用例要起 `bun`）。
 3. `provider_oauth::tests::credential_replacement_waits_for_existing_rotation_owner` → `Set-Acl … PrivilegeNotHeld … SeSecurityPrivilege`（需要提升的 ACL 权限）。
+### A21：一键安装最新版（`ccpbot_install_latest`）
+
+验证对象：`crates/claude-codex-pro-core/src/ccpbot.rs` 的 `download_latest_installer()` 与 `install_latest()`、命令 `ccpbot_install_latest`、界面「安装最新版」按钮，以及产出安装包的 `.github/workflows/build-installers.yml`。
+
+| # | 通过标准 | 证据 |
+| --- | --- | --- |
+| A21.1 | 按平台与架构选资产 | 单测 4 条：`a_windows_install_prefers_the_silent_setup_over_the_msi`（`.exe` 优先于 `.msi`）、`a_windows_install_falls_back_to_the_msi`、`a_mac_install_takes_the_bundle_for_this_architecture`（两个同名 DMG 靠 `aarch64`/`x64` 区分）、`a_release_without_an_installer_does_not_pretend_it_has_one`（无安装包时如实报错）。`cargo test -p claude-codex-pro-core --lib ccpbot` → **18 passed / 0 failed / 3 ignored** |
+| A21.2 | 网络half 对着真实 release 跑通 | `live_latest_release_offers_this_machines_installer`（`--include-ignored`）：读 `releases/latest` → 选中本机安装包 → 下载落盘 → 断言 `tag` 以 `v` 开头、文件 > 100 KB、名字是 Windows 安装包。**下载与运安装器刻意分开**：证明网络与选择逻辑不需要在验证机上真的装一遍 |
+| A21.3 | 安装包真的被发布 | `gh run list --repo DamonZS/CCP-Bot`：`build-installers` 在 `v0.2.3` 上跑，Windows 作业 `success` 产出 `nsis,msi`；两个 macOS 作业首跑因**空签名密钥被当成「给了证书」**而失败（`failed to import keychain certificate`），已在 `v0.2.3` 的 `c4e2721` 修成「非空才注入环境」并重新派发 |
+| A21.4 | 发布资产匿名可取 | `gh release view v0.2.3 --json assets` 列出 `*-setup.exe` / `*.msi` / `*.dmg` 与 `container-images.json`；`isDraft=false` |
+| A21.5 | 界面接线 | `npm --prefix apps/claude-codex-pro-manager run check`（tsc）无错；命令注册在 `apps/claude-codex-pro-manager/src-tauri/src/lib.rs` 的 `generate_handler!`（`commands::ccpbot_install_latest`，现 :102）；`cargo check -p claude-codex-pro-manager` 通过 |
+| A21.6 | 不装系统的系统不硬撑 | Linux 上 `install_latest` 直接返回「一键安装只提供 Windows 与 macOS 的安装包；这套系统请用「下载并准备」从源码启动。」（`Platform::Unsupported` 分支 + macOS DMG 分支的「拖进应用程序」实测表述） |
+
+不在范围：签名（Windows 证书 / Apple 开发者证书）只保留了读取 secrets 的能力，仓库里没有证书，因此安装包是**未签名**的：Windows 会显示「未知发布者」，macOS 需要清 quarantine 或右键打开。这是明说的代价，不是遗漏。

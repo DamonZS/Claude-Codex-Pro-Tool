@@ -164,3 +164,12 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 | 桌面安装器 | `deployment::fetch` 读 `container-images.json` | `live_latest_release_is_downloaded_and_pinned`：下载 `v0.2.0`、铺开、清单比对、离线复用 |
 | 集群 chart | `charts/ccpbot` + release 清单里的 digest | `helm template` 渲染出 `ghcr.io/damonzs/ccpbot:v0.2.0`（及 `@sha256:` 形式） |
 桌面安装器的下载只走两个能连通的主机：源码 tarball 直取 `codeload.github.com`（跳过 `github.com/…/archive` 这个同源重定向），镜像清单走 `api.github.com` 的 release JSON + `releases/assets/<id>`（`Accept: application/octet-stream`）。理由与实测见 acceptance 的 A20 复验：在本机 `github.com` 持续超时，而这两个主机正常。
+### 第四种起步方式：安装最新版（一条命令，不碰源码）
+
+前三节都要求机器上已经有东西：一个在跑的实例、一份源码、或一套集群。给「什么都没有」的人准备的入口是安装包，所以它必须是**发布产物**而不是源码。CCP 因此加了一条与地址、目录都无关的路径：
+
+- 命令 `ccpbot_install_latest`：读 `https://api.github.com/repos/DamonZS/CCP-Bot/releases/latest` 的 JSON，按本机平台挑资产（Windows 优先 `*-setup.exe`，退 `.msi`；macOS 取 `.dmg` 并按 `aarch64`/`x64` 选架构），下载到 `<state>/ccpbot-installers/<asset>`，再交给系统：Windows `.exe` 用 NSIS 的 `/S` 静默安装、`.msi` 用 `msiexec /i /qn /norestart`；macOS `open` 挂载 `.dmg`，并**如实说明**「把 CCP-Bot 拖进应用程序才算装完」——DMG 不能自己安装，谎称成功比不给按钮更坏。
+- 版本不写在 CCP 里：`latest` 是 GitHub 自己的指针，所以按钮永远装最新版，而 CCP 不会带着一个过期版本号发版。
+- 下载量下限 100 KB：release 资产可能是重定向或错误页，真实安装包远大于此，错误页远小于此。
+- 没有安装包的系统（Linux）不安慰性兜底，直接说「请用下载并准备从源码启动」。
+- 安装包由 `.github/workflows/build-installers.yml` 在同一个 `v*` 标签上产出并挂到同一个 release（Windows `nsis,msi`、macOS `dmg` × arm64/x64），与容器镜像共用一个版本号。未签名是明说的：Windows 报「未知发布者」、macOS 需清 quarantine；签名变量已经从 secrets 读取，存在即生效。
