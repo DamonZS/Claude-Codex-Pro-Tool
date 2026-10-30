@@ -12,7 +12,6 @@ const CLAUDE_CHINESE_INJECT_SCRIPT: &str =
     include_str!("../../../assets/inject/claude-chinese-inject.js");
 const CODEX_THEME_LOADER_SCRIPT: &str =
     include_str!("../../../assets/inject/codex-theme-loader.js");
-const CODEX_BOT_PANEL_SCRIPT: &str = include_str!("../../../assets/inject/codex-bot-panel.js");
 const SUPPORT_PAYMENT_QR: &[u8] = include_bytes!("../../../assets/images/support-payment-qr.png");
 const CONTACT_WECHAT_QR: &[u8] = include_bytes!("../../../assets/images/contact-wechat-qr.jpg");
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
@@ -32,7 +31,6 @@ pub fn renderer_fingerprint() -> &'static str {
     FINGERPRINT.get_or_init(|| {
         let mut digest = Sha256::new();
         digest.update(RENDERER_SCRIPT.as_bytes());
-        digest.update(CODEX_BOT_PANEL_SCRIPT.as_bytes());
         format!("sha256:{:x}", digest.finalize())
     })
 }
@@ -43,11 +41,6 @@ pub fn claude_chinese_injection_script() -> &'static str {
 
 pub fn codex_theme_loader_script() -> &'static str {
     CODEX_THEME_LOADER_SCRIPT
-}
-
-/// codex-bot 侧栏入口与视图脚本，附加在注入的渲染脚本之后。
-pub fn codex_bot_panel_script() -> &'static str {
-    CODEX_BOT_PANEL_SCRIPT
 }
 
 pub fn codex_theme_injection_script<T: Serialize>(payload: &T) -> anyhow::Result<String> {
@@ -91,7 +84,7 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
             .expect("plugin marketplace config should serialize"),
         renderer_script(),
     );
-    format!("{script}\n{CODEX_BOT_PANEL_SCRIPT}")
+    script
 }
 
 pub fn image_overlay_config(helper_port: u16, settings: &BackendSettings) -> Value {
