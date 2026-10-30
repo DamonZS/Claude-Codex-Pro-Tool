@@ -175,3 +175,27 @@
 1. **`ghcr.io/DamonZS/…` 非法**：buildx 在任何层构建之前就报 `ERROR: failed to build: invalid tag "ghcr.io/DamonZS/ccpbot:v0.2.0": repository name must be lowercase` —— 账号名带大写，注册表路径必须小写。工作流因此先算一个小写命名空间再用。
 2. **删标签把 release 变成 draft**：`git push origin :refs/tags/v0.2.0` 之后 GitHub 把旧 release 转成 draft，其资产对匿名请求 404；发布步骤末尾因此显式 `gh release edit "$TAG" --draft=false`。
 > 注：镜像 digest 会在重建时变化（构建产物不是逐字节可复现的），所以「哪个 digest 是对的」只能由 release 的 `container-images.json` 回答；本文档记录的是 2026-10-30 10:10 UTC 那次构建的取值，`server` = `sha256:c042d958d196fc0060b7ad44d2aa09482ee82cb9f0177f0640f99967960bc033`，与匿名 `HEAD /v2/damonzs/ccpbot/manifests/v0.2.0` 返回的 `Docker-Content-Digest` 一致。
+## A19 集群安装（chart 渲染）指向已发布的镜像
+
+- 通过：`helm template` 渲染出的 `image:` 是 `ghcr.io/damonzs/ccpbot:v0.2.0`；`--set image.digest=…` 后变成 `ghcr.io/damonzs/ccpbot:v0.2.0@sha256:…`；渲染结果里没有任何 `copilotkit` 字样。
+- 失败：渲染出 `ghcr.io/copilotkit/…`；或 tag 为空/与 `appVersion` 不匹配；或渲染失败。
+- 验证方式：`helm template release . …` + 对 `image:` 行做分组统计。
+- 环境事实（复现要用的）：本机 helm 由 `winget install Helm.Helm` 装（`v4.3.1`）；`registry-1.docker.io` 直连超时，chart 依赖 `postgresql 16.7.27` 是从 `docker.1ms.run` / `docker.m.daocloud.io` 镜像 `helm pull oci://<mirror>/bitnamicharts/postgresql --version 16.7.27` 取到后放进 `charts/` 才渲染成功的（未提交该 tgz，也未改 `Chart.yaml` 的依赖行）。渲染必须补齐的必填值：`secrets.intelligenceApiKey`、`database.url`、`config.singleUser=true`、`config.intelligence.apiUrl`、`config.intelligence.gatewayWsUrl`、`secrets.computerToken`、`secrets.supervisorToken`、`secrets.workerToken`、`secrets.keyEncryptionKey`。
+
+| 项 | 结论 | 证据 |
+| --- | --- | --- |
+| A19 | 通过 | `render ok, lines=489`；`4x image: ghcr.io/damonzs/ccpbot:v0.2.0`；补 `image.digest` 后 `image: ghcr.io/damonzs/ccpbot:v0.2.0@sha256:c042d958d196fc0060b7ad44d2aa09482ee82cb9f0177f0640f99967960bc033`（该 digest 取自 release 的 `container-images.json`，与匿名 `HEAD /v2/…/manifests/v0.2.0` 一致）；`copilotkit hits = 0` |
+
+## A20 桌面安装器真的从 GitHub 把这一份下载下来
+
+- 通过：桌面 crate 自带的 ignored 用例 `live_latest_release_is_downloaded_and_pinned` 对着真实 GitHub 跑通：取 latest release → 下载 tarball → 按 `REQUIRED` 列表铺开部署 → 取 `container-images.json` → 记录版本 → 重启动不再需要网络。
+- 失败：下载失败、清单缺失、`package.json` 版本与 tag 不一致、或重启动仍访问网络。
+- 验证方式：`cargo test --lib live_latest_release_is_downloaded_and_pinned -- --include-ignored --nocapture`（在 `desktop/src-tauri` 下）。
+
+| 项 | 结论 | 证据 |
+| --- | --- | --- |
+| A20 | 通过 | `Finished test profile in 1m 12s`；`Downloaded and pinned v0.2.0; tagged source, image manifest, and offline reuse verified.`；`test result: ok. 1 passed; 0 failed`，用例自身耗时 5.98s |
+
+### 版本状态说明
+
+`v0.2.0` 标签指向 `d67e273`（CI 修好后重打的那次），其后的 `87d1604` 只改了 `charts/ccpbot/values.yaml` 的注释，不影响镜像与 tarball 内容；因此没有再次重打标签，避免 digest 反复变化让文档失真。

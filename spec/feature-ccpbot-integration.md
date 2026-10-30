@@ -156,3 +156,10 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 镜像由仓库内的 `.github/workflows/publish-images.yml` 在 `v*` 标签上构建发布，不在开发机上发布：`ghcr.io` 的写权限属于仓库（`GITHUB_TOKEN` 的 `packages: write`），不属于某个人的 OAuth token —— 实测 `gho_` token 登录成功但 `docker push` 报 `denied: permission_denied: The token provided does not match expected scopes.`。
 
 同一份清单是「桌面安装器」和「集群 chart」的共同真相：`deployment.rs` 的 `image_variables()` 与 `charts/ccpbot` 的 `image.tag` 都读它，所以镜像漏掉一个名字时，安装器会拒绝而不是跑起一个混合版本的栈。
+### 三条安装路径的验证状态
+
+| 路径 | 入口 | 验证 |
+| --- | --- | --- |
+| 页面内嵌 + 源码启动 | `ccpbot_prepare` → `bun run dev` | live 用例 `live_prepare_downloads_and_seeds_env`（真实克隆 + `bun install`）、`live_start_serves_health_and_stop_frees_the_port`（真起真停 + 端口释放） |
+| 桌面安装器 | `deployment::fetch` 读 `container-images.json` | `live_latest_release_is_downloaded_and_pinned`：下载 `v0.2.0`、铺开、清单比对、离线复用 |
+| 集群 chart | `charts/ccpbot` + release 清单里的 digest | `helm template` 渲染出 `ghcr.io/damonzs/ccpbot:v0.2.0`（及 `@sha256:` 形式） |
