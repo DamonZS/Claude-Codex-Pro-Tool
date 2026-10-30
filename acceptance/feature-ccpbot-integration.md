@@ -168,9 +168,10 @@
 
 | 项 | 结论 | 证据 |
 | --- | --- | --- |
-| A18 | 通过 | `archive/refs/tags/v0.2.0.tar.gz` → 200，10,832,745 字节，解包后 `package.json` = `ccpbot / 0.2.0`、`zh-CN.ts` 134239 字节、`.github/workflows/publish-images.yml` 存在；`releases/download/v0.2.0/container-images.json` → 200，键集合 `agent-bot, agent-computer, agent-langgraph, server, supervisor`；`api.github.com/repos/DamonZS/CCP-Bot/releases/latest` → 200（`tag_name=v0.2.0`）；匿名 `HEAD https://ghcr.io/v2/damonzs/ccpbot/manifests/v0.2.0` → 200；`docker pull ghcr.io/damonzs/ccpbot@sha256:e07d8265…` → 成功 |
+| A18 | 通过 | `archive/refs/tags/v0.2.0.tar.gz` → 200，10,832,745 字节，解包后 `package.json` = `ccpbot / 0.2.0`、`zh-CN.ts` 134239 字节、`.github/workflows/publish-images.yml` 存在；`releases/download/v0.2.0/container-images.json` → 200，键集合 `agent-bot, agent-computer, agent-langgraph, server, supervisor`；`api.github.com/repos/DamonZS/CCP-Bot/releases/latest` → 200（`tag_name=v0.2.0`）；匿名 `HEAD https://ghcr.io/v2/damonzs/ccpbot/manifests/v0.2.0` → 200；`docker pull ghcr.io/damonzs/ccpbot@sha256:c042d958…` → 成功 |
 
 ### 过程中修掉的两个真问题
 
 1. **`ghcr.io/DamonZS/…` 非法**：buildx 在任何层构建之前就报 `ERROR: failed to build: invalid tag "ghcr.io/DamonZS/ccpbot:v0.2.0": repository name must be lowercase` —— 账号名带大写，注册表路径必须小写。工作流因此先算一个小写命名空间再用。
 2. **删标签把 release 变成 draft**：`git push origin :refs/tags/v0.2.0` 之后 GitHub 把旧 release 转成 draft，其资产对匿名请求 404；发布步骤末尾因此显式 `gh release edit "$TAG" --draft=false`。
+> 注：镜像 digest 会在重建时变化（构建产物不是逐字节可复现的），所以「哪个 digest 是对的」只能由 release 的 `container-images.json` 回答；本文档记录的是 2026-10-30 10:10 UTC 那次构建的取值，`server` = `sha256:c042d958d196fc0060b7ad44d2aa09482ee82cb9f0177f0640f99967960bc033`，与匿名 `HEAD /v2/damonzs/ccpbot/manifests/v0.2.0` 返回的 `Docker-Content-Digest` 一致。
