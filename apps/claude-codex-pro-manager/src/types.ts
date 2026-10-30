@@ -1504,6 +1504,7 @@ export type InstallEntrypointsResult = CommandResult<{
 
 export type Route =
   | "overview"
+  | "ccpbot"
   | "supplier"
   | "clients"
   | "memory"
@@ -1523,3 +1524,63 @@ declare global {
     __CLAUDE_CODEX_PRO_INITIAL_ROUTE?: Route | LegacyRoute;
   }
 }
+
+// CCP-Bot integration. The stack lives outside this repository, so these types
+// describe the manager's view of it: where it should be, whether it answers, and
+// what the last start/stop did.
+export type CcpBotMode = "source" | "docker";
+
+export type CcpBotConfig = {
+  address: string;
+  mode: CcpBotMode;
+  projectDir: string;
+};
+
+export type CcpBotProbe = {
+  address: string;
+  reachable: boolean;
+  status: number | null;
+  detail: string;
+  elapsedMs: number;
+};
+
+export type CcpBotRuntime = {
+  bunVersion: string | null;
+  dockerCli: string | null;
+  dockerDaemon: boolean;
+  projectDirPresent: boolean;
+  envReady: boolean;
+  appPortOpen: boolean;
+  serverPortOpen: boolean;
+};
+
+export type CcpBotAction = {
+  changed: boolean;
+  pid: number | null;
+  message: string;
+  logPath: string;
+};
+
+export type CcpBotSnapshot = {
+  config: CcpBotConfig;
+  probe: CcpBotProbe;
+  runtime: CcpBotRuntime;
+  pid: number | null;
+  logPath: string;
+  logText: string;
+};
+
+export type CcpBotStatus = {
+  probe: CcpBotProbe;
+  runtime: CcpBotRuntime;
+  pid: number | null;
+};
+
+export type CcpBotConfigResult = {
+  config: CcpBotConfig;
+};
+
+export type CcpBotLogResult = {
+  path: string;
+  text: string;
+};

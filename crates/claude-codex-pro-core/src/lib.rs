@@ -6,6 +6,7 @@ pub mod assets;
 pub mod bridge;
 pub mod ccp_backup;
 pub mod ccp_db;
+pub mod ccpbot;
 pub mod cdp;
 pub mod claude_desktop;
 pub mod claude_desktop_computer_use;

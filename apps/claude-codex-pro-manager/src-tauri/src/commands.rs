@@ -10,6 +10,9 @@ use std::sync::{
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
+use claude_codex_pro_core::ccpbot::{
+    self, CcpBotAction, CcpBotConfig, CcpBotProbe, CcpBotRuntime, CcpBotStore,
+};
 use claude_codex_pro_core::claude_desktop_computer_use;
 use claude_codex_pro_core::claude_desktop_provider::{
     ClaudeDesktopProviderOutcome, ClaudeDesktopProviderPreview, ClaudeDesktopProviderRequest,
@@ -16638,4 +16641,193 @@ pub fn read_local_prompt(source_path: String) -> CommandResult<PromptContentPayl
             },
         ),
     }
+}
+
+// --- CCP-Bot integration ---------------------------------------------------
+//
+// CCP-Bot lives outside this repository (a separate bun/docker stack), so the
+// manager never ships it: these commands only read its config, probe the
+// address the user configured, and start/stop the stack in its own checkout.
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CcpBotSnapshotPayload {
+    pub config: CcpBotConfig,
+    pub probe: CcpBotProbe,
+    pub runtime: CcpBotRuntime,
+    pub pid: Option<u32>,
+    pub log_path: String,
+    pub log_text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CcpBotStatusPayload {
+    pub probe: CcpBotProbe,
+    pub runtime: CcpBotRuntime,
+    pub pid: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CcpBotConfigPayload {
+    pub config: CcpBotConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcpBotLogRequest {
+    pub lines: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CcpBotLogPayload {
+    pub path: String,
+    pub text: String,
+}
+
+fn ccpbot_store() -> CcpBotStore {
+    CcpBotStore::new(CcpBotStore::default_path())
+}
+
+fn ccpbot_action_failure(message: &str) -> CcpBotAction {
+    let (log_path, _) = ccpbot::log_tail(ccpbot::dev_log_file(), 0);
+    CcpBotAction {
+        changed: false,
+        pid: None,
+        message: message.to_string(),
+        log_path,
+    }
+}
+
+#[tauri::command]
+pub async fn ccpbot_load() -> CommandResult<CcpBotSnapshotPayload> {
+    let config = ccpbot_store().load();
+    let probe = ccpbot::probe(&config.address).await;
+    let runtime = ccpbot::runtime(&config);
+    let pid = ccpbot::running_pid();
+    let (log_path, log_text) = ccpbot::log_tail(ccpbot::dev_log_file(), 60);
+    ok(
+        "CCP-Bot 状态已加载。",
+        CcpBotSnapshotPayload {
+            config,
+            probe,
+            runtime,
+            pid,
+            log_path,
+            log_text,
+        },
+    )
+}
+
+#[tauri::command]
+pub async fn ccpbot_probe() -> CommandResult<CcpBotStatusPayload> {
+    let config = ccpbot_store().load();
+    let probe = ccpbot::probe(&config.address).await;
+    let runtime = ccpbot::runtime(&config);
+    let pid = ccpbot::running_pid();
+    let (message, status): (String, &str) = if probe.reachable {
+        ("CCP-Bot 可达。".to_string(), "ok")
+    } else {
+        (probe.detail.clone(), "warning")
+    };
+    let payload = CcpBotStatusPayload {
+        probe,
+        runtime,
+        pid,
+    };
+    if status == "ok" {
+        ok(&message, payload)
+    } else {
+        failed(&message, payload)
+    }
+}
+
+#[tauri::command]
+pub async fn ccpbot_save_config(config: CcpBotConfig) -> CommandResult<CcpBotConfigPayload> {
+    match ccpbot_store().save(config) {
+        Ok(config) => ok("CCP-Bot 配置已保存。", CcpBotConfigPayload { config }),
+        Err(error) => failed(
+            &format!("保存 CCP-Bot 配置失败：{error}"),
+            CcpBotConfigPayload {
+                config: ccpbot_store().load(),
+            },
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn ccpbot_start() -> CommandResult<CcpBotAction> {
+    let config = ccpbot_store().load();
+    match ccpbot::start(&config) {
+        Ok(action) => {
+            let message = action.message.clone();
+            ok(&message, action)
+        }
+        Err(error) => {
+            let message = format!("{error}");
+            failed(&message, ccpbot_action_failure(&message))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn ccpbot_stop() -> CommandResult<CcpBotAction> {
+    let config = ccpbot_store().load();
+    match ccpbot::stop(&config) {
+        Ok(action) => {
+            let message = action.message.clone();
+            ok(&message, action)
+        }
+        Err(error) => {
+            let message = format!("{error}");
+            failed(&message, ccpbot_action_failure(&message))
+        }
+    }
+}
+
+/// Stage 2: download the published CCP-Bot checkout, install its dependencies and
+/// seed .env, using whatever address/mode/directory the page currently shows.
+///
+/// The typed configuration is saved first so a successful download can be started
+/// immediately from the same values the user was looking at.
+#[tauri::command]
+pub async fn ccpbot_prepare(config: CcpBotConfig) -> CommandResult<CcpBotAction> {
+    let config = match ccpbot_store().save(config) {
+        Ok(config) => config,
+        Err(error) => {
+            let message = format!("保存 CCP-Bot 配置失败：{error}");
+            return failed(
+                &message,
+                CcpBotAction {
+                    changed: false,
+                    pid: None,
+                    message: message.clone(),
+                    log_path: ccpbot::log_tail(ccpbot::prepare_log_file(), 0).0,
+                },
+            );
+        }
+    };
+    match ccpbot::prepare(&config) {
+        Ok(action) => {
+            let message = action.message.clone();
+            ok(&message, action)
+        }
+        Err(error) => {
+            let message = format!("{error}");
+            failed(
+                &message,
+                CcpBotAction {
+                    changed: false,
+                    pid: None,
+                    message: message.clone(),
+                    log_path: ccpbot::log_tail(ccpbot::prepare_log_file(), 0).0,
+                },
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn ccpbot_log_tail(request: CcpBotLogRequest) -> CommandResult<CcpBotLogPayload> {
+    let lines = request.lines.unwrap_or(60).clamp(1, 500);
+    let (path, text) = ccpbot::log_tail(ccpbot::dev_log_file(), lines);
+    ok("CCP-Bot 日志已读取。", CcpBotLogPayload { path, text })
 }

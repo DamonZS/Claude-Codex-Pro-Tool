@@ -1348,10 +1348,11 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
     );
     assert_eq!(
         primary_routes.matches("id: \"").count(),
-        10,
-        "the sidebar must expose exactly ten primary destinations"
+        11,
+        "the sidebar must expose exactly eleven primary destinations"
     );
     for (id, label) in [
+        ("ccpbot", "CCP-Bot"),
         ("overview", "概览"),
         ("supplier", "供应商与路由"),
         ("clients", "蒸馏工作台"),

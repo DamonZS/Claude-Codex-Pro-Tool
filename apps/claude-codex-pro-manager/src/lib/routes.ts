@@ -1,4 +1,5 @@
 import {
+  Bot,
   Boxes,
   Brain,
   FlaskConical,
@@ -28,6 +29,7 @@ export type RouteItem = {
 // entries. Compatibility routes remain in `routeCatalog` so external links and
 // older launcher builds can still open them directly.
 export const routes: RouteItem[] = [
+  { id: "ccpbot", label: "CCP-Bot", icon: Bot, description: "CCP-Bot 工作台：状态、启动与内嵌界面", keywords: ["ccpbot", "openbot", "bot", "workspace", "harness", "工作台", "智能体"] },
   { id: "overview", label: "概览", icon: LayoutDashboard, description: "服务状态、异常与近期操作", keywords: ["首页", "状态", "dashboard"] },
   { id: "supplier", label: "供应商与路由", icon: Network, description: "第三方 API、模型映射、代理与故障转移", keywords: ["provider", "api", "model", "protocol", "模型", "协议", "代理", "中转"] },
   { id: "clients", label: "蒸馏工作台", icon: FlaskConical, description: "从本机会话提炼并管理可复用的能力与记忆资产", keywords: ["distill", "蒸馏", "skill", "workflow", "prompt", "persona", "memory"] },
@@ -101,6 +103,7 @@ export function normalizeRoute(value: unknown): unknown {
 
 export function routeSubtitle(route: Route) {
   const subtitles: Record<Route, string> = {
+    ccpbot: "",
     overview: "",
     supplier: "",
     clients: "",

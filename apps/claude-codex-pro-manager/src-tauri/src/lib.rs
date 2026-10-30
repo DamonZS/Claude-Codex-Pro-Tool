@@ -93,6 +93,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::backend_version,
+            commands::ccpbot_load,
+            commands::ccpbot_probe,
+            commands::ccpbot_save_config,
+            commands::ccpbot_start,
+            commands::ccpbot_stop,
+            commands::ccpbot_prepare,
+            commands::ccpbot_log_tail,
             commands::startup_options,
             commands::load_overview,
             commands::load_claude_desktop_status,

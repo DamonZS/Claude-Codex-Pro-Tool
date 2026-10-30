@@ -35,6 +35,7 @@ import { type Dispatch, type DragEvent, type SetStateAction, memo, useCallback, 
 
 import { Button } from "@/components/ui/button";
 import { AppShell, type AgentScope, type ProxyHealth } from "@/components/AppShell";
+import { CcpBotScreen } from "@/components/CcpBotScreen";
 import type { AgentAppId } from "@/components/settings/contract";
 import { ClientsEnhancementScreen } from "@/components/ClientsEnhancementScreen";
 import { MemoryLibraryPage } from "@/components/memory/MemoryLibraryPage";
@@ -3053,6 +3054,7 @@ export function App() {
         supplierOptions={shellSupplierOptions}
         updateInfo={updateInfo}
       >
+          {route === "ccpbot" ? <CcpBotScreen /> : null}
           {route === "overview" ? <OverviewScreen actions={actions} agentScope={agentScope} aitrackerCapabilities={aitrackerCapabilities} distillationCandidates={distillationCandidates} requestTimeline={requestTimeline} /> : null}
           {route === "supplier" ? (
             <SupplierScreen
