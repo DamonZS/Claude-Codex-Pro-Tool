@@ -46,7 +46,7 @@ pub const DEFAULT_PROJECT_DIR: &str = "";
 /// The published CCP-Bot repository. It is the localized build (zh-CN interface,
 /// CCP-Bot naming), so "download CCP-Bot" and "download what this page embeds" are
 /// the same artifact instead of two products that drift apart.
-pub const DEFAULT_REPO_URL: &str = "https://github.com/DamonZS/ccp.git";
+pub const DEFAULT_REPO_URL: &str = "https://github.com/DamonZS/CCP-Bot.git";
 /// Log of the download / install sequence, kept apart from the dev-server log so a
 /// failed clone does not bury the reason under a later startup trace.
 pub const CCPBOT_PREPARE_LOG_FILE: &str = "ccpbot-prepare.log";

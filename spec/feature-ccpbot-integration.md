@@ -133,7 +133,7 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 
 分发缺口用一条命令关掉：`ccpbot_prepare`。目标目录为空时，它按顺序做四件事，每件都写进返回消息：
 
-1. `git clone --depth 1 https://github.com/DamonZS/ccp.git .`（目标是 `DEFAULT_REPO_URL`，即**汉化改名后的这一份**，所以“下载 CCP-Bot”和“下载这个页面内嵌的东西”是同一个产物，不会分裂成两个会漂移的产品）；
+1. `git clone --depth 1 https://github.com/DamonZS/CCP-Bot.git .`（目标是 `DEFAULT_REPO_URL`，即**汉化改名后的这一份**，所以“下载 CCP-Bot”和“下载这个页面内嵌的东西”是同一个产物，不会分裂成两个会漂移的产品）；
 2. `bun install`（用 `resolve_bun` 找到真 `bun.exe`，不是 PATH 上的 `bun.cmd` shim）；
 3. 从 `.env.example` 复制 `.env`（不覆盖已有 `.env`，密钥仍由用户填）；
 4. 打印结果与日志路径 `<state>/ccpbot-prepare.log`。
