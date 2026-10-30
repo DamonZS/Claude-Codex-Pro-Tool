@@ -973,11 +973,7 @@ fn write_install_log(line: &str) {
     if let Some(parent) = log.parent() {
         fs::create_dir_all(parent).ok();
     }
-    if let Ok(mut file) = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log)
-    {
+    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&log) {
         writeln!(file, "{line}").ok();
     }
 }
@@ -1012,9 +1008,7 @@ pub async fn install_latest() -> Result<CcpBotAction> {
 pub async fn download_latest_installer() -> Result<(String, String, PathBuf)> {
     let platform = host_platform();
     if matches!(platform, Platform::Unsupported) {
-        bail!(
-            "一键安装只提供 Windows 与 macOS 的安装包；这套系统请用「下载并准备」从源码启动。"
-        );
+        bail!("一键安装只提供 Windows 与 macOS 的安装包；这套系统请用「下载并准备」从源码启动。");
     }
     let client = reqwest::Client::builder()
         .user_agent(CCPBOT_USER_AGENT)
@@ -1063,9 +1057,12 @@ pub async fn download_latest_installer() -> Result<(String, String, PathBuf)> {
             bytes.len()
         );
     }
-    fs::write(&target, &bytes)
-        .with_context(|| format!("写入安装包失败：{}", target.display()))?;
-    write_install_log(&format!("saved {} bytes to {}", bytes.len(), target.display()));
+    fs::write(&target, &bytes).with_context(|| format!("写入安装包失败：{}", target.display()))?;
+    write_install_log(&format!(
+        "saved {} bytes to {}",
+        bytes.len(),
+        target.display()
+    ));
     Ok((release.tag_name, asset.name, target))
 }
 
@@ -1080,12 +1077,7 @@ fn run_installer(path: &Path) -> Result<String> {
     {
         let mut command = if name.ends_with(".msi") {
             let mut command = Command::new("msiexec");
-            command.args([
-                "/i",
-                &path.display().to_string(),
-                "/qn",
-                "/norestart",
-            ]);
+            command.args(["/i", &path.display().to_string(), "/qn", "/norestart"]);
             command
         } else {
             // `/S` is the NSIS silent flag: present the installer's own progress UI would need a
@@ -1123,7 +1115,7 @@ fn run_installer(path: &Path) -> Result<String> {
         }
         // A DMG cannot install itself: mounting it is the furthest a process may go without the
         // person dragging the app, so the message says exactly that instead of claiming success.
-        return Ok("已挂载磁盘映像，把 CCP-Bot 拖进「应用程序」即完成");
+        return Ok("已挂载磁盘映像，把 CCP-Bot 拖进「应用程序」即完成".to_string());
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -1675,7 +1667,10 @@ mod tests {
         let error = pick_installer(&assets, Platform::MacOs).expect_err("refuse a foreign bundle");
         let text = error.to_string();
         assert!(text.contains("另一种架构"), "{text}");
-        assert!(text.to_lowercase().contains(&foreign.to_lowercase()), "{text}");
+        assert!(
+            text.to_lowercase().contains(&foreign.to_lowercase()),
+            "{text}"
+        );
     }
     #[test]
     fn a_release_without_an_installer_does_not_pretend_it_has_one() {
