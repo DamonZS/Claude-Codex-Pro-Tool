@@ -42,14 +42,18 @@ pub const DEFAULT_ADDRESS: &str = "http://127.0.0.1:3010";
 /// wrong for every other CCP user, so the page asks for the directory once and
 /// stores it under that user own state dir; empty reads as "not chosen yet".
 pub const DEFAULT_PROJECT_DIR: &str = "";
-/// The Hono server port used for the "is the stack up?" port probe.
 /// The published CCP-Bot repository. It is the localized build (zh-CN interface,
 /// CCP-Bot naming), so "download CCP-Bot" and "download what this page embeds" are
 /// the same artifact instead of two products that drift apart.
+///
+/// Releases live on the tag matching `package.json` (`v0.2.0` today), and that
+/// release carries `container-images.json`: one digest per image, which is what
+/// the desktop installer and the chart both pin.
 pub const DEFAULT_REPO_URL: &str = "https://github.com/DamonZS/CCP-Bot.git";
 /// Log of the download / install sequence, kept apart from the dev-server log so a
 /// failed clone does not bury the reason under a later startup trace.
 pub const CCPBOT_PREPARE_LOG_FILE: &str = "ccpbot-prepare.log";
+/// The Hono server port used for the "is the stack up?" port probe.
 pub const DEFAULT_SERVER_PORT: u16 = 3001;
 /// Total budget for one health probe. The page must never look hung, so this is
 /// shorter than the shared `http_client` timeout by design.

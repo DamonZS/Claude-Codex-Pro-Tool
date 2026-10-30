@@ -160,3 +160,17 @@
 | A16 | 通过 | `prepare_without_a_directory_asks_for_one`、`prepare_refuses_a_directory_that_holds_something_else`；真实链路 `live_prepare_downloads_and_seeds_env`（`--include-ignored`）→ **1 passed**，124.89s，克隆了 `https://github.com/DamonZS/CCP-Bot.git`、`bun install` 完成、`node_modules` 与 `package.json` 落盘 |
 | A17 | 通过 | `gh api repos/DamonZS/CCP-Bot/contents/app/src/lib/i18n/messages/zh-CN.ts` → size 134239；仓库 `CCP-Bot` public、默认分支 `master`、`git ls-tree` 含 `charts/ccpbot/Chart.yaml`；README 已推送（1593 bytes） |
 | 命令注册 | 通过 | `ccpbot_prepare` 在 `lib.rs` 的 `generate_handler!` 中注册；`cargo check -p claude-codex-pro-manager` 完成；`run check`/`vite:build` exit 0；`windows_subsystem` 90 passed |
+## A18 发布物可被匿名下载（安装链路的前提）
+
+- 通过：四个 URL 在**不带凭据**的情况下可取：源码压缩包、`container-images.json`、最新 release 的 API、以及 `docker pull` 镜像；清单的五个键与 `IMAGE_VARIABLES` 完全一致。
+- 失败：任一 URL 401/404；清单缺键或多键；标签格式与 `resolve_version()` 期望不符。
+- 验证方式：`Invoke-WebRequest -Method Head`（匿名）、`gh release list --repo DamonZS/CCP-Bot`、`jq '.images|keys'` 与 `IMAGE_VARIABLES` 对照、`docker pull <ref>@sha256:…`。
+
+| 项 | 结论 | 证据 |
+| --- | --- | --- |
+| A18 | 通过 | `archive/refs/tags/v0.2.0.tar.gz` → 200，10,832,745 字节，解包后 `package.json` = `ccpbot / 0.2.0`、`zh-CN.ts` 134239 字节、`.github/workflows/publish-images.yml` 存在；`releases/download/v0.2.0/container-images.json` → 200，键集合 `agent-bot, agent-computer, agent-langgraph, server, supervisor`；`api.github.com/repos/DamonZS/CCP-Bot/releases/latest` → 200（`tag_name=v0.2.0`）；匿名 `HEAD https://ghcr.io/v2/damonzs/ccpbot/manifests/v0.2.0` → 200；`docker pull ghcr.io/damonzs/ccpbot@sha256:e07d8265…` → 成功 |
+
+### 过程中修掉的两个真问题
+
+1. **`ghcr.io/DamonZS/…` 非法**：buildx 在任何层构建之前就报 `ERROR: failed to build: invalid tag "ghcr.io/DamonZS/ccpbot:v0.2.0": repository name must be lowercase` —— 账号名带大写，注册表路径必须小写。工作流因此先算一个小写命名空间再用。
+2. **删标签把 release 变成 draft**：`git push origin :refs/tags/v0.2.0` 之后 GitHub 把旧 release 转成 draft，其资产对匿名请求 404；发布步骤末尾因此显式 `gh release edit "$TAG" --draft=false`。

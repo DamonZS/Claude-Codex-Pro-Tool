@@ -141,3 +141,18 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 拒绝而不是猜测的三种情况：目录为空字符串（提示先选目录）、目录非空且没有 `package.json`（提示换一个空文件夹或直接选已有目录）、机器上没有 git / 没有 bun（提示装什么）。原因：往别人的目录里克隆，比直接拒绝糟糕得多。
 
 已经存在 `package.json` 的目录视为“已有 CCP-Bot”，跳过下载；已有 `node_modules` 与 `.env` 同样跳过，所以这一步可以重复执行。
+## 已发布产物（下载源在哪）
+
+「下载并准备」能成立的前提是远端真的有一份可下载的汉化版。当前发布状态：
+
+| 交付物 | 位置 | 验证方式 |
+| --- | --- | --- |
+| 源码仓库 | `https://github.com/DamonZS/CCP-Bot.git`（默认分支 `master`） | `git clone --depth 1` 实测，见 A16 的 live 用例 |
+| 源码压缩包 | `https://github.com/DamonZS/CCP-Bot/archive/refs/tags/v0.2.0.tar.gz` | HTTP 200；解包后 `package.json` 为 `name: ccpbot / version: 0.2.0`，`app/src/lib/i18n/messages/zh-CN.ts` 为 134239 字节 |
+| 版本标签 | `v0.2.0`（与 `package.json` 的 `0.2.0` 对齐，桌面安装器直接把它当 tag 用） | `resolve_version()` 取 `tag_name` 当版本，不再拼接前缀 |
+| 发布清单 | `https://github.com/DamonZS/CCP-Bot/releases/download/v0.2.0/container-images.json` | 匿名 HTTP 200；五个键 `server / supervisor / agent-computer / agent-bot / agent-langgraph` 与 `deployment.rs` 的 `IMAGE_VARIABLES` 逐一对应 |
+| 容器镜像 | `ghcr.io/damonzs/ccpbot[-agent-computer|-supervisor|-agent-bot|-agent-langgraph]@sha256:…` | 匿名 `HEAD /v2/.../manifests/v0.2.0` → 200；`docker pull …@sha256:e07d8265…` 成功 |
+
+镜像由仓库内的 `.github/workflows/publish-images.yml` 在 `v*` 标签上构建发布，不在开发机上发布：`ghcr.io` 的写权限属于仓库（`GITHUB_TOKEN` 的 `packages: write`），不属于某个人的 OAuth token —— 实测 `gho_` token 登录成功但 `docker push` 报 `denied: permission_denied: The token provided does not match expected scopes.`。
+
+同一份清单是「桌面安装器」和「集群 chart」的共同真相：`deployment.rs` 的 `image_variables()` 与 `charts/ccpbot` 的 `image.tag` 都读它，所以镜像漏掉一个名字时，安装器会拒绝而不是跑起一个混合版本的栈。
