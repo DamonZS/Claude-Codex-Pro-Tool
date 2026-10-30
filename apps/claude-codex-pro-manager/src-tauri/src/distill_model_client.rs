@@ -227,7 +227,10 @@ pub fn request_body(protocol: ModelProtocol, model: &str, prompt: &str, input: &
                 messages.push(json!({ "role": "system", "content": prompt }));
             }
             messages.push(json!({ "role": "user", "content": input }));
-            json!({ "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "messages": messages })
+            // Some gateways (e.g. api.toporeduce.cn) always answer with an SSE
+            // stream and emit an empty completion when `stream` is false, so the
+            // request must ask for the stream and the reply is parsed as one.
+            json!({ "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "stream": true, "messages": messages })
         }
     }
 }
@@ -301,6 +304,9 @@ fn classify(text: &str, reasoning: &str) -> ResponseKind {
 
 /// Port of `parseChatCompletion`.
 pub fn parse_completion(protocol: ModelProtocol, raw: &str) -> (String, ResponseKind) {
+    if raw.trim_start().starts_with("data:") {
+        return parse_sse_completion(protocol, raw);
+    }
     let Ok(json) = serde_json::from_str::<Value>(raw) else {
         return (String::new(), ResponseKind::NotJson);
     };
@@ -369,6 +375,82 @@ pub fn parse_completion(protocol: ModelProtocol, raw: &str) -> (String, Response
     }
     let reasoning =
         text_from_content(choice.and_then(|choice| choice.pointer("/message/reasoning_content")));
+    let kind = classify(&text, &reasoning);
+    (text, kind)
+}
+
+/// Text of one streamed delta, untrimmed: chunks split words arbitrarily, so
+/// trimming each piece would glue them together.
+fn delta_text(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .map(|part| match part {
+                Value::String(text) => text.clone(),
+                Value::Object(record) => record
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .or_else(|| record.get("content").and_then(Value::as_str))
+                    .unwrap_or("")
+                    .to_string(),
+                _ => String::new(),
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
+
+/// Parse a server-sent-events completion: each `data:` frame is one chunk,
+/// the reply is the concatenation of its deltas and the stream ends with
+/// `data: [DONE]`. Gateways that always stream (api.toporeduce.cn) answer here.
+pub fn parse_sse_completion(protocol: ModelProtocol, raw: &str) -> (String, ResponseKind) {
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    let mut frames = 0usize;
+    for line in raw.lines() {
+        let Some(payload) = line.trim_start().strip_prefix("data:") else {
+            continue;
+        };
+        let payload = payload.trim();
+        if payload.is_empty() || payload == "[DONE]" {
+            continue;
+        }
+        let Ok(frame) = serde_json::from_str::<Value>(payload) else {
+            continue;
+        };
+        frames += 1;
+        let delta = frame.pointer("/choices/0/delta");
+        text.push_str(&delta_text(delta.and_then(|delta| delta.get("content"))));
+        if protocol == ModelProtocol::Anthropic {
+            if let Some(part) = frame
+                .get("delta")
+                .and_then(|delta| delta.get("text"))
+                .and_then(Value::as_str)
+            {
+                text.push_str(part);
+            }
+        }
+        if let Some(part) = delta
+            .and_then(|delta| delta.get("reasoning_content"))
+            .and_then(Value::as_str)
+        {
+            reasoning.push_str(part);
+        }
+        if let Some(part) = frame
+            .get("delta")
+            .and_then(|delta| delta.get("thinking"))
+            .and_then(Value::as_str)
+        {
+            reasoning.push_str(part);
+        }
+    }
+    if frames == 0 {
+        return (String::new(), ResponseKind::NotJson);
+    }
+    let text = text.trim().to_string();
+    let reasoning = reasoning.trim().to_string();
     let kind = classify(&text, &reasoning);
     (text, kind)
 }
@@ -661,7 +743,8 @@ mod tests {
         let body: Value = serde_json::from_str(&request.body).unwrap();
         assert_eq!(body["max_tokens"], 8192);
         assert!(body.get("temperature").is_none());
-        assert!(body.get("stream").is_none());
+        // The provider only emits content on a streamed reply.
+        assert_eq!(body["stream"], json!(true));
         assert_eq!(
             body["messages"][0],
             json!({"role":"system","content":"system"})
@@ -809,5 +892,47 @@ mod tests {
             detail.chars().count() <= "http-error:500 · ".chars().count() + MAX_DETAIL_CHARS,
             "detail was not truncated: {detail}"
         );
+    }
+
+    #[test]
+    fn distill_model_parses_server_sent_events_completion() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (text, kind) = parse_completion(ModelProtocol::OpenAi, raw);
+        assert_eq!(text, "Hello world");
+        assert_eq!(kind, ResponseKind::Ok);
+    }
+
+    #[test]
+    fn distill_model_parses_streamed_reasoning_only() {
+        let raw = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"想一想\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (text, kind) = parse_completion(ModelProtocol::OpenAi, raw);
+        assert!(text.is_empty());
+        assert_eq!(kind, ResponseKind::ReasoningOnly);
+    }
+
+    #[test]
+    fn distill_model_reports_empty_streamed_completion() {
+        // Verbatim shape of api.toporeduce.cn: a usage-only chunk, then [DONE].
+        let raw = concat!(
+            "data: {\"id\":\"\",\"object\":\"chat.completion.chunk\",\"choices\":[],",
+            "\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":0}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (text, kind) = parse_completion(ModelProtocol::OpenAi, raw);
+        assert!(text.is_empty());
+        assert_eq!(kind, ResponseKind::EmptyContent);
+    }
+
+    #[test]
+    fn openai_request_body_asks_for_a_stream() {
+        let body = request_body(ModelProtocol::OpenAi, "fixture-model", "sys", "input");
+        assert_eq!(body.get("stream").and_then(Value::as_bool), Some(true));
     }
 }

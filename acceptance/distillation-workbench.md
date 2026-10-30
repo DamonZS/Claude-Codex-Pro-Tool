@@ -8,6 +8,7 @@
 - [ ] Rust 提示词：skill / brief / persona / memory 与 AITracker `prompts.ts` 原文一致（单测断言关键句 + FNV 哈希）；prompt 有意偏离，单测断言其为「可直接复制使用的系统提示词」、含 9 个一级章节、禁止空骨架、Inputs 最多 2 个变量。
 - [ ] 流水线：校验规则、controlledContext、压缩、segmentMarkdown、质检反馈重试、候选标题/摘要规则有单测覆盖。
 - [ ] 模型调用：本地 mock HTTP 验证 openai/responses/anthropic 三种协议的 URL、请求体（无 temperature、max_tokens 8192）、请求头；429 后重试成功；仅推理内容判失败。
+- [ ] SSE 响应解析（规格 12）：`cargo test -p claude-codex-pro-manager --lib distill_model` 通过，覆盖：`data:` 流按 `choices[0].delta.content` 拼出正文并判 `Ok`；只有推理帧判 `reasoning-only`；真实中转站的空帧（`choices: []` + `usage`）判 `empty-content`；OpenAI 请求体带 `stream: true`。实机验证（需用户执行）：用中转站供应商（chat/completions）一键蒸馏能产出正文，不再报「不是有效 JSON」。
 - [ ] 重试与错误详情（规格 12）：`cargo test -p claude-codex-pro-manager --lib distill_model_client` 通过，覆盖：退避为 1s/2s/4s 且最多 4 次尝试；持续 429/503 在第 4 次后上报对应错误码；5xx 的 `detail` 以 `http-error:<status> · ` 开头并含上游响应体摘要；响应体中的 API Key 被替换成 `[redacted]`；摘要折叠空白且截断到 200 字符。
 - [ ] 任务阶段与百分比同规格 10；重新打开页面恢复活动任务轮询；取消进入 cancelled。
 - [ ] 完成后候选自动批准；画像/任务记忆写入记忆库；Skill 保存写入所选 Agent 根目录、目录已存在不覆盖、SKILL.md 含 `aitracker-origin: distilled`。
