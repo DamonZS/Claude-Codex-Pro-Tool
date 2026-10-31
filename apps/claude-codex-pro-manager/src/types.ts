@@ -1561,10 +1561,27 @@ export type CcpBotAction = {
   logPath: string;
 };
 
+/**
+ * What this machine already has of CCP-Bot, in the three shapes it can arrive in.
+ *
+ * The page reads this before it offers anything: a computer that installed the
+ * desktop app yesterday is offered "start", not another download. Every field is
+ * optional because the shapes are independent of each other.
+ */
+export type CcpBotInstallation = {
+  desktopPath: string | null;
+  desktopVersion: string | null;
+  uninstallPath: string | null;
+  sourceVersion: string | null;
+  image: string | null;
+};
+
 export type CcpBotSnapshot = {
   config: CcpBotConfig;
   probe: CcpBotProbe;
   runtime: CcpBotRuntime;
+  installed: CcpBotInstallation;
+  defaultInstallDir: string;
   pid: number | null;
   logPath: string;
   logText: string;
@@ -1573,6 +1590,7 @@ export type CcpBotSnapshot = {
 export type CcpBotStatus = {
   probe: CcpBotProbe;
   runtime: CcpBotRuntime;
+  installed: CcpBotInstallation;
   pid: number | null;
 };
 

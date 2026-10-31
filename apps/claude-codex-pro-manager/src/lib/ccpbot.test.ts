@@ -50,10 +50,17 @@ describe("ccpbot 命令封装", () => {
     expect(invokeCommand).toHaveBeenNthCalledWith(4, "ccpbot_stop");
   });
 
-  it("一键安装不带地址也不带目录——那台机器本来就没有", async () => {
+  it("一键安装永远只带 request：没挑目录是 null，挑了就是那条路径", async () => {
+    // A cancelled directory dialog is not "no request" — the installer's own default is a
+    // different outcome from a chosen destination, and the backend decides which one to run.
     await installCcpBotLatest();
-    expect(invokeCommand).toHaveBeenCalledWith("ccpbot_install_latest");
-    expect(invokeCommand).toHaveBeenCalledTimes(1);
+    expect(invokeCommand).toHaveBeenNthCalledWith(1, "ccpbot_install_latest", { request: null });
+
+    await installCcpBotLatest("D:\\CCP-Bot");
+    expect(invokeCommand).toHaveBeenNthCalledWith(2, "ccpbot_install_latest", {
+      request: { dir: "D:\\CCP-Bot" },
+    });
+    expect(invokeCommand).toHaveBeenCalledTimes(2);
   });
 
   it("读日志的条数包在 request 里，默认 60、可覆盖", async () => {

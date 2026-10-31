@@ -275,3 +275,15 @@
 | A23.14 | 测试进了 CI | `.github/workflows/pr-build.yml` 与 `.github/workflows/auto-release-installers.yml` 中每个 `Type-check Manager` 之后各加一步 `Test Manager interface`（`run: npm run test`，共 4 处）；`node scripts/release/verify-release-workflow.js` → `10 NSIS installation scenarios passed.` + `release workflow contract passed`（exit 0），既有断言（`npm run check` ×2、`npm run vite:build` ×2、`macos-latest` ×1）未被触碰 |
 
 不在范围：动效手感（曲线、时长、`prefers-reduced-motion` 处理都写进了 CSS 并随截图留证，但静态图证明不了手感）；真机内嵌态只到「离线页」——本机没有跑起来的 CCP-Bot 引擎（Docker daemon 未启动，也缺 Postgres 与 `CPK_INTELLIGENCE_API_KEY`），所以 iframe 里是浏览器的错误页而非真界面；macOS 与其它机器的观感未验证。
+## A24：自动检测已装版本 + 一键安装（目录先选后装）
+
+| 检查项 | 证据 |
+| --- | --- |
+| A24.1 | 检测信号是真机取数，不是猜的 | `HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\CCP-Bot` 下带 `DisplayVersion = 0.2.4`、`InstallLocation`、`UninstallString`、`MainBinaryName = ccpbot-desktop.exe`、`Publisher = ccpbot`。把 0.2.4 的安装包以 `/S /D=%TEMP%\ccpbot-install-probe` 静默装出真实痕迹后逐项读出；再 `uninstall.exe /S` → **目录与注册表键一起消失**，同一探针第二次返回 `desktopPath=None / desktopVersion=None / uninstallPath=None`，只剩 `image=Some("ghcr.io/damonzs/ccpbot:v0.2.1")`（本机 kind 留下的一次 `kind load`）。⇒ 已装的人不会被误报、也不会漏报镜像 |
+| A24.2 | 检测结果落到界面的三处 | `crates/claude-codex-pro-core/src/ccpbot.rs` 的 `installed()` 五路探测（注册表 `InstallLocation` + `%LOCALAPPDATA%\Programs\CCP-Bot` 等候选目录找 `ccpbot-desktop.exe`、`DisplayVersion`、`uninstall.exe`、源码目录的 `package.version`、`docker image ls` 里的镜像）→ 命令层把它塞进 `ccpbot_load`/`ccpbot_probe` 的 payload（`installed` + `defaultInstallDir`）→ 界面：状态栏多一枚「已装 0.2.4」读数、三步清单第一步的说明变成「桌面版已装 0.2.4」、空状态底部按是否已装切按钮 |
+| A24.3 | 目录先问、再下载、最后真验 | 按钮「一键安装（可先选安装目录）」先弹目录选择器（`defaultPath` 就是后端给的 `%LOCALAPPDATA%\CCP-Bot`），取消也照样发给后端（`{ request: null }`，让安装器自己决定位置）；`installer_arguments()` 对 NSIS 把 `/D=<dir>` 放在**最后且不带引号**、对 MSI 用 `INSTALLDIR=<dir>` 属性；安装后**实测** `<dir>\ccpbot-desktop.exe` 是否落地：在则消息里附上路径，不在则明说「安装器可能没接受这个位置」，不谎报成功 |
+| A24.4 | 已装的人不被推去重复下载 | 已装时按钮变「重新安装最新版」，`一键安装` 不再出现（前端测试断言 `queryByRole` 为 null） |
+| A24.5 | 命令契约 | `commands::ccpbot_install_latest(request: Option<CcpBotInstallRequest>)`，参数名 `request`，`{ dir }` 或 `null`；`src/lib/ccpbot.ts` 的 `installCcpBotLatest(dir = null)` 负责这两种形态 —— 有单测钉住 |
+| A24.6 | 测试 | Rust：`cargo test -p claude-codex-pro-core --lib ccpbot` → **24 passed / 0 failed / 4 ignored**（新增 6 条：NSIS 末尾参数、MSI 属性、`reg query` 整行读取不得前缀顶替、checkout 的版本、无版本目录不算 checkout、`live_install_honours_the_directory_it_was_given` 的 ignored 用例）；前端：`npm run test` → **19 passed**（`CcpBotScreen.test.tsx` 12 条含三条安装流程：问目录→装→读回版本、取消→`{ request: null }`、已装→显示版本不给一键安装）；`npm run check` exit 0；`npm run vite:build` exit 0（5.76s）；`cargo test -p claude-codex-pro-manager --test windows_subsystem` → **90 passed / 0 failed** |
+
+不在范围：安装包仍未签名（SmartScreen/隔离警告照旧）；macOS 上目录语义不同（`.app` 是整包，选择器的结果交给 `open` 而不是就地安装）；安装器自己的向导文案不归我们；「已装但版本更旧」时不做自动升级（只在界面上显示版本并给「重新安装最新版」）。

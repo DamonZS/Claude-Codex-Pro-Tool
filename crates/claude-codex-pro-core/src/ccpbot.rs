@@ -55,6 +55,15 @@ pub const DEFAULT_REPO_URL: &str = "https://github.com/DamonZS/CCP-Bot.git";
 pub const CCPBOT_PREPARE_LOG_FILE: &str = "ccpbot-prepare.log";
 /// The Hono server port used for the "is the stack up?" port probe.
 pub const DEFAULT_SERVER_PORT: u16 = 3001;
+
+/// The executable an installed desktop build ships, named once so every probe agrees on it.
+const DESKTOP_EXE: &str = "ccpbot-desktop.exe";
+
+/// The uninstall key the per-user installer writes. It is also where it records the version, which
+/// makes it the cheapest way to answer "is CCP-Bot installed, and which build" without running
+/// anything.
+#[cfg(windows)]
+const UNINSTALL_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CCP-Bot";
 /// Total budget for one health probe. The page must never look hung, so this is
 /// shorter than the shared `http_client` timeout by design.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(3200);
@@ -978,22 +987,275 @@ fn write_install_log(line: &str) {
     }
 }
 
+/// What this machine already has of CCP-Bot, in the three shapes it can arrive in.
+///
+/// The interface asks this before it offers anything: a computer that installed the desktop app
+/// yesterday should be offered *start*, not another download. Every field is optional because each
+/// shape is independent — an app without a source checkout, a checkout without Docker, and so on.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcpBotInstallation {
+    /// Where the desktop application lives, when it is installed.
+    pub desktop_path: Option<String>,
+    /// The version that application reports.
+    pub desktop_version: Option<String>,
+    /// Its own uninstaller, so a reinstall can be preceded by a clean removal.
+    pub uninstall_path: Option<String>,
+    /// A source checkout in the configured directory, when it has a `package.json` version.
+    pub source_version: Option<String>,
+    /// The newest CCP-Bot image Docker already holds, when the machine has pulled one.
+    pub image: Option<String>,
+}
+
+/// Look for an installed CCP-Bot: the desktop app, a source checkout, and the images Docker holds.
+///
+/// Read-only and best-effort: every probe answers `None` when it cannot tell, because "we could not
+/// find it" must never be reported as "you do not have it" — the install button stays available
+/// either way, and this only decides what the interface says first.
+pub fn installed(config: &CcpBotConfig) -> CcpBotInstallation {
+    let mut found = CcpBotInstallation::default();
+
+    #[cfg(windows)]
+    {
+        // The uninstall entry is the authority: the installer writes it wherever it put the files.
+        // `InstallLocation` is that directory (quoted, and `parse_registry_value` strips the quotes),
+        // and `DisplayVersion` is preferred over reading the binary because it needs no process
+        // spawn — the binary is only consulted when a person deleted the entry by hand.
+        let mut exe = registry_value("HKCU", UNINSTALL_KEY, "InstallLocation")
+            .map(|dir| PathBuf::from(dir).join(DESKTOP_EXE));
+        if exe.as_ref().is_none_or(|path| !path.is_file()) {
+            exe = desktop_candidates().into_iter().find(|path| path.is_file());
+        }
+        if let Some(exe) = exe.filter(|path| path.is_file()) {
+            found.desktop_path = Some(exe.display().to_string());
+            found.desktop_version = registry_value("HKCU", UNINSTALL_KEY, "DisplayVersion")
+                .or_else(|| executable_version(&exe));
+            found.uninstall_path = registry_value("HKCU", UNINSTALL_KEY, "UninstallString")
+                .map(|path| path.trim_matches('"').to_string())
+                .filter(|path| Path::new(path).is_file())
+                .or_else(|| {
+                    let sibling = exe.with_file_name("uninstall.exe");
+                    sibling.is_file().then(|| sibling.display().to_string())
+                });
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let bundle = PathBuf::from("/Applications/CCP-Bot.app");
+        if bundle.is_dir() {
+            found.desktop_path = Some(bundle.display().to_string());
+            found.desktop_version = bundle_version(&bundle);
+        }
+    }
+
+    if !config.project_dir.trim().is_empty() {
+        found.source_version = package_version(Path::new(config.project_dir.trim()));
+    }
+    found.image = docker_project_images().into_iter().max();
+
+    found
+}
+
+/// The directories an installer defaults to, for an install whose registry entry was removed.
+///
+/// The per-user location first, then the machine-wide one, because Tauri's NSIS template installs
+/// per user by default and a machine-wide copy is the older arrangement.
+#[cfg(windows)]
+fn desktop_candidates() -> Vec<PathBuf> {
+    let mut places = Vec::new();
+    for variable in ["LOCALAPPDATA", "ProgramFiles"] {
+        let Some(root) = env::var_os(variable) else {
+            continue;
+        };
+        for leaf in ["CCP-Bot", "Programs\\CCP-Bot", "CCP-Bot Desktop"] {
+            places.push(PathBuf::from(&root).join(leaf).join(DESKTOP_EXE));
+        }
+    }
+    places
+}
+
+/// Read a single registry value without dragging a registry crate into core.
+///
+/// `reg.exe` is present on every Windows, reads a per-user key without elevation, and prints one
+/// unparsable-nothing format — which the parser below owns and tests.
+#[cfg(windows)]
+fn registry_value(root: &str, key: &str, name: &str) -> Option<String> {
+    let path = format!("{root}\\{key}");
+    let output = Command::new("reg")
+        .args(["query", &path, "/v", name])
+        .creation_flags(crate::windows_create_no_window())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_registry_value(&String::from_utf8_lossy(&output.stdout), name)
+}
+
+/// Pull one value out of `reg query` output: `    DisplayVersion    REG_SZ    0.2.4`.
+///
+/// The value runs to the end of the line and may itself contain spaces and quotes (a path), so the
+/// split happens at the type token rather than at whitespace.
+#[cfg(windows)]
+fn parse_registry_value(output: &str, name: &str) -> Option<String> {
+    for line in output.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix(name) else {
+            continue;
+        };
+        // Only a whitespace-separated hit: `DisplayIcon` must not answer a query for `Display`.
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let rest = rest.trim_start();
+        let value_type = ["REG_SZ", "REG_EXPAND_SZ", "REG_DWORD"]
+            .into_iter()
+            .find(|candidate| rest.starts_with(candidate))?;
+        let value = rest[value_type.len()..].trim();
+        // `DisplayIcon` and friends arrive quoted; the quotes are not part of the path.
+        return Some(value.trim_matches('"').to_string()).filter(|value| !value.is_empty());
+    }
+    None
+}
+
+/// The version an installed executable reports about itself.
+///
+/// Second choice after the uninstall entry, and the only choice when a person deleted that entry by
+/// hand: the version is compiled into the binary, so it cannot be stale the way a registry copy can.
+#[cfg(windows)]
+fn executable_version(exe: &Path) -> Option<String> {
+    let escaped = exe.display().to_string().replace('\'', "''");
+    let script = format!("(Get-Item -LiteralPath '{escaped}').VersionInfo.FileVersion");
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(crate::windows_create_no_window())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    first_line(&output)
+}
+
+/// The version a macOS bundle declares, read from its `Info.plist`.
+#[cfg(target_os = "macos")]
+fn bundle_version(bundle: &Path) -> Option<String> {
+    let output = Command::new("defaults")
+        .args([
+            "read",
+            &bundle.join("Contents/Info").display().to_string(),
+            "CFBundleShortVersionString",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    first_line(&output)
+}
+
+/// The version inside a checkout's `package.json`, which is how the source stack is identified.
+fn package_version(dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(dir.join("package.json")).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&text).ok()?;
+    parsed
+        .get("version")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .filter(|version| !version.is_empty())
+}
+
+/// The CCP-Bot images this machine already pulled, newest tag last so `max()` is the current one.
+fn docker_project_images() -> Vec<String> {
+    let output = Command::new("docker")
+        .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
+        .creation_flags(crate::windows_create_no_window())
+        .output();
+    let Ok(output) = output else { return Vec::new() };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("ccpbot") && !line.contains("<none>"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// The silent arguments for an installer, with a chosen directory when the caller picked one.
+///
+/// NSIS only reads `/D` when it is the final parameter and unquoted — it takes the rest of the
+/// command line verbatim, spaces included — so the ordering is asserted in a test rather than left
+/// to whoever edits this next. `msiexec` takes its directory as a property instead, and a `.dmg` has
+/// no installer arguments at all.
+#[cfg(windows)]
+fn installer_arguments(name: &str, path: &Path, dir: Option<&Path>) -> Vec<String> {
+    if name.ends_with(".msi") {
+        let mut args = vec!["/i".to_string(), path.display().to_string(), "/qn".to_string()];
+        if let Some(dir) = dir {
+            args.push(format!("INSTALLDIR={}", dir.display()));
+        }
+        args.push("/norestart".to_string());
+        return args;
+    }
+    let mut args = vec!["/S".to_string()];
+    if let Some(dir) = dir {
+        args.push(format!("/D={}", dir.display()));
+    }
+    args
+}
+
+/// Where an install should go when the caller did not pick: the per-user directory the installer
+/// itself defaults to, so "choose a directory" and "just install" end up in the same place.
+pub fn default_install_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(root) = env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(root).join("CCP-Bot");
+        }
+    }
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Applications")
+}
+
 /// Download the newest published installer and hand it to the system.
 ///
 /// This is the one-click path: no git, no toolchain, no directory to choose. What it installs is
 /// the desktop app, which is also what brings the stack up on the user's machine — so CCP's job
 /// stops at "get the newest build onto this computer and run its installer".
 pub async fn install_latest() -> Result<CcpBotAction> {
+    install_latest_to(None).await
+}
+
+/// Download the newest published installer and install it into `dir` when one was chosen.
+///
+/// The directory is optional because the installer has a good default; passing one is the case
+/// where a person wants the app somewhere specific (a second drive, a portable folder) and the
+/// interface asked them first.
+pub async fn install_latest_to(dir: Option<&Path>) -> Result<CcpBotAction> {
     let (tag, asset, target) = download_latest_installer().await?;
     let log = log_path(CCPBOT_INSTALL_LOG_FILE);
-    let outcome = run_installer(&target)?;
+    let outcome = run_installer_at(&target, dir)?;
+    // Say what is on the machine now rather than what was downloaded: an install that lands in a
+    // directory the caller chose is only proven by the executable being there.
+    let landed = dir.map(|dir| dir.join(DESKTOP_EXE)).filter(|exe| exe.is_file());
+    let where_it_went = match (&landed, dir) {
+        (Some(exe), _) => format!("已装到 {}", exe.display()),
+        (None, Some(dir)) => format!(
+            "安装包已运行，但 {} 里没有找到 {DESKTOP_EXE} —— 请打开安装目录确认。",
+            dir.display()
+        ),
+        (None, None) => format!("装到了安装器默认的目录（通常是 {}）", default_install_dir().display()),
+    };
     Ok(CcpBotAction {
         changed: true,
         pid: None,
         message: format!(
-            "已下载 CCP-Bot {} 的 {}。{outcome}。文件：{}；日志：{}",
-            tag,
-            asset,
+            "已下载并安装 CCP-Bot {tag} 的 {asset}。{outcome}。{where_it_went}；文件：{}；日志：{}",
             target.display(),
             log.display()
         ),
@@ -1067,7 +1329,11 @@ pub async fn download_latest_installer() -> Result<(String, String, PathBuf)> {
 }
 
 /// Hand a downloaded installer to the system, and say what the person still has to do.
-fn run_installer(path: &Path) -> Result<String> {
+///
+/// `dir` is the directory the caller picked, or `None` for the installer's own default. The
+/// arguments come from [installer_arguments] so that the NSIS ordering rule — the one that decides
+/// whether a chosen directory is honoured at all — lives in a single tested place.
+fn run_installer_at(path: &Path, dir: Option<&Path>) -> Result<String> {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_lowercase())
@@ -1075,15 +1341,16 @@ fn run_installer(path: &Path) -> Result<String> {
 
     #[cfg(windows)]
     {
+        let args = installer_arguments(&name, path, dir);
         let mut command = if name.ends_with(".msi") {
             let mut command = Command::new("msiexec");
-            command.args(["/i", &path.display().to_string(), "/qn", "/norestart"]);
+            command.args(&args);
             command
         } else {
-            // `/S` is the NSIS silent flag: present the installer's own progress UI would need a
-            // window CCP cannot see, and the user asked for it by pressing the button.
+            // Everything else published for Windows is the NSIS bundle, which `msiexec` cannot run:
+            // the file is the program, and `/S` keeps its progress UI out of a window nobody sees.
             let mut command = Command::new(path);
-            command.arg("/S");
+            command.args(&args);
             command
         };
         command
@@ -1101,11 +1368,15 @@ fn run_installer(path: &Path) -> Result<String> {
                 path.display()
             );
         }
-        return Ok("安装程序已静默完成".to_string());
+        let into = dir
+            .map(|dir| format!("装到 {}", dir.display()))
+            .unwrap_or_else(|| "装到安装器默认的目录".to_string());
+        return Ok(format!("安装程序已静默完成，{into}"));
     }
 
     #[cfg(target_os = "macos")]
     {
+        let _ = dir;
         let status = Command::new("open")
             .arg(path)
             .status()
@@ -1120,7 +1391,7 @@ fn run_installer(path: &Path) -> Result<String> {
 
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        let _ = name;
+        let _ = (name, dir);
         bail!("这套系统没有可执行的安装包：请用「下载并准备」从源码启动。")
     }
 }
@@ -1696,5 +1967,99 @@ mod tests {
             lower.ends_with("-setup.exe") || lower.ends_with(".msi"),
             "{asset} is not a Windows installer"
         );
+    }
+
+    /// Installs the newest published build into a directory of our choosing.
+    ///
+    /// Ignored: it downloads the installer and then runs it. Run it on purpose — this is the only
+    /// proof that a chosen directory is actually honoured, which is a question about NSIS argument
+    /// ordering (`/D` last, unquoted) that no amount of local reasoning settles.
+    #[tokio::test]
+    #[ignore = "downloads and runs the published installer"]
+    async fn live_install_honours_the_directory_it_was_given() {
+        let dir = scratch_dir("install");
+        let action = install_latest_to(Some(&dir)).await.expect("install it");
+        assert!(action.changed, "{}", action.message);
+        assert!(
+            dir.join(DESKTOP_EXE).is_file(),
+            "nothing landed in {}: {}",
+            dir.display(),
+            action.message
+        );
+        assert!(action.message.contains(&dir.display().to_string()), "{}", action.message);
+    }
+
+    #[test]
+    fn a_checkout_answers_with_its_package_version() {
+        let dir = scratch_dir("version");
+        fs::write(
+            dir.join("package.json"),
+            r#"{"name":"ccpbot","version":"9.9.9"}"#,
+        )
+        .expect("seed a checkout");
+        assert_eq!(package_version(&dir).as_deref(), Some("9.9.9"));
+        assert_eq!(package_version(&dir.join("nowhere")), None);
+    }
+
+    #[test]
+    fn a_directory_without_a_version_is_not_a_checkout() {
+        let dir = scratch_dir("noversion");
+        fs::write(dir.join("package.json"), r#"{"name":"ccpbot"}"#).expect("seed it");
+        assert_eq!(package_version(&dir), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_registry_value_is_read_whole_and_never_by_prefix() {
+        let output = "\r\nHKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\CCP-Bot\r\n    MainBinaryName    REG_SZ    ccpbot-desktop.exe\r\n    DisplayName    REG_SZ    CCP-Bot\r\n    DisplayVersion    REG_SZ    0.2.4\r\n    DisplayIcon    REG_SZ    \"C:\\Users\\damon\\AppData\\Local\\CCP-Bot\\ccpbot-desktop.exe\"\r\n    InstallLocation    REG_SZ    \"C:\\Users\\damon\\AppData\\Local\\CCP-Bot\"\r\n";
+        assert_eq!(
+            parse_registry_value(output, "DisplayVersion").as_deref(),
+            Some("0.2.4")
+        );
+        assert_eq!(
+            parse_registry_value(output, "Display").as_deref(),
+            None,
+            "a prefix must not answer for a name that is not there"
+        );
+        assert_eq!(
+            parse_registry_value(output, "InstallLocation").as_deref(),
+            Some("C:\\Users\\damon\\AppData\\Local\\CCP-Bot"),
+            "the quotes around a path are not part of the path"
+        );
+        assert_eq!(parse_registry_value(output, "UninstallString"), None);
+    }
+
+    /// The argument order that decides whether `/D` is honoured at all.
+    #[cfg(windows)]
+    #[test]
+    fn a_chosen_directory_is_the_last_nsis_argument() {
+        let path = Path::new("C:\\Temp\\CCP-Bot_0.2.4_x64-setup.exe");
+        let dir = Path::new("D:\\Games\\CCP-Bot");
+        let args = installer_arguments("ccpbot_0.2.4_x64-setup.exe", path, Some(dir));
+        assert_eq!(args.first().map(String::as_str), Some("/S"));
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("/D=D:\\Games\\CCP-Bot"),
+            "NSIS reads the rest of the line after the final /D=, so nothing may follow it"
+        );
+        assert_eq!(
+            installer_arguments("ccpbot_0.2.4_x64-setup.exe", path, None),
+            vec!["/S".to_string()],
+            "no directory, no /D: the installer's own default applies"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_msi_takes_its_directory_as_a_property() {
+        let path = Path::new("C:\\Temp\\CCP-Bot_0.2.4_x64_en-US.msi");
+        let args = installer_arguments(
+            "ccpbot_0.2.4_x64_en-us.msi",
+            path,
+            Some(Path::new("D:\\CCP-Bot")),
+        );
+        assert_eq!(args[0], "/i");
+        assert!(args.contains(&"INSTALLDIR=D:\\CCP-Bot".to_string()), "{args:?}");
+        assert_eq!(args.last().map(String::as_str), Some("/norestart"));
     }
 }

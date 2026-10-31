@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use claude_codex_pro_core::ccpbot::{
-    self, CcpBotAction, CcpBotConfig, CcpBotProbe, CcpBotRuntime, CcpBotStore,
+    self, CcpBotAction, CcpBotConfig, CcpBotInstallation, CcpBotProbe, CcpBotRuntime, CcpBotStore,
 };
 use claude_codex_pro_core::claude_desktop_computer_use;
 use claude_codex_pro_core::claude_desktop_provider::{
@@ -16654,6 +16654,12 @@ pub struct CcpBotSnapshotPayload {
     pub config: CcpBotConfig,
     pub probe: CcpBotProbe,
     pub runtime: CcpBotRuntime,
+    /// What the machine already has of CCP-Bot, so the interface can say "installed, 0.2.4"
+    /// instead of offering a download to someone who installed it yesterday.
+    pub installed: CcpBotInstallation,
+    /// Where an install goes when the person does not pick: shown as the first suggestion in the
+    /// directory chooser, so the default is never a mystery path.
+    pub default_install_dir: String,
     pub pid: Option<u32>,
     pub log_path: String,
     pub log_text: String,
@@ -16663,6 +16669,7 @@ pub struct CcpBotSnapshotPayload {
 pub struct CcpBotStatusPayload {
     pub probe: CcpBotProbe,
     pub runtime: CcpBotRuntime,
+    pub installed: CcpBotInstallation,
     pub pid: Option<u32>,
 }
 
@@ -16675,6 +16682,13 @@ pub struct CcpBotConfigPayload {
 #[serde(rename_all = "camelCase")]
 pub struct CcpBotLogRequest {
     pub lines: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CcpBotInstallRequest {
+    /// The directory the person chose for the install, or `None` to take the installer's default.
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -16702,6 +16716,7 @@ pub async fn ccpbot_load() -> CommandResult<CcpBotSnapshotPayload> {
     let config = ccpbot_store().load();
     let probe = ccpbot::probe(&config.address).await;
     let runtime = ccpbot::runtime(&config);
+    let installed = ccpbot::installed(&config);
     let pid = ccpbot::running_pid();
     let (log_path, log_text) = ccpbot::log_tail(ccpbot::dev_log_file(), 60);
     ok(
@@ -16710,6 +16725,8 @@ pub async fn ccpbot_load() -> CommandResult<CcpBotSnapshotPayload> {
             config,
             probe,
             runtime,
+            installed,
+            default_install_dir: ccpbot::default_install_dir().display().to_string(),
             pid,
             log_path,
             log_text,
@@ -16722,6 +16739,7 @@ pub async fn ccpbot_probe() -> CommandResult<CcpBotStatusPayload> {
     let config = ccpbot_store().load();
     let probe = ccpbot::probe(&config.address).await;
     let runtime = ccpbot::runtime(&config);
+    let installed = ccpbot::installed(&config);
     let pid = ccpbot::running_pid();
     let (message, status): (String, &str) = if probe.reachable {
         ("CCP-Bot 可达。".to_string(), "ok")
@@ -16731,6 +16749,7 @@ pub async fn ccpbot_probe() -> CommandResult<CcpBotStatusPayload> {
     let payload = CcpBotStatusPayload {
         probe,
         runtime,
+        installed,
         pid,
     };
     if status == "ok" {
@@ -16834,12 +16853,18 @@ pub async fn ccpbot_log_tail(request: CcpBotLogRequest) -> CommandResult<CcpBotL
 
 /// Download the newest published CCP-Bot installer and run it.
 ///
-/// This is the path for somebody who does not have CCP-Bot at all: no directory to pick, no git,
-/// no toolchain. The release itself decides what gets installed, so CCP never carries a version
-/// that would go stale.
+/// This is the path for somebody who does not have CCP-Bot at all: no git, no toolchain, no
+/// version of our own to go stale — the release itself decides what gets installed. The directory
+/// is optional; when it is given, the install is asked to land there and the result says whether
+/// the executable actually showed up in it.
 #[tauri::command]
-pub async fn ccpbot_install_latest() -> CommandResult<CcpBotAction> {
-    match ccpbot::install_latest().await {
+pub async fn ccpbot_install_latest(request: Option<CcpBotInstallRequest>) -> CommandResult<CcpBotAction> {
+    let dir = request
+        .and_then(|request| request.dir)
+        .map(|dir| dir.trim().to_string())
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from);
+    match ccpbot::install_latest_to(dir.as_deref()).await {
         Ok(action) => {
             let message = action.message.clone();
             ok(&message, action)

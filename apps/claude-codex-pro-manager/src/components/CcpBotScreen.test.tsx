@@ -2,15 +2,31 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CcpBotScreen } from "@/components/CcpBotScreen";
-import type { CcpBotConfig, CcpBotProbe, CcpBotRuntime, CcpBotSnapshot } from "@/types";
+import type {
+  CcpBotConfig,
+  CcpBotInstallation,
+  CcpBotProbe,
+  CcpBotRuntime,
+  CcpBotSnapshot,
+} from "@/types";
 
 const { invokeCommand } = vi.hoisted(() => ({ invokeCommand: vi.fn() }));
+const { open } = vi.hoisted(() => ({ open: vi.fn() }));
 
 vi.mock("@/tauriBridge", () => ({ invokeCommand }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open }));
 
 const ADDRESS = "http://127.0.0.1:3010";
 const REFUSED = "连接被拒：该地址没有服务在监听，CCP-Bot 估计还没启动。";
+const DEFAULT_INSTALL_DIR = "C:\\Users\\you\\AppData\\Local\\CCP-Bot";
+
+const NOTHING_INSTALLED: CcpBotInstallation = {
+  desktopPath: null,
+  desktopVersion: null,
+  image: null,
+  sourceVersion: null,
+  uninstallPath: null,
+};
 
 type SnapshotOptions = {
   address?: string;
@@ -22,6 +38,8 @@ type SnapshotOptions = {
   bunVersion?: string | null;
   dockerDaemon?: boolean;
   envReady?: boolean;
+  installed?: Partial<CcpBotInstallation>;
+  defaultInstallDir?: string;
   pid?: number | null;
   logPath?: string;
   logText?: string;
@@ -38,6 +56,8 @@ function snapshot(options: SnapshotOptions = {}): CcpBotSnapshot {
     bunVersion = "1.2.21",
     dockerDaemon = false,
     envReady = false,
+    installed = {},
+    defaultInstallDir = DEFAULT_INSTALL_DIR,
     pid = null,
     logPath = "",
     logText = "",
@@ -52,7 +72,16 @@ function snapshot(options: SnapshotOptions = {}): CcpBotSnapshot {
     serverPortOpen: false,
   };
   const probe: CcpBotProbe = { address, detail, elapsedMs: 21, reachable, status };
-  return { config: { address, mode, projectDir }, logPath, logText, pid, probe, runtime };
+  return {
+    config: { address, mode, projectDir },
+    defaultInstallDir,
+    installed: { ...NOTHING_INSTALLED, ...installed },
+    logPath,
+    logText,
+    pid,
+    probe,
+    runtime,
+  };
 }
 
 function reply(payload: Record<string, unknown>, message = "已就绪。"): Record<string, unknown> {
@@ -61,6 +90,7 @@ function reply(payload: Record<string, unknown>, message = "已就绪。"): Reco
 
 beforeEach(() => {
   invokeCommand.mockReset();
+  open.mockReset();
 });
 
 describe("CCP-Bot 界面", () => {
@@ -84,8 +114,9 @@ describe("CCP-Bot 界面", () => {
     expect(screen.getByText("还差 2 步：")).toBeTruthy();
     expect(screen.getByRole("button", { name: /启动 CCP-Bot/ })).toBeTruthy();
     // Two ways to re-ask: the rail's icon and the empty state's own action.
+    // Two ways to re-ask: the rail's icon and the empty state's own action.
     expect(screen.getAllByRole("button", { name: /重新检测/ })).toHaveLength(2);
-    expect(screen.getByRole("button", { name: /安装最新版/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /一键安装/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: /下载并准备/ })).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
   });
@@ -268,5 +299,96 @@ describe("CCP-Bot 界面", () => {
     fireEvent.click(screen.getByRole("button", { name: "在浏览器打开" }));
 
     await waitFor(() => expect(invokeCommand).toHaveBeenCalledWith("open_external_url", { url: ADDRESS }));
+  });
+
+  it("没装过的机器由一键安装走完全程：先问装到哪，再把读回来的版本显示出来", async () => {
+    let reported: Partial<CcpBotInstallation> = {};
+    open.mockResolvedValue("D:\\CCP-Bot");
+    invokeCommand.mockImplementation(async (command: string) => {
+      if (command === "ccpbot_load") return reply({ ...snapshot({ installed: reported }) });
+      if (command === "ccpbot_install_latest") {
+        reported = {
+          desktopPath: "D:\\CCP-Bot\\ccpbot-desktop.exe",
+          desktopVersion: "0.2.4",
+          uninstallPath: "D:\\CCP-Bot\\uninstall.exe",
+        };
+        return reply(
+          { changed: true, logPath: "…/ccpbot-install.log", message: "已下载并安装 CCP-Bot 0.2.4", pid: null },
+          "已下载并安装 CCP-Bot 0.2.4，装到 D:\\CCP-Bot。",
+        );
+      }
+      throw new Error(`unexpected ${command}`);
+    });
+
+    render(<CcpBotScreen />);
+    await screen.findByText("CCP-Bot 还没跑起来");
+    expect(screen.getByText("本机还没有 CCP-Bot：")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /一键安装/ }));
+
+    // The destination is asked for first, with our own default sitting in the dialog, so the
+    // installer never has to guess where a standard account may write.
+    await waitFor(() =>
+      expect(open).toHaveBeenCalledWith(
+        expect.objectContaining({ defaultPath: DEFAULT_INSTALL_DIR, directory: true, multiple: false }),
+      ),
+    );
+    await waitFor(() =>
+      expect(invokeCommand).toHaveBeenCalledWith("ccpbot_install_latest", { request: { dir: "D:\\CCP-Bot" } }),
+    );
+    expect(await screen.findByText("本机已装 CCP-Bot 0.2.4：")).toBeTruthy();
+    expect(screen.getByText("桌面版已装 0.2.4")).toBeTruthy();
+    // Re-reading the state is what tells the page the machine has changed; the install itself
+    // reports a message, not a snapshot.
+    expect(invokeCommand.mock.calls.filter(([command]) => command === "ccpbot_load")).toHaveLength(2);
+  });
+
+  it("取消目录选择就什么都不装", async () => {
+    open.mockResolvedValue(null);
+    invokeCommand.mockImplementation(async (command: string) => {
+      if (command === "ccpbot_load") return reply({ ...snapshot() });
+      if (command === "ccpbot_install_latest") return reply({}, "不该走到这里。");
+      throw new Error(`unexpected ${command}`);
+    });
+
+    render(<CcpBotScreen />);
+    await screen.findByText("CCP-Bot 还没跑起来");
+
+    fireEvent.click(screen.getByRole("button", { name: /一键安装/ }));
+
+    // A cancelled dialog still goes to the backend as an explicit "no directory": the same call
+    // shape as the button, with the installer's own default left to decide.
+    await waitFor(() =>
+      expect(invokeCommand).toHaveBeenCalledWith("ccpbot_install_latest", { request: null }),
+    );
+  });
+
+  it("装过的人看到版本，拿到的是重新安装而不是从头下载", async () => {
+    invokeCommand.mockImplementation(async (command: string) => {
+      if (command === "ccpbot_load") {
+        return reply({
+          ...snapshot({
+            installed: {
+              desktopPath: "H:\\CCP-Bot\\ccpbot-desktop.exe",
+              desktopVersion: "0.2.4",
+              uninstallPath: "H:\\CCP-Bot\\uninstall.exe",
+            },
+          }),
+        });
+      }
+      throw new Error(`unexpected ${command}`);
+    });
+
+    render(<CcpBotScreen />);
+    await screen.findByText("CCP-Bot 还没跑起来");
+
+    expect(screen.getByText("本机已装 CCP-Bot 0.2.4：")).toBeTruthy();
+    expect(screen.getByText("桌面版已装 0.2.4")).toBeTruthy();
+    expect(screen.getByText("已装")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /重新安装最新版/ })).toBeTruthy();
+    // Nobody who already has it is pushed to download it again.
+    expect(screen.queryByRole("button", { name: /一键安装/ })).toBeNull();
+    // The one thing still missing on this machine is the configuration, so only that step is left.
+    expect(screen.getByText("还差 1 步：")).toBeTruthy();
   });
 });

@@ -685,6 +685,17 @@ let previewCcpBot = {
     "app:   ➜  Local:   http://127.0.0.1:3010/",
     "server: listening on http://127.0.0.1:3001",
   ].join("\n"),
+  // A fresh machine has no desktop build; pressing 一键安装 in the browser preview
+  // writes one here, which is what lets the "installed, version x" states be seen
+  // without installing anything for real.
+  installed: {
+    desktopPath: null as string | null,
+    desktopVersion: null as string | null,
+    uninstallPath: null as string | null,
+    sourceVersion: null as string | null,
+    image: null as string | null,
+  },
+  defaultInstallDir: "C:\\Users\\you\\AppData\\Local\\CCP-Bot",
 };
 
 function previewCcpBotRuntime() {
@@ -721,6 +732,7 @@ function previewCcpBotStatus() {
   return {
     probe: previewCcpBotProbe(),
     runtime: previewCcpBotRuntime(),
+    installed: previewCcpBot.installed,
     pid: previewCcpBot.pid,
   };
 }
@@ -730,6 +742,7 @@ function previewCcpBotReply(command: string, args?: Record<string, unknown>) {
     return ok("CCP-Bot 状态已加载。", {
       config: { address: previewCcpBot.address, mode: previewCcpBot.mode, projectDir: previewCcpBot.projectDir },
       ...previewCcpBotStatus(),
+      defaultInstallDir: previewCcpBot.defaultInstallDir,
       logPath: previewCcpBot.logPath,
       logText: previewCcpBot.logText,
     });
@@ -788,6 +801,29 @@ function previewCcpBotReply(command: string, args?: Record<string, unknown>) {
       pid: null,
       message: "已从 GitHub 取到源码并装好依赖（预览模式）。",
       logPath: "~\\.claude-codex-pro\\ccpbot-prepare.log",
+    });
+  }
+  if (command === "ccpbot_install_latest") {
+    // The real command runs an installer; the preview only has to answer the two
+    // questions the interface asks afterwards — where did it go, and which version
+    // is reported now — so the "installed" states become reviewable in a browser.
+    const request = args?.request as { dir?: string } | null | undefined;
+    const dir = request?.dir ?? previewCcpBot.defaultInstallDir;
+    const version = "0.2.4";
+    previewCcpBot = {
+      ...previewCcpBot,
+      installed: {
+        ...previewCcpBot.installed,
+        desktopPath: `${dir}\\ccpbot-desktop.exe`,
+        desktopVersion: version,
+        uninstallPath: `${dir}\\uninstall.exe`,
+      },
+    };
+    return ok(`已下载并安装 CCP-Bot ${version}（预览模式），装到 ${dir}。`, {
+      changed: true,
+      pid: null,
+      message: `已下载并安装 CCP-Bot ${version}（预览模式），装到 ${dir}。`,
+      logPath: "~\\.claude-codex-pro\\ccpbot-install.log",
     });
   }
   return ok("预览模式不会真的跑安装程序。", {

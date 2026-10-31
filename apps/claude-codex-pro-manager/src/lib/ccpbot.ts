@@ -34,11 +34,17 @@ export function prepareCcpBot(config: CcpBotConfig) {
 }
 
 // Stage 3: the path for a machine that has no CCP-Bot at all. CCP asks the release
-// what the newest installer is, downloads it and runs it — no directory, no git, no
-// toolchain. Slow (a desktop bundle is ~1 GB) and therefore the one call in this
-// module with nothing to show for itself until it finishes.
-export function installCcpBotLatest() {
-  return invokeCommand<CommandResult<CcpBotAction>>("ccpbot_install_latest");
+// what the newest installer is, downloads it and runs it — no git, no toolchain.
+// Slow (a desktop bundle is ~1 GB) and therefore the one call in this module with
+// nothing to show for itself until it finishes.
+//
+// `dir` is the directory the person chose when the chooser opened, or null for the
+// installer's own default. It travels as a single optional argument (`request`) so
+// that adding it did not change the command's name or its no-argument shape.
+export function installCcpBotLatest(dir: string | null = null) {
+  return invokeCommand<CommandResult<CcpBotAction>>("ccpbot_install_latest", {
+    request: dir === null ? null : { dir },
+  });
 }
 
 export function startCcpBot() {

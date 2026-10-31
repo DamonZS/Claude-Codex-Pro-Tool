@@ -167,18 +167,36 @@ export function CcpBotScreen() {
   const install = useCallback(async () => {
     setBusy("install");
     try {
-      // No address, no directory: this path exists for the machine that has no
-      // CCP-Bot yet, and the release decides which bundle fits this computer. The
-      // installer runs while the call is in flight, so there is nothing to poll
-      // afterwards — only the message it returns.
-      const result = await installCcpBotLatest();
+      // Ask where it should go *before* the download: an installer can only be told
+      // its directory when it runs, so there is no second chance afterwards. A
+      // chooser that cannot open, or a person who presses cancel, is not an error —
+      // it means "put it wherever you normally would", which is what the installer's
+      // own default does, and the message says so either way.
+      let picked: string | null = null;
+      try {
+        const selected = await open({
+          directory: true,
+          multiple: false,
+          defaultPath: snapshot?.defaultInstallDir || undefined,
+          title: "选择 CCP-Bot 的安装目录",
+        });
+        picked = (Array.isArray(selected) ? selected[0] : selected) ?? null;
+      } catch {
+        picked = null;
+      }
+      const result = await installCcpBotLatest(picked);
       setNotice({ text: result.message, ok: result.status === "ok" });
+      // Re-read rather than patch: the install changes what *is installed*, which the
+      // page reports from the backend, and the executable it just wrote is proof.
+      const next = await loadCcpBot();
+      adopt(next);
+      setFrameGeneration((value) => value + 1);
     } catch (error) {
       setNotice({ text: `安装最新版失败：${String(error)}`, ok: false });
     } finally {
       setBusy(null);
     }
-  }, []);
+  }, [adopt, snapshot]);
 
   const openExternal = useCallback(async () => {
     try {
@@ -235,15 +253,22 @@ export function CcpBotScreen() {
   // is missing instead of printing every requirement and letting the reader
   // guess which of them is the reason nothing is running.
   const hasDirectory = projectDir.trim() !== "";
+  // "Obtained" counts a source checkout *or* an installed desktop build: both mean
+  // this machine already has CCP-Bot, and only the second one needs no directory at
+  // all — which is exactly what the person who pressed 一键安装 ends up with.
+  const desktopVersion = snapshot?.installed.desktopVersion ?? null;
+  const acquired = hasDirectory || Boolean(desktopVersion);
   const engineReady = mode === "source" ? Boolean(runtime?.bunVersion) : Boolean(runtime?.dockerDaemon);
   const envReady = mode === "source" ? Boolean(runtime?.envReady) : true;
   const steps = [
     {
       label: "取得 CCP-Bot",
       detail: hasDirectory
-        ? "目录已就绪"
-        : "装最新版，或挑一个空文件夹再「下载并准备」",
-      done: hasDirectory,
+        ? "源码目录已就绪"
+        : desktopVersion
+          ? `桌面版已装 ${desktopVersion}`
+          : "装最新版，或挑一个空文件夹再「下载并准备」",
+      done: acquired,
     },
     {
       label: mode === "source" ? "本机 bun" : "Docker 引擎",
@@ -312,6 +337,12 @@ export function CcpBotScreen() {
             <b>{runtime?.bunVersion ?? "—"}</b>
             <i>bun</i>
           </span>
+          {desktopVersion ? (
+            <span className="ccpbot-stat">
+              <b>{desktopVersion}</b>
+              <i>已装</i>
+            </span>
+          ) : null}
           {mode === "docker" ? (
             <span className={`ccpbot-stat ${runtime?.dockerDaemon ? "" : "off"}`}>
               <b>{runtime?.dockerDaemon ? "就绪" : "未启动"}</b>
@@ -506,10 +537,23 @@ export function CcpBotScreen() {
               </div>
 
               <div className="ccpbot-empty-alt">
-                <span>本机还没有 CCP-Bot：</span>
-                <Button disabled={busy !== null} onClick={() => void install()} size="sm" variant="ghost">
+                {/* One line, two states: with a desktop build already on the machine the
+                    download button becomes a reinstall and stops being the headline. */}
+                <span>
+                  {desktopVersion ? `本机已装 CCP-Bot ${desktopVersion}：` : "本机还没有 CCP-Bot："}
+                </span>
+                <Button
+                  disabled={busy !== null}
+                  onClick={() => void install()}
+                  size="sm"
+                  variant={desktopVersion ? "outline" : "default"}
+                >
                   <PackagePlus className="h-4 w-4" />
-                  {busy === "install" ? "安装中…" : "安装最新版"}
+                  {busy === "install"
+                    ? "安装中…"
+                    : desktopVersion
+                      ? "重新安装最新版"
+                      : "一键安装（可先选安装目录）"}
                 </Button>
                 <Button disabled={busy !== null} onClick={() => void download()} size="sm" variant="ghost">
                   <Download className="h-4 w-4" />
