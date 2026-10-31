@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[cfg(windows)]
@@ -848,6 +848,17 @@ fn run_logged(program: &Path, args: &[&str], dir: &Path, log_file: &str) -> Resu
 /// without CCP holding a version number that goes stale.
 pub const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/DamonZS/CCP-Bot/releases/latest";
 
+/// The API URL that serves one release asset's bytes.
+///
+/// `browser_download_url` points at `github.com`, which is not reachable from every machine that
+/// runs this manager — measured on the machine this was written for: `github.com/.../download/...`
+/// times out after twelve seconds, while `api.github.com` answers in half a second and serves the
+/// same bytes when asked with `Accept: application/octet-stream`. So the download tries this first
+/// and keeps the browser URL as the fallback, rather than betting on one of the two hosts.
+pub fn asset_api_url(id: u64) -> String {
+    format!("https://api.github.com/repos/DamonZS/CCP-Bot/releases/assets/{id}")
+}
+
 /// Log for a one-click install, kept apart from the preparation log so a failed download and a
 /// failed `bun install` are not interleaved in one file.
 pub const CCPBOT_INSTALL_LOG_FILE: &str = "ccpbot-install.log";
@@ -877,6 +888,7 @@ fn host_platform() -> Platform {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReleaseAsset {
     pub name: String,
+    pub id: u64,
     pub browser_download_url: String,
 }
 
@@ -1311,25 +1323,47 @@ pub async fn download_latest_installer() -> Result<(String, String, PathBuf)> {
     fs::create_dir_all(&folder)
         .with_context(|| format!("创建下载目录失败：{}", folder.display()))?;
     let target = folder.join(&asset.name);
-    write_install_log(&format!("GET {}", asset.browser_download_url));
-    let response = client
-        .get(&asset.browser_download_url)
-        .send()
-        .await
-        .with_context(|| format!("下载安装包失败：{}", asset.browser_download_url))?;
-    let status = response.status();
-    if !status.is_success() {
-        bail!("下载安装包失败：HTTP {status}（{}）", asset.name);
+    // Two hosts serve the same bytes and each is unreachable from some machines: the API host is
+    // the one that answers where `github.com` is blocked, the browser host is the one that answers
+    // when the API is rate limited. Try both, log which one produced the file, and only believe a
+    // body that is at least as large as the smallest real bundle — a release asset can otherwise be
+    // an error page, and a page of HTML would be written out as if it were an installer.
+    let candidates = [
+        (asset_api_url(asset.id), Some("application/octet-stream")),
+        (asset.browser_download_url.clone(), None),
+    ];
+    let mut bytes = Vec::new();
+    let mut failure = String::from("安装包没有可用的下载地址。");
+    for (url, accept) in candidates {
+        write_install_log(&format!("GET {url}"));
+        let mut request = client.get(&url);
+        if let Some(accept) = accept {
+            request = request.header(reqwest::header::ACCEPT, accept);
+        }
+        match request.send().await {
+            Ok(response) if response.status().is_success() => match response.bytes().await {
+                Ok(body) if body.len() >= 100_000 => {
+                    bytes = body.to_vec();
+                    break;
+                }
+                Ok(body) => {
+                    failure = format!(
+                        "下载到的 {} 只有 {} 字节，不像是完整的安装包。",
+                        asset.name,
+                        body.len()
+                    );
+                }
+                Err(error) => failure = format!("下载安装包失败：{error}"),
+            },
+            Ok(response) => {
+                failure = format!("下载安装包失败：HTTP {}（{url}）", response.status());
+            }
+            Err(error) => failure = format!("下载安装包失败：{error}"),
+        }
+        write_install_log(&format!("failed: {failure}"));
     }
-    let bytes = response.bytes().await.context("下载安装包失败")?;
-    // A release asset can be a redirect or an error page; 100 KB is below every real bundle and
-    // above every message GitHub would answer with.
-    if bytes.len() < 100_000 {
-        bail!(
-            "下载到的 {} 只有 {} 字节，不像是完整的安装包。",
-            asset.name,
-            bytes.len()
-        );
+    if bytes.is_empty() {
+        bail!("{failure}");
     }
     fs::write(&target, &bytes).with_context(|| format!("写入安装包失败：{}", target.display()))?;
     write_install_log(&format!(
@@ -1892,10 +1926,31 @@ mod tests {
     }
 
     fn asset(name: &str) -> ReleaseAsset {
+        // Real ids are opaque; the factory derives a stable one from the name so a test can name
+        // the URL it expects without carrying a table of GitHub's numbers.
+        let id = name
+            .bytes()
+            .fold(0u64, |carry, byte| carry.wrapping_mul(31) + u64::from(byte));
         ReleaseAsset {
             name: name.to_string(),
+            id,
             browser_download_url: format!("https://example.invalid/{name}"),
         }
+    }
+
+    #[test]
+    fn an_installer_is_fetched_from_the_api_host_first() {
+        let picked = asset("CCP-Bot_0.2.7_x64-setup.exe");
+        assert_eq!(
+            asset_api_url(picked.id),
+            format!(
+                "https://api.github.com/repos/DamonZS/CCP-Bot/releases/assets/{}",
+                picked.id
+            )
+        );
+        // The browser URL still has to be there: it is the second attempt, for the machines where
+        // the API answers 403 instead of bytes.
+        assert!(!picked.browser_download_url.is_empty());
     }
 
     #[test]
