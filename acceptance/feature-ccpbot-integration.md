@@ -252,3 +252,22 @@
 | A22.6 | 「一键安装」取到的就是这一版 | `cargo test -p claude-codex-pro-core --lib ccpbot::tests::live_latest_release_offers_this_machines_installer -- --include-ignored` → **1 passed**（1.65s）；`%USERPROFILE%\.claude-codex-pro\ccpbot-install.log` 记 `GET https://api.github.com/repos/DamonZS/CCP-Bot/releases/latest` → `GET https://github.com/DamonZS/CCP-Bot/releases/download/v0.2.4/CCP-Bot_0.2.4_x64-setup.exe` → `saved 4710923 bytes`，落盘文件字节数与资产一致 |
 
 不在范围：既没有管理员权限、也没有任何现成引擎的机器仍需要一次管理员操作（Podman 路线要 WSL2 与 VirtualMachinePlatform，这是系统本身的要求）；这次解决的只是「已经装了 Docker Desktop 却被告知没有引擎」那一类。安装包仍未签名（Windows 显示未知发布者，macOS 需清 quarantine）。
+
+### A23：CCP-Bot 界面重做——一屏一个主角
+
+起点是一次真机截图的评价（「太丑了」）：旧页面把八颗按钮、三个输入框和两条提示全堆在内嵌界面上面，未运行时舞台是一片黑，控件就是全部内容。重做按 `F:\学习\AI\高级交互动效GPT提示词手册（51条完整版）.md` 的规范执行，取用 #1 按压回弹、#2 按压瞬间反馈、#6 成功勾选、#10 骨架屏落位、#19 动态弥散光晕、#20 物理弹簧交错流、#21 玻璃面板浮起、#28 Toast 进出场、#38 暗黑科技风 Dashboard，以及总则「一屏一个主角 / 留白即高级 / 一屏一个高亮色 / 组件统一」。
+
+| # | 通过标准 | 证据 |
+| --- | --- | --- |
+| A23.1 | 主角是内嵌界面，不是控件 | 顶部一条状态栏（脉冲状态球、地址、等宽读数、启停分段、图标操作），下面整块舞台；8 颗按钮与 3 个输入框退出常驻布局：启停 2 颗留在状态栏、其余进「设置」面板与离线清单 |
+| A23.2 | 状态栏如实反映机器 | 球三态：可达=荧光绿脉冲、启动中/加载中=琥珀呼吸、其它=灰；读数只有 `probe.status == 200` 才给等宽绿数（本机实测 Docker 会答 503，那时它显示「已应答 503」，不是编出来的「在线」）；`docker daemon 未启动` 这类事实照实显示 |
+| A23.3 | 离线舞台给出路线而不是空白 | 三步清单「取得 CCP-Bot／本机 bun 或 Docker 引擎／配置（.env）」，每步一句实话 + 一键操作（安装最新版／下载并准备／选择目录），并把 `probe.detail` 完整呈现（`连接被拒：该地址没有服务在监听…`）；此后场景切换为 24px 网格点纹理与两级投影，不再是「什么都没有」 |
+| A23.4 | 布局真的撑满（这是重做的关键修复） | 高度链本来断在 `.ops-page-content`（它没有高度，于是 `.ccpbot-layout` 的 `height:100%` 解析成 auto，舞台塌成中间一条带）。改为路由专属规则：`.ops-screen[data-route="ccpbot"]{display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:12px 16px 14px}` + `> .ops-page-content{display:flex;flex:1 1 auto;min-height:0}` + `.ccpbot-layout{flex:1 1 auto;height:auto}`；并隐掉重复的通用页标题 `.ops-page-heading`（状态栏已经写着产品名与地址） |
+| A23.5 | 两套主题都成立 | 全部颜色走既有 HSL token（`--surface-sunken/--surface-raised/--border/--brand-accent/--destructive`），网格纹理用 `hsl(var(--foreground) / 0.045)`（白线叠加在浅色面上不可见，必须按主题取反）；深浅两张截图各自成立 |
+| A23.6 | 通知不再挤动布局 | 段落式提示改为右上角浮动 `.ccpbot-toast(.ok/.warn)`（进场 `cubic-bezier(0.34,1.56,0.64,1)`、退出 240ms、可叠加），日志收进底部抽屉 `<details>` |
+| A23.7 | 命令契约未动 | 组件仍只调 `@/lib/ccpbot` 的七个包装（`load/probe/save/start/stop/log_tail/prepare/install`）+ 既有的 `open_external_url` 与目录选择器；Rust 侧与 `acceptance` A1–A22 的命令面零改动 |
+| A23.8 | 静态验证 | `npm --prefix apps/claude-codex-pro-manager run check`（tsc）exit 0；`npm run vite:build` → `✓ built in 2.07s`（仅既有的 chunk>500kB 警告）。**本仓没有前端测试运行器**（`src` 下 0 个 `*.test.tsx`），所以 UI 只能靠真实渲染取图，这一点如实写明而不是拿 typecheck 冒充 |
+| A23.9 | 真实渲染证据 | `vite:dev` 起在当地 1420（HTTP 200）+ Edge headless（`--headless=new --force-prefers-reduced-motion --window-size=1600,1000 --virtual-time-budget=15000 --screenshot`，深色另加 `--force-dark-mode`）：浅色离线 `%TEMP%\ccpbot-empty3.png`（686,437 B）、深色离线 `%TEMP%\ccpbot-dark.png`（556,600 B）、在线态 `%TEMP%\ccpbot-live.png`（566,489 B，绿球/`在线 源码 4172 1.2.21`/iframe 画框/红边 Toast） |
+| A23.10 | 预览环境能复现这三种状态 | `apps/claude-codex-pro-manager/src/tauriPreviewMock.ts` 新增 `ccpbot_*` 模拟（默认=全新机器：有 bun、无目录、不可达；`ccpbot_start` 翻成可达并给 pid），因此无 Tauri 的浏览器里可以评审；离线/在线两张图即为该路径产出（在线与失败态是临时翻转 mock 后取样，取样完已还原，`Select-String '临时截图|4172 as number'` 命中 0） |
+
+不在范围：**没有在真机 Tauri 窗口里跑过这一页**（本机引擎未启动），所以「离线态」是浏览器预览 + 真组件渲染，不代表 Tauri 内嵌态的最终观感；动效的手感也无法由静态截图证明，只能给出曲线、时长与 `prefers-reduced-motion` 的处理方式。
