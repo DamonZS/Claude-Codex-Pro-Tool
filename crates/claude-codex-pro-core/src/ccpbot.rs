@@ -1168,11 +1168,14 @@ fn package_version(dir: &Path) -> Option<String> {
 
 /// The CCP-Bot images this machine already pulled, newest tag last so `max()` is the current one.
 fn docker_project_images() -> Vec<String> {
-    let output = Command::new("docker")
-        .args(["images", "--format", "{{.Repository}}:{{.Tag}}"])
-        .creation_flags(crate::windows_create_no_window())
-        .output();
-    let Ok(output) = output else { return Vec::new() };
+    let mut command = Command::new("docker");
+    command.args(["images", "--format", "{{.Repository}}:{{.Tag}}"]);
+    // Only Windows has the flag, and only Windows needs it: elsewhere this is already silent.
+    #[cfg(windows)]
+    command.creation_flags(crate::windows_create_no_window());
+    let Ok(output) = command.output() else {
+        return Vec::new();
+    };
     if !output.status.success() {
         return Vec::new();
     }
@@ -1193,7 +1196,11 @@ fn docker_project_images() -> Vec<String> {
 #[cfg(windows)]
 fn installer_arguments(name: &str, path: &Path, dir: Option<&Path>) -> Vec<String> {
     if name.ends_with(".msi") {
-        let mut args = vec!["/i".to_string(), path.display().to_string(), "/qn".to_string()];
+        let mut args = vec![
+            "/i".to_string(),
+            path.display().to_string(),
+            "/qn".to_string(),
+        ];
         if let Some(dir) = dir {
             args.push(format!("INSTALLDIR={}", dir.display()));
         }
@@ -1242,14 +1249,19 @@ pub async fn install_latest_to(dir: Option<&Path>) -> Result<CcpBotAction> {
     let outcome = run_installer_at(&target, dir)?;
     // Say what is on the machine now rather than what was downloaded: an install that lands in a
     // directory the caller chose is only proven by the executable being there.
-    let landed = dir.map(|dir| dir.join(DESKTOP_EXE)).filter(|exe| exe.is_file());
+    let landed = dir
+        .map(|dir| dir.join(DESKTOP_EXE))
+        .filter(|exe| exe.is_file());
     let where_it_went = match (&landed, dir) {
         (Some(exe), _) => format!("已装到 {}", exe.display()),
         (None, Some(dir)) => format!(
             "安装包已运行，但 {} 里没有找到 {DESKTOP_EXE} —— 请打开安装目录确认。",
             dir.display()
         ),
-        (None, None) => format!("装到了安装器默认的目录（通常是 {}）", default_install_dir().display()),
+        (None, None) => format!(
+            "装到了安装器默认的目录（通常是 {}）",
+            default_install_dir().display()
+        ),
     };
     Ok(CcpBotAction {
         changed: true,
@@ -1986,7 +1998,11 @@ mod tests {
             dir.display(),
             action.message
         );
-        assert!(action.message.contains(&dir.display().to_string()), "{}", action.message);
+        assert!(
+            action.message.contains(&dir.display().to_string()),
+            "{}",
+            action.message
+        );
     }
 
     #[test]
@@ -2059,7 +2075,10 @@ mod tests {
             Some(Path::new("D:\\CCP-Bot")),
         );
         assert_eq!(args[0], "/i");
-        assert!(args.contains(&"INSTALLDIR=D:\\CCP-Bot".to_string()), "{args:?}");
+        assert!(
+            args.contains(&"INSTALLDIR=D:\\CCP-Bot".to_string()),
+            "{args:?}"
+        );
         assert_eq!(args.last().map(String::as_str), Some("/norestart"));
     }
 }
