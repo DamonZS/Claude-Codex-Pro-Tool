@@ -182,7 +182,7 @@ export function SystemPromptScreen({ actions, clientDeploy, library, logs, promp
     <section className="system-prompt-screen" aria-labelledby="system-prompt-title">
       <header className="ops-page-heading system-prompt-heading">
         <div>
-          <p className="system-prompt-eyebrow">PROMPT INJECTION</p>
+          <p className="system-prompt-eyebrow">提示词注入</p>
           <h1 id="system-prompt-title">一键管理指令提示词</h1>
           <p>管理 Codex 的本地 Markdown 指令模板，修改配置前自动备份。</p>
         </div>
@@ -271,7 +271,7 @@ export function SystemPromptScreen({ actions, clientDeploy, library, logs, promp
       {form ? (
         <div className="system-prompt-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setForm(null); }}>
           <section className="system-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="prompt-editor-title">
-            <header><div><small>CUSTOM PROMPT</small><h2 id="prompt-editor-title">{form.id ? "编辑提示词" : "添加提示词"}</h2></div><button type="button" title="关闭" onClick={() => setForm(null)}><X /></button></header>
+            <header><div><small>自定义提示词</small><h2 id="prompt-editor-title">{form.id ? "编辑提示词" : "添加提示词"}</h2></div><button type="button" title="关闭" onClick={() => setForm(null)}><X /></button></header>
             <div className="system-prompt-form-grid">
               <label><span>提示词名称</span><input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="例如：代码审查专家" /></label>
               <label><span>文件名</span><input value={form.filename} onChange={(e) => setForm({ ...form, filename: e.target.value })} placeholder="code-review.md" /></label>
@@ -287,7 +287,7 @@ export function SystemPromptScreen({ actions, clientDeploy, library, logs, promp
       {syncOpen ? (
         <div className="system-prompt-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSyncOpen(false); }}>
           <section className="system-prompt-modal is-compact" role="dialog" aria-modal="true" aria-labelledby="prompt-sync-title">
-            <header><div><small>GITHUB MARKDOWN</small><h2 id="prompt-sync-title">同步 GitHub 模板</h2></div><button type="button" title="关闭" onClick={() => setSyncOpen(false)}><X /></button></header>
+            <header><div><small>GitHub Markdown 模板</small><h2 id="prompt-sync-title">同步 GitHub 模板</h2></div><button type="button" title="关闭" onClick={() => setSyncOpen(false)}><X /></button></header>
             <label className="system-prompt-url"><span>Raw Markdown HTTPS 地址</span><input value={syncUrl} onChange={(e) => setSyncUrl(e.target.value)} placeholder="https://raw.githubusercontent.com/.../prompt.md" /></label>
             <footer><Button variant="outline" onClick={() => setSyncOpen(false)}>取消</Button><Button disabled={!syncUrl.trim()} onClick={async () => { const result = await actions.syncSystemPromptUrl(syncUrl); if (result && statusOk(result.status)) { setSyncOpen(false); setSyncUrl(""); } }}>同步</Button></footer>
           </section>

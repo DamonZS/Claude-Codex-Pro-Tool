@@ -1498,25 +1498,25 @@ export function PluginHubScreen({
               ) : (
                 <Button disabled variant="outline">
                   <ShieldCheck className="h-4 w-4" />
-                  Review required
+                  需要审查
                 </Button>
               )}
               {selected.id === "ponytail:codex-plugin" ? (
                 <>
                   <Button onClick={() => void actions.previewPonytailCodexHooks()} variant="outline">
                     <ShieldCheck className="h-4 w-4" />
-                    Review hooks
+                    审查钩子
                   </Button>
                   <Button onClick={() => void actions.trustPonytailCodexHooks()} variant="outline">
                     <ShieldCheck className="h-4 w-4" />
-                    Trust hooks
+                    信任钩子
                   </Button>
                 </>
               ) : null}
               {selected.id === "ponytail:claude-desktop-mcp" ? (
                 <Button onClick={() => void actions.generatePonytailMcpbInstaller()} variant="outline">
                   <Download className="h-4 w-4" />
-                  Generate MCPB
+                  生成 MCPB
                 </Button>
               ) : null}
               {selected.homepage ? (

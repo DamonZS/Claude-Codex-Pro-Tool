@@ -172,7 +172,7 @@ export function LeilaDeploymentPanel({ actions, status }: Props) {
         <div className="system-prompt-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setConfirmMode(null); }}>
           <section className="system-prompt-modal is-compact" role="dialog" aria-modal="true" aria-labelledby="leila-deploy-confirm-title">
             <header>
-              <div><small>DEPLOY ARMOR BREAK</small><h2 id="leila-deploy-confirm-title">确认部署破甲</h2></div>
+              <div><small>部署 · 破甲</small><h2 id="leila-deploy-confirm-title">确认部署破甲</h2></div>
               <button type="button" title="关闭" disabled={busy} onClick={() => setConfirmMode(null)}><X /></button>
             </header>
             <div className="leila-deployment-confirm">
@@ -198,7 +198,7 @@ export function LeilaDeploymentPanel({ actions, status }: Props) {
         <div className="system-prompt-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setConfirmMode(null); }}>
           <section className="system-prompt-modal is-compact" role="dialog" aria-modal="true" aria-labelledby="leila-rollback-confirm-title">
             <header>
-              <div><small>ROLLBACK ARMOR BREAK</small><h2 id="leila-rollback-confirm-title">回滚最近一次破甲部署</h2></div>
+              <div><small>回滚 · 破甲</small><h2 id="leila-rollback-confirm-title">回滚最近一次破甲部署</h2></div>
               <button type="button" title="关闭" disabled={busy} onClick={() => setConfirmMode(null)}><X /></button>
             </header>
             <div className="leila-deployment-confirm">

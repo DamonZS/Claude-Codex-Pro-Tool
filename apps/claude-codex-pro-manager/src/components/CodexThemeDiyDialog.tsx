@@ -177,7 +177,7 @@ function CodexDiyPreview({
             <small>查看最近任务</small>
           </div>
         </nav>
-        <span className="codex-diy-preview-settings"><Settings2 aria-hidden="true" />My Codex</span>
+        <span className="codex-diy-preview-settings"><Settings2 aria-hidden="true" />我的 Codex</span>
       </aside>
       <div className="codex-diy-preview-workspace">
         <span className="codex-diy-preview-window-controls" aria-hidden="true"><i /><i /></span>
@@ -187,7 +187,7 @@ function CodexDiyPreview({
               <img className="codex-diy-preview-hero-image" src={heroImageUrl} alt="主题图片预览" />
             ) : <span className="codex-diy-preview-avatar"><Sparkles aria-hidden="true" /></span>}
           </section>
-          <strong className="codex-diy-preview-home-title">What should we build?</strong>
+          <strong className="codex-diy-preview-home-title">要构建点什么？</strong>
         </main>
         <div className="codex-diy-preview-composer">
           <div className="codex-diy-preview-context"><span><Folder aria-hidden="true" />当前工作区</span><span><Laptop aria-hidden="true" />本地</span><span><GitBranch aria-hidden="true" />main</span></div>
@@ -402,7 +402,7 @@ export function CodexThemeDiyDialog({ actions, operation, theme, onClose }: Code
           <div>
             <span className="codex-diy-dialog-icon"><Palette aria-hidden="true" /></span>
             <div>
-              <small>NO-CODE THEME STUDIO</small>
+              <small>零代码主题工作台</small>
               <h2 id="codex-diy-title">{theme ? `编辑 ${theme.name}` : "DIY Codex 主题"}</h2>
             </div>
           </div>

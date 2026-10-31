@@ -312,7 +312,7 @@ export function AppShell({
           <span aria-hidden="true" className="ops-brand-mark">CCP</span>
           <span className="ops-brand-copy">
             <strong>Claude Codex Pro</strong>
-            <small>Local AI Operations</small>
+            <small>本地 AI 运维</small>
           </span>
         </button>
 
