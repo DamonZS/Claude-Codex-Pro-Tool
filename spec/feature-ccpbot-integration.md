@@ -173,3 +173,4 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 - 下载量下限 100 KB：release 资产可能是重定向或错误页，真实安装包远大于此，错误页远小于此。
 - 没有安装包的系统（Linux）不安慰性兜底，直接说「请用下载并准备从源码启动」。
 - 安装包由 `.github/workflows/build-installers.yml` 在同一个 `v*` 标签上产出并挂到同一个 release（Windows `nsis,msi`、macOS `dmg` × arm64/x64），与容器镜像共用一个版本号。未签名是明说的：Windows 报「未知发布者」、macOS 需清 quarantine；签名变量已经从 secrets 读取，存在即生效。
+- 桌面端的前置检查在 0.2.4 修正过一处会让**标准账号**卡住的缺陷：Windows 允许按用户安装 Docker Desktop，位置是 `%LOCALAPPDATA%\Programs\DockerDesktop`，而搜索只看 `Program Files`，于是「引擎明明在跑」的机器被判成没有引擎，转而走需要管理员的 Podman 路线并停在 Windows 前置画面。现在三处安装位置都查，且已装过并打开过一次 Docker Desktop 的机器直接跳过那个画面（它本来就是为 Podman 路线存在的）；被挡住时的那段文案也补了「Docker Desktop 是另一条路」。证据见 acceptance A22。

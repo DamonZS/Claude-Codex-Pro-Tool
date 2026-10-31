@@ -237,3 +237,18 @@
 
 不在范围：签名（Windows 证书 / Apple 开发者证书）只保留了读取 secrets 的能力，仓库里没有证书，因此安装包是**未签名**的：Windows 会显示「未知发布者」，macOS 需要清 quarantine 或右键打开。这是明说的代价，不是遗漏。
 | A21.7 | 安装包真的能装（不是只有字节数） | 把资产拷到临时目录用 NSIS 的 `/D` 静默安装：`exit=0`，产出 `ccpbot-desktop.exe`（19,157,504 B）与 `uninstall.exe`；`VersionInfo` 为 `ProductName=CCP-Bot / FileVersion=0.2.3 / Company=ccpbot`；`uninstall.exe /S` → `exit=0`、残留 0 个文件。**按下按钮时走的是不带 `/D` 的同一条命令**，即静默装进默认位置（这就是「一键安装」的含义），临时目录只是验证方式 |
+
+### A22：CCP-Bot 0.2.4 —— 标准账号不再被 Windows 前置关卡挡住
+
+起点是一次真机反馈：装上 CCP-Bot 桌面端后，界面停在「CCP-Bot needs one thing first / This account cannot install Windows components」，要求用管理员执行两条 `dism.exe /online /enable-feature` 与 `wsl --install`。实测这台机器上其实有能跑这套栈的引擎（用户级安装的 Docker Desktop），所以这个画面是产品缺陷，不是环境缺陷。
+
+| # | 通过标准 | 证据 |
+| --- | --- | --- |
+| A22.1 | 缺陷复现（修前判定） | `Test-Path "C:\Program Files\Docker\Docker\Docker Desktop.exe"` → **False**；`%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe` → **True**。旧代码（`desktop/src-tauri/src/docker_desktop.rs:44-50`）只查前者，于是 `installed_app() = None`，引擎阶梯跳过 Docker 落到 Podman（需要 WSL2 + VirtualMachinePlatform → 需要管理员）。同时 `vm_disks()` 里的 `%LOCALAPPDATA%\Docker\wsl\disk\docker_data.vhdx` 存在（True），说明这台机器早就跑过 Docker |
+| A22.2 | 修后：真实机器上关卡不再升起 | 一次性探针（临时 integration test，跑完即删、不入库）：`cargo test --test gate_on_this_machine -- --nocapture` → `installed_app = Some("C:\Users\Damon\AppData\Local\Programs\DockerDesktop\Docker Desktop.exe")`、`used_before = true`、`saved_engine = None`、`docker_is_the_engine = true   (gate raised: false)`，`test result: ok. 1 passed` |
+| A22.3 | 单测 | `cargo test --lib -- docker_desktop:: install::tests::docker_ windows::tests::` → **45 passed / 0 failed / 1 ignored**；`cargo test --lib -- a_machine_without_a_docker_that_has_run` → **1 passed**。新增 `docker_desktop::tests::both_windows_roots_are_places_docker_desktop_can_be`、`install::tests::docker_takes_the_windows_stage_off_the_path`、`install::tests::a_machine_without_a_docker_that_has_run_keeps_the_windows_stage`，并在 `windows::tests::assert_administrator_setup_instruction` 里断言被挡住时的文案提到 Docker Desktop |
+| A22.4 | 全量单测 | `cargo test --lib` → **607 passed / 2 failed / 9 ignored**；两条失败是既有的 `provider_oauth` 用例（分别要 PATH 上的 `bun`、要 `SeSecurityPrivilege`），与本改动无关。`cargo check --bin ccpbot-desktop` → `Finished`（`windows_blocker` 编译在 bin 里，`--lib` 看不到它） |
+| A22.5 | 这一版真的发出来了 | `publish-images` run **41162571159** → success（21/21 作业）；`build-installers` run **41162571163** → success；release `v0.2.4` `draft=false`，资产 `CCP-Bot_0.2.4_x64-setup.exe` **4,710,923 B**、`CCP-Bot_0.2.4_x64_en-US.msi` 6,885,376 B、`CCP-Bot_0.2.4_aarch64.dmg` 9,549,623 B、`container-images.json` 3,063 B（`version=v0.2.4`，19 个镜像带 digest）；master 上的 `CI` run **41162568768** → success |
+| A22.6 | 「一键安装」取到的就是这一版 | `cargo test -p claude-codex-pro-core --lib ccpbot::tests::live_latest_release_offers_this_machines_installer -- --include-ignored` → **1 passed**（1.65s）；`%USERPROFILE%\.claude-codex-pro\ccpbot-install.log` 记 `GET https://api.github.com/repos/DamonZS/CCP-Bot/releases/latest` → `GET https://github.com/DamonZS/CCP-Bot/releases/download/v0.2.4/CCP-Bot_0.2.4_x64-setup.exe` → `saved 4710923 bytes`，落盘文件字节数与资产一致 |
+
+不在范围：既没有管理员权限、也没有任何现成引擎的机器仍需要一次管理员操作（Podman 路线要 WSL2 与 VirtualMachinePlatform，这是系统本身的要求）；这次解决的只是「已经装了 Docker Desktop 却被告知没有引擎」那一类。安装包仍未签名（Windows 显示未知发布者，macOS 需清 quarantine）。
