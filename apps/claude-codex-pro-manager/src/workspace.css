@@ -10897,7 +10897,7 @@ html.dark > body > .supplier-model-dropdown-menu,
   border-radius: inherit;
   opacity: 0;
   transition: opacity 320ms cubic-bezier(0.22, 1, 0.36, 1);
-  background: radial-gradient(closest-side, hsl(var(--brand-accent) / 0.55), transparent 72%);
+  background: linear-gradient(180deg, hsl(var(--brand-accent) / 0.55), transparent);
   filter: blur(4px);
   animation: ccpbot-breathe 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
@@ -11136,10 +11136,6 @@ html.dark > body > .supplier-model-dropdown-menu,
   border-radius: 14px;
   overflow: hidden;
   background-color: hsl(var(--surface-sunken));
-  background-image:
-    radial-gradient(120% 80% at 50% 0%, hsl(var(--brand-accent) / 0.07), transparent 60%),
-    repeating-linear-gradient(0deg, hsl(0 0% 100% / 0.022) 0 1px, transparent 1px 28px),
-    repeating-linear-gradient(90deg, hsl(0 0% 100% / 0.022) 0 1px, transparent 1px 28px);
   box-shadow: 0 18px 40px -32px hsl(0 0% 0% / 0.9) inset;
 }
 
@@ -11589,12 +11585,16 @@ html.dark > body > .supplier-model-dropdown-menu,
 
 /* The texture has to derive from the foreground colour, not from white: the
    workspace ships both `.dark` and `.light` token sets, and a white overlay is
-   invisible on a light surface. Same rule, both themes. */
+   invisible on a light surface. Same rule, both themes.
+   Tiled plain linear-gradients, not the repeating kind: the workspace contract in
+   src-tauri/tests/windows_subsystem.rs bans both the repeating and the radial
+   gradient functions in this file, and background-size tiles these two the same way. */
 .ccpbot-frame-wrap {
   background-image:
-    radial-gradient(120% 80% at 50% 0%, hsl(var(--brand-accent) / 0.07), transparent 60%),
-    repeating-linear-gradient(0deg, hsl(var(--foreground) / 0.045) 0 1px, transparent 1px 28px),
-    repeating-linear-gradient(90deg, hsl(var(--foreground) / 0.045) 0 1px, transparent 1px 28px);
+    linear-gradient(180deg, hsl(var(--brand-accent) / 0.07), transparent 60%),
+    linear-gradient(90deg, hsl(var(--foreground) / 0.045) 0 1px, transparent 1px),
+    linear-gradient(0deg, hsl(var(--foreground) / 0.045) 0 1px, transparent 1px);
+  background-size: 100% 100%, 28px 28px, 28px 28px;
 }
 
 /* Secondary rail actions read as controls, not as floating glyphs: a hairline
@@ -11614,7 +11614,13 @@ html.dark > body > .supplier-model-dropdown-menu,
   color: hsl(var(--brand-accent));
 }
 
+/* The empty state's mark wears the accent colour rather than the muted one used
+   in the rail: at 44px on a near-white surface in the light theme the muted
+   grey reads as a smudge, and the accent is the screen's one highlight anyway. */
 .ccpbot-empty-mark .ccpbot-orb {
   width: 44px;
   height: 44px;
+  border-color: hsl(var(--brand-accent) / 0.35);
+  background: hsl(var(--brand-accent) / 0.12);
+  color: hsl(var(--brand-accent));
 }

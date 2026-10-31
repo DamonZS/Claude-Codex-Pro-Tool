@@ -186,3 +186,6 @@ CCP 用户装的是 CCP，不是 CCP-Bot。所以页面必须能承接三种起�
 - **高度是链出来的，不是猜出来的。** 这一页要占满视口，别处不需要，所以只在本路由上把 `.ops-page-content` 接进 flex 链（详见 acceptance A23.4）。这是「塌成一条带」那个缺陷的真因，也是以后加同类页面时要先想清楚的一件事。
 - **浅色与深色都是第一等公民。** 所有颜色取既有 token；只有纹理线要按主题取反（`hsl(var(--foreground) / 0.045)`）——白线在浅色面上等于不存在。
 - **预览环境要能评审。** `vite:dev` 起的是没有 Tauri 的页面，因此 `src/tauriPreviewMock.ts` 补了 `ccpbot_*` 的模拟：默认状态就是「一台什么都还没装的机器」，于是空状态、在线态都能在浏览器里直接看（截图取自这条路径）。
+- **测试门禁（2026-10 补）。** 这一页此前只有 typecheck 与截图，没有一条测试能证明「按下启动会等 2.5 秒再探测」「Docker 模式读的是 daemon 而不是 bun」这类行为。现在 `apps/claude-codex-pro-manager` 装了 vitest + Testing Library（jsdom 环境），`npm run test` 跑 3 个文件 16 条，并接进 `pr-build.yml` 与 `auto-release-installers.yml` 的每个前端作业（否则「绿」只代表类型对）。这批测试当场抓出一个真 bug：日志抽屉的 `toggleLog` 调 `recheck()`，而 `recheck` 闭包里的 `logOpen` 还是旧值，于是抽屉永远读不到日志（见 acceptance A23.12）。
+- **纹理只能用普通渐变（既有契约，别踩）。** `apps/claude-codex-pro-manager/src-tauri/tests/windows_subsystem.rs` 禁止 `workspace.css` 出现 repeating-linear-gradient 与 radial-gradient —— 连注释里写下函数名都会被 `contains` 命中。网格因此用两层 `linear-gradient` + `background-size: 28px 28px` 平铺，光晕改竖向渐变；踩错会被契约测试直接判失败（当时 88 passed / 2 failed，修后 90 passed / 0 failed）。
+- **真机窗口也要看一眼。** 浏览器渲染不等于 Tauri 内嵌态：`tauri dev` 起来后的真窗口、点进这一页、骨架态到稳定态、日志抽屉，都已逐张实拍留证（见 acceptance A23.9）。本机没有跑起来的 CCP-Bot 引擎，所以内嵌态只到「离线页」为止。

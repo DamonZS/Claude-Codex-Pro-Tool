@@ -49,6 +49,10 @@ jobs:
         working-directory: apps/claude-codex-pro-manager
         run: npm run check
 
+      - name: Test Manager interface
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run test
+
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager
         run: npm run vite:build
@@ -134,6 +138,10 @@ jobs:
       - name: Type-check Manager
         working-directory: apps/claude-codex-pro-manager
         run: npm run check
+
+      - name: Test Manager interface
+        working-directory: apps/claude-codex-pro-manager
+        run: npm run test
 
       - name: Build frontend
         working-directory: apps/claude-codex-pro-manager

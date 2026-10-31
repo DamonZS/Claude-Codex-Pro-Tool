@@ -202,15 +202,28 @@ export function CcpBotScreen() {
     }
   }, []);
 
+  const readLog = useCallback(async () => {
+    try {
+      const log = await readCcpBotLog(120);
+      setSnapshot((previous) =>
+        previous ? { ...previous, logPath: log.path, logText: log.text } : previous,
+      );
+    } catch (error) {
+      setNotice({ text: `读取日志失败：${String(error)}`, ok: false });
+    }
+  }, []);
+
   const toggleLog = useCallback(() => {
     setLogOpen((previous) => {
       const next = !previous;
-      // The log is only read when it is asked for: the drawer is the one place
-      // that needs the tail, and every probe would otherwise carry it along.
-      if (next) void recheck();
+      // The tail is read on the click that opens the drawer, by this function and
+      // not by `recheck`: `recheck` closes over `logOpen`, so the click that flips
+      // it to true would still be read through a stale `false` and the drawer would
+      // open empty. While the drawer stays open, `recheck` does refresh it.
+      if (next) void readLog();
       return next;
     });
-  }, [recheck]);
+  }, [readLog]);
 
   const reachable = snapshot?.probe.reachable ?? false;
   const runtime = snapshot?.runtime;
