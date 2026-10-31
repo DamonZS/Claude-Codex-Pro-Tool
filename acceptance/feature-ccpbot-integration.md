@@ -287,3 +287,14 @@
 | A24.6 | 测试 | Rust：`cargo test -p claude-codex-pro-core --lib ccpbot` → **24 passed / 0 failed / 4 ignored**（新增 6 条：NSIS 末尾参数、MSI 属性、`reg query` 整行读取不得前缀顶替、checkout 的版本、无版本目录不算 checkout、`live_install_honours_the_directory_it_was_given` 的 ignored 用例）；前端：`npm run test` → **19 passed**（`CcpBotScreen.test.tsx` 12 条含三条安装流程：问目录→装→读回版本、取消→`{ request: null }`、已装→显示版本不给一键安装）；`npm run check` exit 0；`npm run vite:build` exit 0（5.76s）；`cargo test -p claude-codex-pro-manager --test windows_subsystem` → **90 passed / 0 failed** |
 
 不在范围：安装包仍未签名（SmartScreen/隔离警告照旧）；macOS 上目录语义不同（`.app` 是整包，选择器的结果交给 `open` 而不是就地安装）；安装器自己的向导文案不归我们；「已装但版本更旧」时不做自动升级（只在界面上显示版本并给「重新安装最新版」）。
+
+## A25：CCP-Bot 0.2.5 起「装完就能用」（本机进程，不需要引擎）
+
+CCP 这一侧不做安装本身，但必须知道 0.2.5 的安装包行为已经变了 —— 它决定「一键安装」之后用户还要不要再做一步。
+
+| 检查项 | 证据 |
+| --- | --- |
+| A25.1 | 安装包默认不需要引擎 | CCP-Bot 0.2.5（`package.json` 0.2.5、`Chart.yaml` version 0.1.8 / appVersion 0.2.5、`CHANGELOG.md` 小节 `## 0.2.5 - it does not need Docker`）的桌面端在首次运行时下载便携 PostgreSQL（EDB `postgresql-17.6-1-windows-x64-binaries.zip`，329,891,687 B，SHA-256 钉住）与 pgvector 扩展包，起本机进程，不碰 Docker/WSL/虚拟机；发布资产 `CCP-Bot_0.2.5_x64-setup.exe` 4,769,521 B、`…_x64_en-US.msi` 6,971,392 B、`…_aarch64.dmg` 9,614,870 B（run 41185919931 / 41185919986） |
+| A25.2 | 端到端真机证据在 CCP-Bot 仓 | `cargo test -p ccpbot-desktop --manifest-path desktop/src-tauri/Cargo.toml --lib -- local::tests::live_start --include-ignored --nocapture` → `1 passed … finished in 14.37s`，步骤 `[runtime]… → [database]… → [schema]… → [bot] The built-in Bot is answering (/health 200). → [server]… → [ready] CCP-Bot is running on this computer (/health 200).`，`local stack up on http://127.0.0.1:3010 with database port 63133 and the Bot on http://127.0.0.1:63659`；`logs/local-bot.log` 末行 `agent-bot listening on http://127.0.0.1:63659/ag-ui`。规格与四个真机坑写在 CCP-Bot 仓的 `docs/local-mode.md` |
+| A25.3 | 对 CCP 管理器的影响已被承认 | `windows_blocker` 与引擎阶梯对「已这样跑过」的机器不再适用（桌面安装器自己整段跳过）；「安装最新版」从 0.2.5 起拿到的就是本地模式。仍然需要引擎的部分已明确写出：agent-computer 的浏览器、agent-langgraph、supervisor、SPIRE |
+| A25.4 | 管理器侧不改契约 | 本次只增文档，不动 `crates/claude-codex-pro-core/src/ccpbot.rs` 的命令面；`cargo test -p claude-codex-pro-core --lib ccpbot` 与 `cargo test -p claude-codex-pro-manager --test windows_subsystem` 仍为 24 passed / 90 passed |
