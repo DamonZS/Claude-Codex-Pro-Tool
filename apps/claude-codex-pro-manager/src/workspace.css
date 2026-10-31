@@ -10816,11 +10816,16 @@ html.dark > body > .supplier-model-dropdown-menu,
 /* Distillation workbench styles live in components/distillation/distillation.css. */
 .ops-screen[data-route="clients"] { padding-top: 8px; }
 
-/* CCP-Bot workspace: a compact control strip on top, the embedded product fills
-   the rest of the page. The frame is a flex child with min-height: 0 so an
-   iframe (which has an intrinsic size) cannot push the layout taller than the
-   viewport and force the whole workspace to scroll. */
+/* CCP-Bot workspace.
+   One rail of state on top, one stage that either shows the product or names the
+   single step that is missing. The page is deliberately arranged as "one hero
+   per screen": the embedded frame owns the viewport, and every control that is
+   configuration rather than operation lives in a sheet that starts closed.
+   Materials stay on this app's own tokens (surface, border, brand accent) rather
+   than importing a second palette, and every animation is expressed as
+   transform/opacity so it cannot force a layout pass. */
 .ccpbot-layout {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -10829,126 +10834,320 @@ html.dark > body > .supplier-model-dropdown-menu,
   padding: 16px 20px 18px;
 }
 
-.ccpbot-header {
+.ccpbot-layout button {
+  transition:
+    transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Press feedback: the button goes down and shortens its shadow, and the release
+   springs back past its rest size. Scale alone reads as a zoom without the
+   shadow moving with it. */
+.ccpbot-layout button:active:not(:disabled) {
+  transform: scale(0.96) translateY(1px);
+  box-shadow: inset 0 2px 8px hsl(0 0% 0% / 0.22);
+  transition-duration: 120ms;
+}
+
+/* ---------- rail ---------- */
+
+.ccpbot-rail {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 14px 18px;
+  padding: 10px 14px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, hsl(var(--surface-raised) / 0.9), hsl(var(--surface-sunken) / 0.9));
+  box-shadow: 0 1px 0 hsl(0 0% 100% / 0.04) inset, 0 8px 24px -18px hsl(0 0% 0% / 0.8);
+  animation: ccpbot-rise 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
 }
 
-.ccpbot-title {
+.ccpbot-ident {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
   min-width: 0;
 }
 
-.ccpbot-title h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: hsl(var(--foreground));
-}
-
-.ccpbot-title p {
-  margin: 2px 0 0;
-  font-size: 12px;
-  color: hsl(var(--muted-foreground));
-}
-
-.ccpbot-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.ccpbot-chip {
-  padding: 3px 9px;
+.ccpbot-orb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
   border: 1px solid hsl(var(--border));
   border-radius: 999px;
   background: hsl(var(--surface-sunken));
   color: hsl(var(--muted-foreground));
+  transition: color 320ms cubic-bezier(0.4, 0, 0.2, 1), border-color 320ms;
+}
+
+/* Three states, one shape: cold, waking, live. The halo is a blurred pseudo
+   element so the status reads at a glance without adding a second badge. */
+.ccpbot-orb::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  background: radial-gradient(closest-side, hsl(var(--brand-accent) / 0.55), transparent 72%);
+  filter: blur(4px);
+  animation: ccpbot-breathe 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.ccpbot-orb.live {
+  border-color: hsl(var(--brand-accent) / 0.6);
+  color: hsl(var(--brand-accent));
+  background: hsl(var(--brand-accent) / 0.14);
+}
+
+.ccpbot-orb.live::after,
+.ccpbot-orb.waking::after {
+  opacity: 1;
+}
+
+.ccpbot-orb.waking {
+  border-color: hsl(var(--brand-accent) / 0.4);
+  color: hsl(var(--brand-accent));
+  background: hsl(var(--brand-accent) / 0.1);
+}
+
+.ccpbot-ident-text {
+  min-width: 0;
+}
+
+.ccpbot-ident-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ccpbot-ident-line h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: hsl(var(--foreground));
+}
+
+.ccpbot-addr {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.ccpbot-chip.ok {
-  border-color: hsl(var(--primary) / 0.35);
-  background: hsl(var(--primary) / 0.12);
-  color: hsl(var(--primary));
+.ccpbot-sub {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
 }
 
-.ccpbot-chip.warn {
-  border-color: hsl(var(--destructive) / 0.35);
-  background: hsl(var(--destructive) / 0.1);
+.ccpbot-stats {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  margin-left: auto;
+}
+
+/* Readouts are stacked number-over-label and set in monospace: the eye scans
+   columns of digits far faster than a sentence of chips. */
+.ccpbot-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  line-height: 1.1;
+}
+
+.ccpbot-stat b {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.ccpbot-stat i {
+  font-size: 9.5px;
+  font-style: normal;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground) / 0.8);
+}
+
+.ccpbot-stat.off b {
   color: hsl(var(--destructive));
 }
 
-.ccpbot-controls {
+.ccpbot-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ccpbot-segmented {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 10px;
+  background: hsl(var(--background) / 0.6);
+}
+
+.ccpbot-iconline {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ccpbot-iconline button[data-open="true"] {
+  background: hsl(var(--brand-accent) / 0.16);
+  color: hsl(var(--brand-accent));
+}
+
+/* ---------- settings sheet ---------- */
+
+/* Height is animated through grid-template-rows 0fr -> 1fr so the sheet opens to
+   its natural size instead of a guessed max-height that would clip a wrapped
+   field row. */
+.ccpbot-sheet {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 180px minmax(220px, 1.4fr) auto;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ccpbot-sheet[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.ccpbot-sheet-inner {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 180px minmax(240px, 1.5fr) auto;
   align-items: end;
   gap: 10px;
-  padding: 10px 12px;
+  min-height: 0;
+  overflow: hidden;
   border: 1px solid hsl(var(--border));
   border-radius: 12px;
-  background: hsl(var(--surface-raised));
+  background: hsl(var(--surface-sunken) / 0.85);
+  padding: 0 12px;
+  transition: padding 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ccpbot-sheet[data-open="true"] .ccpbot-sheet-inner {
+  padding: 12px;
 }
 
 .ccpbot-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
 }
 
 .ccpbot-field > span {
-  font-size: 11px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
   color: hsl(var(--muted-foreground));
 }
 
 .ccpbot-select {
-  height: 32px;
-  padding: 0 8px;
+  height: 34px;
+  padding: 0 9px;
   border: 1px solid hsl(var(--input));
-  border-radius: 8px;
+  border-radius: 9px;
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-size: 13px;
 }
 
-.ccpbot-buttons {
+.ccpbot-select:focus-visible {
+  outline: 2px solid hsl(var(--ring) / 0.6);
+  outline-offset: 1px;
+}
+
+.ccpbot-sheet-actions {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  padding-bottom: 1px;
 }
 
-.ccpbot-notice {
-  margin: 0;
-  padding: 7px 10px;
-  border-radius: 8px;
-  font-size: 12px;
+/* ---------- stage ---------- */
+
+.ccpbot-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+  animation: ccpbot-rise 480ms cubic-bezier(0.22, 1, 0.36, 1) 60ms both;
 }
 
-.ccpbot-notice.ok {
-  background: hsl(var(--primary) / 0.1);
-  color: hsl(var(--primary));
+.ccpbot-stage-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 2px;
+  min-width: 0;
 }
 
-.ccpbot-notice.warn {
-  background: hsl(var(--destructive) / 0.1);
-  color: hsl(var(--destructive));
+.ccpbot-stage-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: hsl(var(--muted-foreground) / 0.85);
+  white-space: nowrap;
 }
 
+.ccpbot-stage-detail {
+  overflow: hidden;
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The frame is a flex child with min-height: 0 so an iframe (which has an
+   intrinsic size) cannot push the layout taller than the viewport and force the
+   whole workspace to scroll. The grid texture is a whisper — it only exists so
+   the empty surface reads as a canvas rather than a hole. */
 .ccpbot-frame-wrap {
   position: relative;
   flex: 1 1 auto;
   min-height: 320px;
   border: 1px solid hsl(var(--border));
-  border-radius: 12px;
+  border-radius: 14px;
   overflow: hidden;
-  background: hsl(var(--surface-raised));
+  background-color: hsl(var(--surface-sunken));
+  background-image:
+    radial-gradient(120% 80% at 50% 0%, hsl(var(--brand-accent) / 0.07), transparent 60%),
+    repeating-linear-gradient(0deg, hsl(0 0% 100% / 0.022) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, hsl(0 0% 100% / 0.022) 0 1px, transparent 1px 28px);
+  box-shadow: 0 18px 40px -32px hsl(0 0% 0% / 0.9) inset;
+}
+
+.ccpbot-stage[data-live="true"] .ccpbot-frame-wrap {
+  border-color: hsl(var(--brand-accent) / 0.35);
+  box-shadow:
+    0 0 0 1px hsl(var(--brand-accent) / 0.18),
+    0 24px 60px -40px hsl(var(--brand-accent) / 0.6);
 }
 
 .ccpbot-frame {
@@ -10957,62 +11156,465 @@ html.dark > body > .supplier-model-dropdown-menu,
   height: 100%;
   border: 0;
   background: #fff;
+  animation: ccpbot-fade 460ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.ccpbot-placeholder {
+.ccpbot-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 28px;
+}
+
+.ccpbot-skeleton span {
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(
+    90deg,
+    hsl(var(--surface-raised)) 0%,
+    hsl(0 0% 100% / 0.06) 50%,
+    hsl(var(--surface-raised)) 100%
+  );
+  background-size: 220% 100%;
+  animation: ccpbot-shimmer 1.5s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.ccpbot-skeleton span:nth-child(1) {
+  width: 42%;
+}
+
+.ccpbot-skeleton span:nth-child(2) {
+  width: 68%;
+}
+
+.ccpbot-skeleton span:nth-child(3) {
+  width: 54%;
+}
+
+/* ---------- empty state ---------- */
+
+.ccpbot-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 16px;
   height: 100%;
-  padding: 24px;
+  padding: 30px 24px;
   text-align: center;
-  color: hsl(var(--muted-foreground));
 }
 
-.ccpbot-placeholder h2 {
+.ccpbot-empty-mark {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  animation: ccpbot-rise 460ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.ccpbot-empty-mark h2 {
   margin: 0;
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 600;
   color: hsl(var(--foreground));
 }
 
-.ccpbot-placeholder p {
+.ccpbot-empty-mark p {
   margin: 0;
   max-width: 520px;
   font-size: 12px;
-  line-height: 1.6;
-}
-
-.ccpbot-hint {
+  line-height: 1.65;
   color: hsl(var(--muted-foreground));
-  opacity: 0.8;
 }
 
-.ccpbot-log {
+/* The probe's own words sit between the headline and the checklist: it is the
+   only line that says what the network actually answered. */
+.ccpbot-empty-reason {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground) / 0.9);
+}
+
+.ccpbot-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(560px, 100%);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ccpbot-step {
+  display: grid;
+  grid-template-columns: 20px minmax(96px, max-content) 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
   border: 1px solid hsl(var(--border));
   border-radius: 10px;
-  background: hsl(var(--surface-raised));
-  font-size: 12px;
+  background: hsl(var(--surface-raised) / 0.55);
+  text-align: left;
+  animation: ccpbot-rise 420ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 120ms);
 }
 
-.ccpbot-log > summary {
-  padding: 7px 10px;
-  cursor: pointer;
+.ccpbot-step-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 999px;
+  color: transparent;
+}
+
+.ccpbot-step.done .ccpbot-step-mark {
+  border-color: hsl(var(--brand-accent) / 0.6);
+  background: hsl(var(--brand-accent) / 0.16);
+  color: hsl(var(--brand-accent));
+}
+
+/* Draw-in check: the tick strokes itself instead of appearing, which is what
+   makes a completed row feel finished rather than swapped. */
+.ccpbot-step.done .ccpbot-step-mark svg {
+  stroke-dasharray: 18;
+  animation: ccpbot-check 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.ccpbot-step-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: hsl(var(--foreground));
+}
+
+.ccpbot-step-detail {
+  overflow: hidden;
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ccpbot-step.done .ccpbot-step-detail {
+  color: hsl(var(--muted-foreground) / 0.75);
+}
+
+.ccpbot-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  animation: ccpbot-rise 460ms cubic-bezier(0.34, 1.56, 0.64, 1) 320ms both;
+}
+
+.ccpbot-empty-alt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: hsl(var(--muted-foreground) / 0.85);
+}
+
+.ccpbot-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(var(--brand-accent) / 0.9),
+    transparent
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: ccpbot-progress 1.3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* ---------- log drawer ---------- */
+
+.ccpbot-log-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ccpbot-log-drawer[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.ccpbot-log-drawer > * {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ccpbot-log-drawer .ops-code {
+  max-height: 200px;
+  margin: 0;
+  padding: 0 12px 12px;
+  overflow: auto;
+}
+
+.ccpbot-log-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid hsl(var(--border));
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: hsl(var(--surface-raised) / 0.7);
+  font-size: 11px;
   color: hsl(var(--muted-foreground));
 }
 
-.ccpbot-log pre {
-  margin: 0;
-  max-height: 220px;
-  padding: 8px 10px;
-  overflow: auto;
-  border-top: 1px solid hsl(var(--border));
+.ccpbot-log-head code {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-@media (max-width: 1080px) {
-  .ccpbot-controls {
+.ccpbot-log-head button {
+  margin-left: auto;
+}
+
+/* ---------- toast ---------- */
+
+/* Notices used to be an inline paragraph that pushed the stage down every time
+   one appeared. They float now, so the layout never moves for a message. */
+.ccpbot-toast {
+  position: absolute;
+  right: 24px;
+  bottom: 22px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(520px, calc(100% - 48px));
+  padding: 9px 10px 9px 12px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--popover) / 0.96);
+  box-shadow: 0 18px 40px -24px hsl(0 0% 0% / 0.9), 0 1px 0 hsl(0 0% 100% / 0.04) inset;
+  backdrop-filter: blur(14px);
+  animation: ccpbot-toast-in 380ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+.ccpbot-toast p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: hsl(var(--foreground));
+}
+
+.ccpbot-toast-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ccpbot-toast.ok {
+  border-color: hsl(var(--brand-accent) / 0.5);
+}
+
+.ccpbot-toast.ok .ccpbot-toast-mark {
+  background: hsl(var(--brand-accent) / 0.18);
+  color: hsl(var(--brand-accent));
+}
+
+.ccpbot-toast.warn {
+  border-color: hsl(var(--destructive) / 0.55);
+}
+
+.ccpbot-toast.warn .ccpbot-toast-mark {
+  background: hsl(var(--destructive) / 0.18);
+  color: hsl(var(--destructive));
+}
+
+/* ---------- motion ---------- */
+
+@keyframes ccpbot-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ccpbot-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.994);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes ccpbot-shimmer {
+  from {
+    background-position: 130% 0;
+  }
+  to {
+    background-position: -30% 0;
+  }
+}
+
+@keyframes ccpbot-breathe {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.55;
+  }
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+}
+
+@keyframes ccpbot-check {
+  from {
+    stroke-dashoffset: 18;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes ccpbot-progress {
+  from {
+    background-position: -40% 0;
+  }
+  to {
+    background-position: 140% 0;
+  }
+}
+
+@keyframes ccpbot-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1180px) {
+  .ccpbot-sheet-inner {
+    grid-template-columns: minmax(180px, 1fr) 160px minmax(200px, 1fr);
+  }
+
+  .ccpbot-sheet-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 900px) {
+  .ccpbot-stats {
+    order: 3;
+    margin-left: 0;
+  }
+
+  .ccpbot-actions {
+    margin-left: auto;
+  }
+
+  .ccpbot-sheet-inner {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccpbot-layout *,
+  .ccpbot-layout *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* The route has to hand the page's full height down to the workspace. Every
+   other screen is a document that scrolls, so `.ops-page-content` simply grows
+   with its content; this one is a viewport-shaped control surface, which needs
+   the chain from the grid item down to the iframe to be `height: 100%` all the
+   way. Without it the flex children collapse to their content and the embedded
+   product ends up in a band in the middle of an empty page. */
+.ops-screen[data-route="ccpbot"] {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 16px 14px;
+}
+
+.ops-screen[data-route="ccpbot"] > .ops-page-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The rail already carries the product name, the address and the live state, so
+   the generic page heading above it would only repeat the first line of it. */
+.ops-screen[data-route="ccpbot"] .ops-page-heading {
+  display: none;
+}
+
+.ccpbot-layout {
+  flex: 1 1 auto;
+  height: auto;
+}
+
+/* The texture has to derive from the foreground colour, not from white: the
+   workspace ships both `.dark` and `.light` token sets, and a white overlay is
+   invisible on a light surface. Same rule, both themes. */
+.ccpbot-frame-wrap {
+  background-image:
+    radial-gradient(120% 80% at 50% 0%, hsl(var(--brand-accent) / 0.07), transparent 60%),
+    repeating-linear-gradient(0deg, hsl(var(--foreground) / 0.045) 0 1px, transparent 1px 28px),
+    repeating-linear-gradient(90deg, hsl(var(--foreground) / 0.045) 0 1px, transparent 1px 28px);
+}
+
+/* Secondary rail actions read as controls, not as floating glyphs: a hairline
+   border and a hover tint carry the affordance that a bare icon lacks. */
+.ccpbot-iconline button {
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background) / 0.55);
+  color: hsl(var(--muted-foreground));
+}
+
+.ccpbot-iconline button:hover:not(:disabled) {
+  border-color: hsl(var(--brand-accent) / 0.5);
+  color: hsl(var(--foreground));
+}
+
+.ccpbot-stage[data-live="true"] .ccpbot-stage-title {
+  color: hsl(var(--brand-accent));
+}
+
+.ccpbot-empty-mark .ccpbot-orb {
+  width: 44px;
+  height: 44px;
 }

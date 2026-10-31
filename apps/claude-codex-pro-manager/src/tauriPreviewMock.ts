@@ -663,6 +663,141 @@ const previewKnowledgeCards = () => {
   ];
 };
 
+/**
+ * CCP-Bot preview state.
+ *
+ * This page controls a separate stack, so the preview has to answer for that
+ * stack as well. It starts where a fresh machine starts — an address typed in,
+ * bun present, nothing running — and flips to reachable after "start", so both
+ * the empty state and the embedded-frame state can be reviewed in a browser.
+ */
+let previewCcpBot = {
+  address: "http://127.0.0.1:3010",
+  mode: "source" as "source" | "docker",
+  projectDir: "",
+  reachable: false,
+  pid: null as number | null,
+  logPath: "~\\.claude-codex-pro\\ccpbot-dev.log",
+  logText: [
+    "$ bun run dev",
+    "CCP-Bot is starting…",
+    "app:   VITE v7.1.7  ready in 812 ms",
+    "app:   ➜  Local:   http://127.0.0.1:3010/",
+    "server: listening on http://127.0.0.1:3001",
+  ].join("\n"),
+};
+
+function previewCcpBotRuntime() {
+  return {
+    bunVersion: "1.2.21",
+    dockerCli: true,
+    dockerDaemon: false,
+    projectDirPresent: previewCcpBot.projectDir !== "",
+    envReady: previewCcpBot.reachable,
+    appPortOpen: previewCcpBot.reachable,
+    serverPortOpen: previewCcpBot.reachable,
+  };
+}
+
+function previewCcpBotProbe() {
+  return previewCcpBot.reachable
+    ? {
+        address: previewCcpBot.address,
+        reachable: true,
+        status: 200,
+        detail: `已连上 ${previewCcpBot.address}`,
+        elapsedMs: 12,
+      }
+    : {
+        address: previewCcpBot.address,
+        reachable: false,
+        status: null,
+        detail: "连接被拒：该地址没有服务在监听，CCP-Bot 估计还没启动。",
+        elapsedMs: 2067,
+      };
+}
+
+function previewCcpBotStatus() {
+  return {
+    probe: previewCcpBotProbe(),
+    runtime: previewCcpBotRuntime(),
+    pid: previewCcpBot.pid,
+  };
+}
+
+function previewCcpBotReply(command: string, args?: Record<string, unknown>) {
+  if (command === "ccpbot_load") {
+    return ok("CCP-Bot 状态已加载。", {
+      config: { address: previewCcpBot.address, mode: previewCcpBot.mode, projectDir: previewCcpBot.projectDir },
+      ...previewCcpBotStatus(),
+      logPath: previewCcpBot.logPath,
+      logText: previewCcpBot.logText,
+    });
+  }
+  if (command === "ccpbot_probe") {
+    const probe = previewCcpBotProbe();
+    return probe.reachable
+      ? ok("CCP-Bot 已有响应。", { ...previewCcpBotStatus() })
+      : ({
+          status: "failed",
+          message: probe.detail,
+          ...previewCcpBotStatus(),
+        } as CommandResult<Record<string, unknown>>);
+  }
+  if (command === "ccpbot_save_config") {
+    const next = (args?.config ?? {}) as { address?: string; mode?: "source" | "docker"; projectDir?: string };
+    previewCcpBot = {
+      ...previewCcpBot,
+      address: next.address ?? previewCcpBot.address,
+      mode: next.mode ?? previewCcpBot.mode,
+      projectDir: next.projectDir ?? previewCcpBot.projectDir,
+    };
+    return ok("配置已保存（预览模式）。", {
+      config: { address: previewCcpBot.address, mode: previewCcpBot.mode, projectDir: previewCcpBot.projectDir },
+    });
+  }
+  if (command === "ccpbot_start") {
+    previewCcpBot = { ...previewCcpBot, reachable: true, pid: 4172 };
+    return ok("已在后台拉起 CCP-Bot（预览模式）。", {
+      changed: true,
+      pid: previewCcpBot.pid,
+      message: "已在后台拉起 CCP-Bot（预览模式）。",
+      logPath: previewCcpBot.logPath,
+    });
+  }
+  if (command === "ccpbot_stop") {
+    const wasRunning = previewCcpBot.reachable;
+    previewCcpBot = { ...previewCcpBot, reachable: false, pid: null };
+    return ok(wasRunning ? "已停止 CCP-Bot（预览模式）。" : "没有正在运行的 CCP-Bot（预览模式）。", {
+      changed: wasRunning,
+      pid: null,
+      message: wasRunning ? "已停止 CCP-Bot（预览模式）。" : "没有正在运行的 CCP-Bot（预览模式）。",
+      logPath: previewCcpBot.logPath,
+    });
+  }
+  if (command === "ccpbot_log_tail") {
+    return ok("已读取启动日志尾部（预览模式）。", {
+      path: previewCcpBot.logPath,
+      text: previewCcpBot.logText,
+    });
+  }
+  if (command === "ccpbot_prepare") {
+    previewCcpBot = { ...previewCcpBot, projectDir: "D:\\CCP-Bot" };
+    return ok("已从 GitHub 取到源码并装好依赖（预览模式）。", {
+      changed: true,
+      pid: null,
+      message: "已从 GitHub 取到源码并装好依赖（预览模式）。",
+      logPath: "~\\.claude-codex-pro\\ccpbot-prepare.log",
+    });
+  }
+  return ok("预览模式不会真的跑安装程序。", {
+    changed: false,
+    pid: null,
+    message: "预览模式不会真的跑安装程序。",
+    logPath: "~\\.claude-codex-pro\\ccpbot-install.log",
+  });
+}
+
 export async function mockInvoke(command: string, _args?: Record<string, unknown>) {
   if (command === "open_external_url") return ok("预览模式不打开外部链接。", {});
   if (command === "inspect_leila_status") return previewLeilaStatus();
@@ -1683,6 +1818,7 @@ export async function mockInvoke(command: string, _args?: Record<string, unknown
       path: "~\\.claude-codex-pro\\relay",
     });
   }
+  if (command.startsWith("ccpbot_")) return previewCcpBotReply(command, _args);
   return {
     status: "not_implemented",
     message: `当前是无 Tauri 预览环境，命令未执行：${command}`,
