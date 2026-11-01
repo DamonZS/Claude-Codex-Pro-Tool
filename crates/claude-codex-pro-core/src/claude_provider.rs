@@ -27,12 +27,36 @@ pub fn apply_claude_provider(profile: &RelayProfile) -> anyhow::Result<ClaudePro
     apply_claude_provider_at_path(&default_claude_settings_path(), profile)
 }
 
+/// 走本机模型代理时用这个：命令行这只 Claude 的地址指向本机代理，真实上游仍留在供应商档案的
+/// JSON env 里，由代理自己解析 —— 这正是 Claude Desktop 那条路一直在用的约定。
+pub fn apply_claude_provider_via_proxy(
+    profile: &RelayProfile,
+    proxy_base_url: &str,
+) -> anyhow::Result<ClaudeProviderOutcome> {
+    apply_claude_provider_at_path_using(
+        &default_claude_settings_path(),
+        profile,
+        Some(proxy_base_url),
+    )
+}
+
 pub fn apply_claude_provider_at_path(
     settings_path: &Path,
     profile: &RelayProfile,
 ) -> anyhow::Result<ClaudeProviderOutcome> {
+    apply_claude_provider_at_path_using(settings_path, profile, None)
+}
+
+fn apply_claude_provider_at_path_using(
+    settings_path: &Path,
+    profile: &RelayProfile,
+    proxy_base_url: Option<&str>,
+) -> anyhow::Result<ClaudeProviderOutcome> {
     let mut desired_env = profile_env(profile)?;
-    let base_url = resolve_base_url(profile, &desired_env)?;
+    let base_url = match proxy_base_url.map(str::trim).filter(|url| !url.is_empty()) {
+        Some(url) => url.to_string(),
+        None => resolve_base_url(profile, &desired_env)?,
+    };
     validate_base_url(&base_url)?;
     let api_key = relay_profile_resolved_api_key(profile);
     if api_key.trim().is_empty() {
@@ -185,4 +209,72 @@ fn backup_existing_settings(path: &Path) -> anyhow::Result<Option<PathBuf>> {
         )
     })?;
     Ok(Some(backup_path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn profile() -> RelayProfile {
+        let mut profile = RelayProfile::default();
+        profile.name = "My Claude".to_string();
+        profile.target_app = "claude".to_string();
+        profile.base_url = "https://api.example.com".to_string();
+        profile.api_key = "sk-test".to_string();
+        profile.api_key_explicit = true;
+        profile
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("ccp-claude-provider-{name}-{stamp}.json"))
+    }
+
+    fn written_base_url(path: &Path) -> String {
+        let text = std::fs::read_to_string(path).expect("写入后的 settings.json 应该存在");
+        let value: Value = serde_json::from_str(&text).expect("写入后的 settings.json 应该能解析");
+        value
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_BASE_URL"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    #[test]
+    fn without_a_proxy_the_address_is_the_supplier() {
+        let path = scratch("direct");
+        apply_claude_provider_at_path(&path, &profile()).expect("直连写入应该成功");
+        assert_eq!(written_base_url(&path), "https://api.example.com");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn with_a_proxy_the_address_is_the_proxy() {
+        let path = scratch("proxy");
+        apply_claude_provider_at_path_using(
+            &path,
+            &profile(),
+            Some("http://127.0.0.1:57331/claude-desktop"),
+        )
+        .expect("走代理写入应该成功");
+        assert_eq!(
+            written_base_url(&path),
+            "http://127.0.0.1:57331/claude-desktop"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_empty_proxy_falls_back_to_the_supplier() {
+        let path = scratch("blank-proxy");
+        apply_claude_provider_at_path_using(&path, &profile(), Some("   "))
+            .expect("空白代理地址应退回直连");
+        assert_eq!(written_base_url(&path), "https://api.example.com");
+        let _ = std::fs::remove_file(&path);
+    }
 }

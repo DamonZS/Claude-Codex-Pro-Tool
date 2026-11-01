@@ -9918,9 +9918,15 @@ pub async fn switch_supplier_profile(
         });
     }
 
+    let claude_proxy_base_url = if target_app == "claude" {
+        claude_proxy_base_url_for_switch(&request).await
+    } else {
+        None
+    };
+
     tauri::async_runtime::spawn_blocking(move || match target_app.as_str() {
         "codex" => switch_codex_supplier_blocking(request),
-        "claude" => switch_claude_supplier_blocking(request),
+        "claude" => switch_claude_supplier_blocking(request, claude_proxy_base_url),
         _ => unreachable!("target was normalized before spawning"),
     })
     .await
@@ -9976,8 +9982,50 @@ fn switch_codex_supplier_blocking(
     }
 }
 
+/// 路由开启的 Claude 供应商：命令行这只 Claude 也该走本机代理，这样 OpenAI 格式的上游也能被
+/// 转换 —— 否则命令行始终拿 Anthropic 协议直连上游，非原生上游就是超时。
+fn claude_profile_wants_local_proxy(profile: &RelayProfile) -> bool {
+    profile.route_enabled
+        && profile
+            .claude_desktop_mode
+            .trim()
+            .eq_ignore_ascii_case("proxy")
+}
+
+/// 决定这次切换是否把命令行指向本机模型代理。代理起不来就返回 None 退回直连：
+/// 宁可没有转换，也不能让用户本来能用的供应商因为代理没起来而不可用。
+async fn claude_proxy_base_url_for_switch(
+    request: &SupplierProfileSwitchRequest,
+) -> Option<String> {
+    let mut probe = request.settings.clone();
+    if set_active_supplier_profile_for_target(&mut probe, "claude", &request.profile_id).is_err() {
+        return None;
+    }
+    let profile = probe.active_relay_profile_for_target("claude");
+    if !claude_profile_wants_local_proxy(&profile) {
+        return None;
+    }
+    match ensure_claude_desktop_proxy_helper().await {
+        Ok(port) => {
+            Some(claude_codex_pro_core::protocol_proxy::local_claude_desktop_proxy_base_url(port))
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.switch_supplier_profile.proxy_unavailable",
+                json!({
+                    "targetApp": "claude",
+                    "profileId": profile.id,
+                    "error": error.to_string()
+                }),
+            );
+            None
+        }
+    }
+}
+
 fn switch_claude_supplier_blocking(
     mut request: SupplierProfileSwitchRequest,
+    proxy_base_url: Option<String>,
 ) -> CommandResult<SettingsPayload> {
     let _write_guard = settings_write_mutex()
         .lock()
@@ -10006,7 +10054,13 @@ fn switch_claude_supplier_blocking(
             fallback_settings_payload(),
         );
     }
-    match claude_codex_pro_core::claude_provider::apply_claude_provider(&profile) {
+    let applied = match proxy_base_url.as_deref() {
+        Some(url) => {
+            claude_codex_pro_core::claude_provider::apply_claude_provider_via_proxy(&profile, url)
+        }
+        None => claude_codex_pro_core::claude_provider::apply_claude_provider(&profile),
+    };
+    match applied {
         Ok(outcome) => {
             log_manager_event(
                 "manager.switch_supplier_profile.ok",
@@ -10014,7 +10068,8 @@ fn switch_claude_supplier_blocking(
                     "targetApp": "claude",
                     "profileId": profile.id,
                     "settingsPath": outcome.settings_path,
-                    "mergedEnvKeys": outcome.merged_env_keys
+                    "mergedEnvKeys": outcome.merged_env_keys,
+                    "proxied": proxy_base_url.is_some()
                 }),
             );
             settings_payload("Claude 供应商已切换并新增式写入配置。", "刷新设置失败")
@@ -16858,7 +16913,9 @@ pub async fn ccpbot_log_tail(request: CcpBotLogRequest) -> CommandResult<CcpBotL
 /// is optional; when it is given, the install is asked to land there and the result says whether
 /// the executable actually showed up in it.
 #[tauri::command]
-pub async fn ccpbot_install_latest(request: Option<CcpBotInstallRequest>) -> CommandResult<CcpBotAction> {
+pub async fn ccpbot_install_latest(
+    request: Option<CcpBotInstallRequest>,
+) -> CommandResult<CcpBotAction> {
     let dir = request
         .and_then(|request| request.dir)
         .map(|dir| dir.trim().to_string())
