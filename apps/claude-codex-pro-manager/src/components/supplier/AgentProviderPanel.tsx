@@ -303,10 +303,6 @@ function AgentProviderEditor({
               {show("defaultModel") ? <small className="ap-error">{show("defaultModel")}</small> : null}
             </label>
           ) : null}
-          <label className="st-input">
-            <span>备注</span>
-            <input onChange={(event) => patch({ notes: event.target.value })} value={draft.notes} />
-          </label>
         </div>
         <footer className="st-actions ap-editor-foot">
           <button className="st-button" onClick={onCancel} type="button">取消</button>
