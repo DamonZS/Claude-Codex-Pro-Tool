@@ -67,6 +67,7 @@ import {
   supplierModelMappingJson,
   supplierModelMappingRows,
   supplierModelMappingText,
+  supplierEffectiveConfigContents,
   uniqueSupplierProfileId,
   withSupplierGeneratedFiles,
   withSupplierPreservedImportedFiles,
@@ -1271,7 +1272,11 @@ export function SupplierScreen({
         ? { localProxyOverrides: { headers: generated.headerOverride || "{}", body: generated.bodyOverride || "{}" } }
         : {}),
     }, null, 2);
-    const supplierConfigJson = generated.configContents || claudeConfigJson;
+    // 显示的就是保存时会写进 agent 的那份：Claude 类供应商按表单重算托管键，
+    // 导入供应商自带的其它键保留，所以「改了模型配置、下面 JSON 不变」不会再出现。
+    const supplierConfigJson = isClaudeSupplier
+      ? supplierEffectiveConfigContents(generated) || claudeConfigJson
+      : generated.configContents || claudeConfigJson;
     const visibleSupplierConfigJson = showSupplierApiKey
       ? supplierConfigJson
       : redactSupplierConfig(supplierConfigJson);
@@ -1495,7 +1500,7 @@ env_key = "OPENAI_API_KEY"
                 </label>
               </>
             )}
-            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} readOnly={!showSupplierApiKey} rows={6} value={visibleHeaderOverride} placeholder={'{\n  "X-Provider": "cc-switch"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} readOnly={!showSupplierApiKey} rows={6} value={visibleBodyOverride} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} readOnly={!showSupplierApiKey} value={visibleSupplierConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" readOnly value={visibleCodexAuthJson} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" readOnly value={visibleCodexConfigToml} /></label></>}
+            <div className="supplier-ccswitch-divider" /><strong>本地代理请求覆盖</strong><p className="supplier-inline-note">仅在本地路由 / 代理接管后生效，应用于协议转换后的上游请求。</p><div className="supplier-ccswitch-form-grid two"><label className="ops-form-field"><span>Header 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ headerOverride: event.currentTarget.value })} readOnly={!showSupplierApiKey} rows={6} value={visibleHeaderOverride} placeholder={'{\n  "X-Provider": "your-gateway"\n}'} /></label><label className="ops-form-field"><span>Body 覆盖</span><textarea className="ops-textarea mono" onChange={(event) => updateDraft({ bodyOverride: event.currentTarget.value })} readOnly={!showSupplierApiKey} rows={6} value={visibleBodyOverride} placeholder={'{\n  "temperature": 0.2\n}'} /></label></div>{isClaudeSupplier ? <label className="ops-form-field"><span>配置 JSON</span><textarea className="ops-textarea mono supplier-config-json" onChange={(event) => updateDraft({ configContents: event.currentTarget.value })} readOnly={!showSupplierApiKey} value={visibleSupplierConfigJson} /></label> : <><label className="ops-form-field"><span>auth.json</span><textarea className="ops-textarea mono supplier-config-json compact" readOnly value={visibleCodexAuthJson} /></label><label className="ops-form-field"><span>config.toml</span><textarea className="ops-textarea mono supplier-config-json" readOnly value={visibleCodexConfigToml} /></label></>}
           </details></section></div>
         <div className="supplier-ccswitch-savebar"><span>{modelFetch?.models.length ? `已获取 ${modelFetch.models.length} 个模型，来源：${modelFetch.endpoint || "模型接口"}` : "请检查并保存供应商配置"}</span><div className="action-row"><Button onClick={closeSupplierEditor} type="button" variant="outline">取消</Button><Button disabled={supplierSaveBusy} onClick={() => void saveDraft()} type="button"><Save className="h-4 w-4" />{supplierSaveBusy ? "保存中" : "保存"}</Button><Button disabled={!canSwitch || supplierSaveBusy} onClick={() => void saveAndSwitchDraft()} type="button"><KeyRound className="h-4 w-4" />保存并使用</Button></div></div>
       </div>

@@ -595,10 +595,13 @@ export function withSupplierPreservedImportedFiles(profile: RelayProfile): Relay
   const current = { ...normalized, apiKey, apiKeyExplicit };
   const isClaudeTarget = normalized.targetApp === "claude" || normalized.targetApp === "claude-desktop";
   if (isClaudeTarget) {
+    // 凭据之外的托管键（Base URL、模型与角色映射）也要按表单重写：
+    // 只换凭据会让「改了模型配置、保存后下面的 JSON 还是第一次的样子」，
+    // 而真正写进 agent 的 env 也一直停在导入时的旧值。
     const authKey = preferredClaudeCredentialField(current);
     return {
       ...current,
-      configContents: synchronizeClaudeConfigCredential(current, apiKey, authKey),
+      configContents: supplierEffectiveConfigContents({ ...current, apiKey, authField: authKey }),
       authContents: synchronizeClaudeAuthCredential(current.authContents, apiKey, authKey),
     };
   }
@@ -753,6 +756,59 @@ export function withSupplierGeneratedFiles(profile: RelayProfile): RelayProfile 
     configContents: buildSupplierConfigToml(generated),
     authContents: apiKey ? `${JSON.stringify({ OPENAI_API_KEY: apiKey }, null, 2)}\n` : "",
   };
+}
+
+/** 「配置 JSON」里由管理器托管的 env 键：保存时整体按表单重写，其余键原样保留。 */
+const CLAUDE_MANAGED_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "CLAUDE_BASE_URL",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_FABLE_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_API_KEY",
+  "api_key",
+  "apiKey",
+] as const;
+
+function asJsonObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * 把表单能改的托管键按新值写进存量 JSON，导入供应商自带的其它键（自定义 env、
+ * meta 里的额外字段、localProxyOverrides 等）保留 —— 存量键不再能盖住表单。
+ */
+function mergeClaudeConfigOntoStored(stored: string, generated: string) {
+  const previous = jsonObject(stored);
+  const next = jsonObject(generated);
+  if (!previous || !next) return generated || stored;
+  const previousEnv = asJsonObject(previous.env) ?? {};
+  const env: Record<string, unknown> = { ...previousEnv };
+  for (const key of CLAUDE_MANAGED_ENV_KEYS) delete env[key];
+  const meta = { ...(asJsonObject(previous.meta) ?? {}), ...(asJsonObject(next.meta) ?? {}) };
+  return `${JSON.stringify({ ...previous, ...next, env: { ...env, ...(asJsonObject(next.env) ?? {}) }, meta }, null, 2)}\n`;
+}
+
+/** 保存与显示共用同一份规则：Claude 类供应商的「配置 JSON」会是什么样。 */
+export function supplierEffectiveConfigContents(profile: RelayProfile): string {
+  const normalized = normalizeSupplierProfile(profile);
+  const isClaudeTarget = normalized.targetApp === "claude" || normalized.targetApp === "claude-desktop";
+  if (!isClaudeTarget) return normalized.configContents ?? "";
+  const authKey = preferredClaudeCredentialField(normalized);
+  const generated = withSupplierGeneratedFiles({
+    ...normalized,
+    apiKey: supplierProfileResolvedApiKey(normalized),
+    authField: authKey,
+  });
+  const stored = (normalized.configContents ?? "").trim();
+  return stored ? mergeClaudeConfigOntoStored(stored, generated.configContents) : generated.configContents;
 }
 
 export function supplierProfileHasApiKey(profile: RelayProfile) {

@@ -5249,7 +5249,7 @@ mod tests {
             target_app: "claude-desktop".to_string(),
             api_format: "Anthropic Messages".to_string(),
             header_override: json!({
-                "X-Provider": "cc-switch",
+                "X-Provider": "your-gateway",
                 "Authorization": "Bearer stale-override",
                 "Content-Type": "text/plain"
             })
@@ -5291,7 +5291,7 @@ mod tests {
             serde_json::from_str(request_body).expect("captured body should be JSON");
         let headers = headers.to_ascii_lowercase();
 
-        assert!(headers.contains("x-provider: cc-switch"));
+        assert!(headers.contains("x-provider: your-gateway"));
         assert!(headers.contains("authorization: bearer claude-test-key"));
         assert!(!headers.contains("stale-override"));
         assert!(headers.contains("content-type: application/json"));
