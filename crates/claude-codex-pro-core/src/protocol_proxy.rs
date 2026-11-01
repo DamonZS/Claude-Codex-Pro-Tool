@@ -1266,7 +1266,24 @@ async fn open_claude_messages_proxy_request_for_target(
     body: &str,
     metadata: &ClaudeMessagesRequestMetadata,
 ) -> anyhow::Result<UpstreamProxyResponse> {
-    let settings = load_proxy_settings(&SettingsStore::default())?;
+    open_claude_messages_proxy_request_in_store(
+        &SettingsStore::default(),
+        target_app,
+        body,
+        metadata,
+    )
+    .await
+}
+
+/// 与上面同一个实现，只是把「设置从哪来」做成参数，好让测试拿一份自己的供应商表来验证
+/// 「命令行看 claude、桌面版看 claude-desktop」这条规矩。
+async fn open_claude_messages_proxy_request_in_store(
+    store: &SettingsStore,
+    target_app: &str,
+    body: &str,
+    metadata: &ClaudeMessagesRequestMetadata,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    let settings = load_proxy_settings(store)?;
     let active = settings.active_relay_profile_for_target(target_app);
     let plan = crate::routing_failover::plan_for(target_app, &active.id);
 
@@ -5099,6 +5116,75 @@ mod tests {
         for path in ["/claude-desktop/messages", "/claude-desktop/v1/messages"] {
             assert!(!is_claude_code_messages_proxy_path(path), "{path}");
         }
+    }
+
+    #[tokio::test]
+    async fn the_command_line_reaches_its_own_supplier() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(200, r#"{"id":"msg-cli","content":[]}"#)],
+            )
+        });
+
+        // 桌面版那家供应商故意指向一个连不上的地址：
+        // 万一命令行的请求走了桌面版的目标，这条用例就会失败。
+        let mut settings = BackendSettings::default();
+        settings.relay_profiles = vec![
+            RelayProfile {
+                id: "cli-profile".to_string(),
+                name: "CLI".to_string(),
+                target_app: "claude".to_string(),
+                upstream_base_url: format!("http://{address}"),
+                auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "cli-test-key"}).to_string(),
+                api_format: "Anthropic Messages".to_string(),
+                route_enabled: true,
+                ..RelayProfile::default()
+            },
+            RelayProfile {
+                id: "desktop-profile".to_string(),
+                name: "Desktop".to_string(),
+                target_app: "claude-desktop".to_string(),
+                upstream_base_url: "http://127.0.0.1:1".to_string(),
+                api_format: "Anthropic Messages".to_string(),
+                route_enabled: true,
+                ..RelayProfile::default()
+            },
+        ];
+        let directory = tempfile::tempdir().expect("create temporary settings directory");
+        let store = SettingsStore::new(directory.path().join("settings.json"));
+        store.save(&settings).expect("write the two targets");
+
+        let metadata = ClaudeMessagesRequestMetadata::from_inbound(
+            "/claude-code/v1/messages",
+            "2024-10-22",
+            "",
+        );
+        let body = json!({
+            "model": "claude-opus-4-8",
+            "max_tokens": 32,
+            "messages": [{"role": "user", "content": "who answers this"}],
+            "stream": false
+        })
+        .to_string();
+
+        let response =
+            open_claude_messages_proxy_request_in_store(&store, "claude", &body, &metadata)
+                .await
+                .expect("the command line must reach the supplier it selected");
+        assert_eq!(response.status_code, 200);
+        drop(response);
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let headers = requests[0]
+            .split_once("\r\n\r\n")
+            .map(|(headers, _)| headers.to_ascii_lowercase())
+            .expect("captured request should contain headers and body");
+        assert!(headers.starts_with("post /v1/messages http/1.1"));
+        assert!(headers.contains("authorization: bearer cli-test-key"));
     }
 
     #[test]
