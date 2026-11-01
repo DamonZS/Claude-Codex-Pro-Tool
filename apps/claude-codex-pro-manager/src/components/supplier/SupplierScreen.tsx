@@ -43,7 +43,6 @@ import {
   createAggregateSupplierProfile,
   createSupplierProfile,
   normalizeSupplierProfile,
-  normalizedSupplierApiFormat,
   redactSupplierConfig,
   supplierIdFromName,
   supplierProfileCanActivate,
@@ -1212,17 +1211,13 @@ export function SupplierScreen({
     const isClaudeSupplier = generated.targetApp === "claude" || generated.targetApp === "claude-desktop";
     const isCodexSupplier = generated.targetApp === "codex" || !generated.targetApp;
     const apiFormatOption = supplierApiFormatOption(generated.apiFormat || "Anthropic Messages");
-    // Codex 那一栏今天有三种上游：原生 Responses（直连）、Chat Completions（要转换）、
-    // 以及说 Anthropic Messages 的上游 —— Codex 与它之间也要转换。
+    // Codex 只说 Responses：原生 Responses 的上游直连，其余走本机代理转成 Chat Completions；
+    // 界面上不给 Anthropic 这一项（Codex 自己也读不懂 Anthropic 的回应）。
     const selectedApiFormat = isCodexSupplier
-      ? (normalizedSupplierApiFormat(generated.apiFormat) === "Anthropic Messages"
-        ? "anthropic"
-        : generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions"
-          ? "openai_chat"
-          : "openai_responses")
+      ? (generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "openai_chat" : "openai_responses")
       : generated.apiFormat;
     const routeRequired = isCodexSupplier
-      ? selectedApiFormat === "openai_chat" || selectedApiFormat === "anthropic"
+      ? selectedApiFormat === "openai_chat"
       : supplierApiFormatRequiresRoute(selectedApiFormat);
     const routeEnabled = !!generated.routeEnabled;
     const authField = generated.authField || "ANTHROPIC_AUTH_TOKEN";
@@ -1416,18 +1411,13 @@ env_key = "OPENAI_API_KEY"
                 <label className="ops-form-field">
                   <span>上游格式</span>
                   <select className="ops-select" onChange={(event) => {
-                    const chosen = event.currentTarget.value;
-                    // 存的是规范写法，免得 "anthropic" 与 "Anthropic Messages" 在别处被当成两种。
-                    updateDraft({
-                      apiFormat: chosen === "anthropic" ? "Anthropic Messages" : chosen,
-                      protocol: chosen === "openai_chat" ? "chatCompletions" : "responses",
-                    });
-                  }} value={selectedApiFormat}>
-                    <option value="anthropic">Anthropic Messages（需开启路由）</option>
+                    const next = event.currentTarget.value;
+                    updateDraft({ apiFormat: next, protocol: next === "openai_chat" ? "chatCompletions" : "responses" });
+                  }} value={generated.apiFormat === "openai_chat" || generated.protocol === "chatCompletions" ? "openai_chat" : "openai_responses"}>
                     <option value="openai_chat">Chat Completions（需开启路由）</option>
                     <option value="openai_responses">Responses（原生）</option>
                   </select>
-                  <small>Responses 可直连；Chat Completions 与 Anthropic Messages 都需要路由接管。</small>
+                  <small>Responses 可直连；Chat Completions 需要路由接管。</small>
                 </label>
                 {routePrompt ? <div className="supplier-route-note">{routePrompt}</div> : null}
                 <div className="supplier-ccswitch-divider" />

@@ -11503,13 +11503,12 @@ fn apply_relay_injection_blocking() -> CommandResult<RelayPayload> {
         );
     }
 
-    match claude_codex_pro_core::relay_config::apply_relay_config_to_home_with_protocol_and_format(
+    match claude_codex_pro_core::relay_config::apply_relay_config_to_home_with_protocol(
         &home,
         &relay.base_url,
         &relay.api_key,
         relay.protocol,
         claude_codex_pro_core::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-        &relay.api_format,
     ) {
         Ok(result) => {
             let status = claude_codex_pro_core::relay_config::relay_status_from_home(&home);

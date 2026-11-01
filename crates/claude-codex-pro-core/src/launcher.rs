@@ -1741,16 +1741,6 @@ async fn handle_protocol_proxy_connection(
                 .map(crate::protocol_proxy::ChatSseToResponsesConverter::with_request)
                 .unwrap_or_default()
         });
-        let mut anthropic_converter = matches!(
-            conversion,
-            Some(crate::protocol_proxy::ResponseConversion::AnthropicToResponses)
-        )
-        .then(|| {
-            request_json
-                .as_ref()
-                .map(crate::protocol_proxy::AnthropicSseToResponsesConverter::with_request)
-                .unwrap_or_default()
-        });
         let mut bytes_stream = upstream.response.bytes_stream();
         let mut stream_failed = false;
 
@@ -1759,8 +1749,6 @@ async fn handle_protocol_proxy_connection(
                 Ok(bytes) => {
                     telemetry.push_bytes(&bytes);
                     let converted = if let Some(converter) = chat_converter.as_mut() {
-                        converter.push_bytes(&bytes)
-                    } else if let Some(converter) = anthropic_converter.as_mut() {
                         converter.push_bytes(&bytes)
                     } else {
                         bytes.to_vec()
@@ -1772,9 +1760,10 @@ async fn handle_protocol_proxy_connection(
                 Err(error) => {
                     telemetry.fail(crate::request_telemetry::RequestFailure::Stream);
                     let failed = if let Some(converter) = chat_converter.as_mut() {
-                        converter.fail(format!("Stream error: {error}"), Some("stream_error".to_string()))
-                    } else if let Some(converter) = anthropic_converter.as_mut() {
-                        converter.fail(format!("Stream error: {error}"))
+                        converter.fail(
+                            format!("Stream error: {error}"),
+                            Some("stream_error".to_string()),
+                        )
                     } else {
                         Vec::new()
                     };
@@ -1789,8 +1778,6 @@ async fn handle_protocol_proxy_connection(
 
         if !stream_failed {
             let tail = if let Some(converter) = chat_converter.as_mut() {
-                converter.finish()
-            } else if let Some(converter) = anthropic_converter.as_mut() {
                 converter.finish()
             } else {
                 Vec::new()
@@ -1836,9 +1823,6 @@ async fn handle_protocol_proxy_connection(
             telemetry.fail(crate::request_telemetry::RequestFailure::InvalidResponse);
         })?;
     let response_json = match upstream.response_conversion {
-        Some(crate::protocol_proxy::ResponseConversion::AnthropicToResponses) => {
-            crate::protocol_proxy::anthropic_to_responses_response(&upstream_json)
-        }
         _ => {
             if let Some(request_json) = request_json.as_ref() {
                 crate::protocol_proxy::chat_completion_to_response_with_request(
@@ -2438,11 +2422,11 @@ async fn handle_claude_desktop_messages_proxy_connection(
             _ => None,
         };
         let mut responses_bridge = match upstream.response_conversion {
-            Some(crate::protocol_proxy::ResponseConversion::ResponsesToAnthropic) => {
-                Some(crate::protocol_proxy::ResponsesSseToAnthropicConverter::with_request(
+            Some(crate::protocol_proxy::ResponseConversion::ResponsesToAnthropic) => Some(
+                crate::protocol_proxy::ResponsesSseToAnthropicConverter::with_request(
                     &original_request,
-                ))
-            }
+                ),
+            ),
             _ => None,
         };
         while let Some(chunk) = bytes_stream.next().await {
@@ -2526,14 +2510,14 @@ async fn handle_claude_desktop_messages_proxy_connection(
                 .map_err(anyhow::Error::from)
                 .and_then(|upstream_json| match conversion {
                     crate::protocol_proxy::ResponseConversion::ChatToAnthropic => {
-                        crate::protocol_proxy::chat_completions_to_anthropic_response(&upstream_json)
+                        crate::protocol_proxy::chat_completions_to_anthropic_response(
+                            &upstream_json,
+                        )
                     }
                     crate::protocol_proxy::ResponseConversion::ResponsesToAnthropic => {
                         crate::protocol_proxy::responses_to_anthropic_response(&upstream_json)
                     }
                     crate::protocol_proxy::ResponseConversion::ChatToResponses => Ok(upstream_json),
-                    // Codex 那条路才会出现，Claude 客户端这里用不到。
-                    crate::protocol_proxy::ResponseConversion::AnthropicToResponses => Ok(upstream_json),
                 })
                 .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from));
             match converted {

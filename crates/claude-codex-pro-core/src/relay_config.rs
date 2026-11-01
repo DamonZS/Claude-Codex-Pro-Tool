@@ -321,27 +321,6 @@ pub fn apply_relay_config_to_home_with_protocol(
     protocol: RelayProtocol,
     proxy_port: u16,
 ) -> anyhow::Result<RelayApplyResult> {
-    apply_relay_config_to_home_with_protocol_and_format(
-        home,
-        base_url,
-        bearer_token,
-        protocol,
-        proxy_port,
-        "",
-    )
-}
-
-/// 与 [pply_relay_config_to_home_with_protocol] 相同，只是还会读用户在这家供应商上声明的
-/// 「API 格式」：声明 Anthropic Messages 的上游也要让 Codex 走本机代理去转换。
-#[allow(clippy::too_many_arguments)]
-pub fn apply_relay_config_to_home_with_protocol_and_format(
-    home: &Path,
-    base_url: &str,
-    bearer_token: &str,
-    protocol: RelayProtocol,
-    proxy_port: u16,
-    api_format: &str,
-) -> anyhow::Result<RelayApplyResult> {
     let base_url = base_url.trim();
     if base_url.is_empty() {
         anyhow::bail!("中转 Base URL 不能为空");
@@ -350,7 +329,7 @@ pub fn apply_relay_config_to_home_with_protocol_and_format(
     if bearer_token.is_empty() {
         anyhow::bail!("中转 Key 不能为空");
     }
-    let codex_base_url = codex_base_url_for_profile(base_url, protocol, proxy_port, api_format);
+    let codex_base_url = codex_base_url_for_protocol(base_url, protocol, proxy_port);
     let updated = upsert_model_provider_config("", &codex_base_url, bearer_token)?;
     let auth_contents = serde_json::to_string_pretty(&json!({
         "OPENAI_API_KEY": bearer_token
@@ -621,24 +600,14 @@ pub fn api_format_uses_anthropic_messages(api_format: &str) -> bool {
     matches!(normalized.as_str(), "anthropic" | "anthropicmessages")
 }
 
-/// 这家供应商要不要经本机代理：Chat Completions 需要转换；
-/// 说 Anthropic Messages 的上游也需要，因为 Codex 只会说 Responses。
-fn codex_base_url_for_profile(
-    base_url: &str,
-    protocol: RelayProtocol,
-    proxy_port: u16,
-    api_format: &str,
-) -> String {
-    if protocol == RelayProtocol::ChatCompletions || api_format_uses_anthropic_messages(api_format)
-    {
+/// 这家供应商要不要经本机代理：Codex 原生只说 Responses，所以原生 Responses 的上游
+/// 直接连（配置里就是上游地址）；非原生格式走本机代理转成 OpenAI Chat Completions。
+fn codex_base_url_for_protocol(base_url: &str, protocol: RelayProtocol, proxy_port: u16) -> String {
+    if protocol == RelayProtocol::ChatCompletions {
         crate::protocol_proxy::local_responses_proxy_base_url(proxy_port)
     } else {
         base_url.to_string()
     }
-}
-
-fn codex_base_url_for_protocol(base_url: &str, protocol: RelayProtocol, proxy_port: u16) -> String {
-    codex_base_url_for_profile(base_url, protocol, proxy_port, "")
 }
 
 pub fn clear_relay_config_to_home(home: &Path) -> anyhow::Result<RelayApplyResult> {
@@ -3063,34 +3032,6 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     #[test]
-    fn a_codex_supplier_that_speaks_anthropic_goes_through_our_proxy() {
-        let proxy = crate::protocol_proxy::local_responses_proxy_base_url(
-            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-        );
-        // 用户在这家供应商上选了 Anthropic Messages：Codex 只会说 Responses，
-        // 所以哪怕协议栏是 Responses，也必须经本机代理来转换。
-        assert_eq!(
-            codex_base_url_for_profile(
-                "https://upstream.example.com",
-                RelayProtocol::Responses,
-                crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-                "Anthropic Messages",
-            ),
-            proxy
-        );
-        // 原生 Responses 上游仍然是直连，不绕路。
-        assert_eq!(
-            codex_base_url_for_profile(
-                "https://upstream.example.com",
-                RelayProtocol::Responses,
-                crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-                "OpenAI Responses API",
-            ),
-            "https://upstream.example.com"
-        );
-    }
-
-    #[test]
     fn the_api_format_rule_reads_the_users_wording() {
         for value in [
             "Anthropic Messages",
@@ -3115,6 +3056,7 @@ mod tests {
             );
         }
     }
+
     #[test]
     fn default_codex_home_prefers_codex_home_like_codex_runtime() {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
