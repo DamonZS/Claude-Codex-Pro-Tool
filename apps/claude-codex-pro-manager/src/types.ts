@@ -1504,7 +1504,6 @@ export type InstallEntrypointsResult = CommandResult<{
 
 export type Route =
   | "overview"
-  | "ccpbot"
   | "supplier"
   | "clients"
   | "memory"
@@ -1525,80 +1524,3 @@ declare global {
   }
 }
 
-// CCP-Bot integration. The stack lives outside this repository, so these types
-// describe the manager's view of it: where it should be, whether it answers, and
-// what the last start/stop did.
-export type CcpBotMode = "source" | "docker";
-
-export type CcpBotConfig = {
-  address: string;
-  mode: CcpBotMode;
-  projectDir: string;
-};
-
-export type CcpBotProbe = {
-  address: string;
-  reachable: boolean;
-  status: number | null;
-  detail: string;
-  elapsedMs: number;
-};
-
-export type CcpBotRuntime = {
-  bunVersion: string | null;
-  dockerCli: string | null;
-  dockerDaemon: boolean;
-  projectDirPresent: boolean;
-  envReady: boolean;
-  appPortOpen: boolean;
-  serverPortOpen: boolean;
-};
-
-export type CcpBotAction = {
-  changed: boolean;
-  pid: number | null;
-  message: string;
-  logPath: string;
-};
-
-/**
- * What this machine already has of CCP-Bot, in the three shapes it can arrive in.
- *
- * The page reads this before it offers anything: a computer that installed the
- * desktop app yesterday is offered "start", not another download. Every field is
- * optional because the shapes are independent of each other.
- */
-export type CcpBotInstallation = {
-  desktopPath: string | null;
-  desktopVersion: string | null;
-  uninstallPath: string | null;
-  sourceVersion: string | null;
-  image: string | null;
-};
-
-export type CcpBotSnapshot = {
-  config: CcpBotConfig;
-  probe: CcpBotProbe;
-  runtime: CcpBotRuntime;
-  installed: CcpBotInstallation;
-  defaultInstallDir: string;
-  pid: number | null;
-  logPath: string;
-  logText: string;
-};
-
-export type CcpBotStatus = {
-  probe: CcpBotProbe;
-  runtime: CcpBotRuntime;
-  installed: CcpBotInstallation;
-  pid: number | null;
-};
-
-export type CcpBotConfigResult = {
-  config: CcpBotConfig;
-};
-
-export type CcpBotLogResult = {
-  path: string;
-  text: string;
-};
