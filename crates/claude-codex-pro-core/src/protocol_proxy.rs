@@ -560,6 +560,15 @@ pub struct ProxyHttpResponse {
     pub body: Vec<u8>,
 }
 
+/// 上游回来说的是哪一套，需要转成客户端要的那一套。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResponseConversion {
+    /// Chat Completions → Responses（Codex 客户端选了 Chat 格式的供应商）。
+    ChatToResponses,
+    /// Chat Completions → Anthropic Messages（Claude 客户端选了 Chat 格式的供应商）。
+    ChatToAnthropic,
+}
+
 pub struct UpstreamProxyResponse {
     pub status_code: u16,
     pub provider_id: String,
@@ -567,6 +576,8 @@ pub struct UpstreamProxyResponse {
     pub content_type: String,
     pub is_stream: bool,
     pub requires_response_conversion: bool,
+    /// 需要哪种回程转换；`None` 表示上游说的正是客户端要的那一套。
+    pub response_conversion: Option<ResponseConversion>,
     pub response: reqwest::Response,
 }
 
@@ -679,9 +690,9 @@ impl ChatSseToResponsesConverter {
 /// 上游该说哪一套话。
 ///
 /// 客户端说的是哪一套是固定的：Claude 系客户端（Claude Code / Claude Desktop）只会说
-/// Anthropic Messages，Codex 只会说 Responses / Chat Completions。而上游说哪一套
-/// **由模型决定**：claude 系走 Anthropic，gpt 系走原生 Responses，其余（含国产模型）
-/// 走 OpenAI 兼容的 Chat Completions。两边不一致时就靠这套转换把话说圆。
+/// Anthropic Messages，Codex 只会说 Responses / Chat Completions。
+/// **上游说哪一套由用户自己选**（供应商表单里的「API 格式」），不是按模型名猜：
+/// 选了 Anthropic Messages 就直通，选了 OpenAI 兼容的 Chat Completions 才转换。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpstreamInterface {
     Anthropic,
@@ -689,17 +700,17 @@ pub enum UpstreamInterface {
     Responses,
 }
 
-pub fn upstream_interface_for_model(model: &str) -> UpstreamInterface {
-    let name = model.trim().to_ascii_lowercase();
-    if name.starts_with("claude") {
+/// 用户给这家供应商挑的接口，决定上游怎么说。
+pub fn upstream_interface_for_profile(relay: &RelayProfile) -> UpstreamInterface {
+    if crate::relay_config::relay_profile_uses_anthropic_messages(relay) {
         return UpstreamInterface::Anthropic;
     }
-    if name.starts_with("gpt")
-        || name.starts_with("chatgpt")
-        || name.starts_with("o1")
-        || name.starts_with("o3")
-        || name.starts_with("o4")
-    {
+    let declared = relay
+        .api_format
+        .trim()
+        .to_ascii_lowercase()
+        .replace([' ', '_', '-'], "");
+    if declared.contains("responses") {
         return UpstreamInterface::Responses;
     }
     UpstreamInterface::ChatCompletions
@@ -1678,6 +1689,8 @@ async fn open_responses_proxy_request_with_relay(
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
         requires_response_conversion: relay.protocol == RelayProtocol::ChatCompletions,
+        response_conversion: (relay.protocol == RelayProtocol::ChatCompletions)
+            .then_some(ResponseConversion::ChatToResponses),
         provider_id: relay.id.clone(),
         request_model: upstream_request
             .get("model")
@@ -1730,6 +1743,7 @@ pub async fn open_models_proxy_request() -> anyhow::Result<UpstreamProxyResponse
         is_stream: false,
         content_type,
         requires_response_conversion: false,
+        response_conversion: None,
         provider_id: relay.id.clone(),
         request_model: None,
         response: upstream,
@@ -1930,10 +1944,6 @@ fn ensure_claude_route_enabled(target_app: &str, relay: &RelayProfile) -> anyhow
     Ok(())
 }
 
-fn ensure_claude_desktop_route_enabled(relay: &RelayProfile) -> anyhow::Result<()> {
-    ensure_claude_route_enabled("claude-desktop", relay)
-}
-
 async fn open_claude_desktop_messages_proxy_request_with_relay(
     body: &str,
     relay: &RelayProfile,
@@ -1981,12 +1991,36 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
     } else {
         crate::http_client::proxied_client_for(&relay.user_agent, target_is_loopback)?
     };
-    let upstream_url = claude_messages_url(&base_url);
+    // 上游说哪一套是用户在这家供应商上选的（「API 格式」），不是按模型名猜。
+    let upstream_interface = upstream_interface_for_profile(relay);
+    let response_conversion = match upstream_interface {
+        UpstreamInterface::Anthropic => None,
+        UpstreamInterface::ChatCompletions => Some(ResponseConversion::ChatToAnthropic),
+        UpstreamInterface::Responses => {
+            anyhow::bail!(
+                "这家供应商选的是 OpenAI Responses 接口，Claude 客户端的转换还没有实现：请把供应商设置里的「API 格式」改成「Anthropic Messages」或「OpenAI Chat Completions」。"
+            );
+        }
+    };
+    // 选了 Chat Completions 就把 Anthropic 的请求翻过去；上游模型名已按用户的路由映射定好。
+    let converting_response = response_conversion == Some(ResponseConversion::ChatToAnthropic);
+    let upstream_body = if converting_response {
+        anthropic_to_chat_completions_request(&request_json)?
+    } else {
+        request_json.clone()
+    };
+    let upstream_url = if converting_response {
+        chat_completions_url(&base_url)
+    } else {
+        claude_messages_url(&base_url)
+    };
     let request_body_fields = request_json
         .as_object()
         .map(|object| object.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    let uses_anthropic_api_key = crate::settings::relay_profile_uses_anthropic_api_key(relay);
+    // 说 Chat Completions 的上游走 OpenAI 那套鉴权，Anthropic 的版本头对它没有意义。
+    let uses_anthropic_api_key =
+        !converting_response && crate::settings::relay_profile_uses_anthropic_api_key(relay);
     let auth_header_mode = if uses_anthropic_api_key {
         "x-api-key"
     } else {
@@ -1995,8 +2029,8 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
     let mut request = client
         .post(&upstream_url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&request_json);
-    if metadata.beta {
+        .json(&upstream_body);
+    if metadata.beta && !converting_response {
         request = request.query(&[("beta", "true")]);
     }
     request = crate::http_client::apply_api_auth_headers(
@@ -2005,15 +2039,17 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         uses_anthropic_api_key,
         false,
     );
-    request = request.header(
-        "anthropic-version",
-        metadata
-            .anthropic_version
-            .as_deref()
-            .unwrap_or(crate::http_client::ANTHROPIC_VERSION),
-    );
-    if let Some(anthropic_beta) = metadata.anthropic_beta.as_deref() {
-        request = request.header("anthropic-beta", anthropic_beta);
+    if !converting_response {
+        request = request.header(
+            "anthropic-version",
+            metadata
+                .anthropic_version
+                .as_deref()
+                .unwrap_or(crate::http_client::ANTHROPIC_VERSION),
+        );
+        if let Some(anthropic_beta) = metadata.anthropic_beta.as_deref() {
+            request = request.header("anthropic-beta", anthropic_beta);
+        }
     }
     let applied_header_overrides = parsed_local_proxy_header_override(&relay.header_override);
     for (name, value) in &applied_header_overrides {
@@ -2109,7 +2145,8 @@ async fn open_claude_desktop_messages_proxy_request_with_relay(
         status_code,
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
-        requires_response_conversion: false,
+        requires_response_conversion: converting_response,
+        response_conversion,
         provider_id: relay.id.clone(),
         request_model: Some(upstream_model),
         response: upstream,
@@ -2426,6 +2463,7 @@ pub async fn open_chat_completions_proxy_request(
         is_stream: is_stream || content_type.contains("text/event-stream"),
         content_type,
         requires_response_conversion: false,
+        response_conversion: None,
         provider_id: relay.id.clone(),
         request_model: request_json
             .get("model")
@@ -5645,7 +5683,7 @@ mod tests {
             route_enabled: false,
             ..RelayProfile::default()
         };
-        let error = ensure_claude_desktop_route_enabled(&disabled)
+        let error = ensure_claude_route_enabled("claude-desktop", &disabled)
             .expect_err("disabled Claude Desktop route must stop before upstream forwarding");
         assert!(error.to_string().contains("供应商路由已关闭"));
 
@@ -5653,7 +5691,7 @@ mod tests {
             route_enabled: true,
             ..disabled
         };
-        ensure_claude_desktop_route_enabled(&enabled).unwrap();
+        ensure_claude_route_enabled("claude-desktop", &enabled).unwrap();
     }
 
     #[test]
@@ -6562,34 +6600,34 @@ mod tests {
         assert_eq!(messages[1]["tool_call_id"], "call-a");
     }
     #[test]
-    fn the_upstream_interface_follows_the_model() {
+    fn the_upstream_interface_follows_the_users_choice() {
+        let anthropic = RelayProfile {
+            api_format: "Anthropic Messages".to_string(),
+            ..RelayProfile::default()
+        };
         assert_eq!(
-            upstream_interface_for_model("claude-opus-4-6"),
+            upstream_interface_for_profile(&anthropic),
             UpstreamInterface::Anthropic
         );
+
+        let chat = RelayProfile {
+            api_format: "OpenAI Chat Completions".to_string(),
+            target_app: "claude".to_string(),
+            ..RelayProfile::default()
+        };
         assert_eq!(
-            upstream_interface_for_model("Claude-Fable-5"),
-            UpstreamInterface::Anthropic
+            upstream_interface_for_profile(&chat),
+            UpstreamInterface::ChatCompletions
         );
+
+        let responses = RelayProfile {
+            api_format: "OpenAI Responses".to_string(),
+            target_app: "codex".to_string(),
+            ..RelayProfile::default()
+        };
         assert_eq!(
-            upstream_interface_for_model("gpt-5.5"),
+            upstream_interface_for_profile(&responses),
             UpstreamInterface::Responses
-        );
-        assert_eq!(
-            upstream_interface_for_model("o3-mini"),
-            UpstreamInterface::Responses
-        );
-        assert_eq!(
-            upstream_interface_for_model("glm-5.2"),
-            UpstreamInterface::ChatCompletions
-        );
-        assert_eq!(
-            upstream_interface_for_model("deepseek-v4-pro-0813"),
-            UpstreamInterface::ChatCompletions
-        );
-        assert_eq!(
-            upstream_interface_for_model("qwen3-max"),
-            UpstreamInterface::ChatCompletions
         );
     }
 
@@ -6779,5 +6817,74 @@ mod tests {
         // 上游用 `[DONE]` 收过尾之后，连接关闭时不该再发一套收尾事件。
         let extra = String::from_utf8(converter.finish()).expect("utf8");
         assert!(extra.is_empty(), "nothing left to say: {extra}");
+    }
+    #[tokio::test]
+    async fn a_claude_supplier_that_speaks_chat_completions_gets_a_chat_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(
+                    200,
+                    r#"{"id":"chatcmpl-1","model":"glm-5.2","choices":[{"index":0,"message":{"role":"assistant","content":"你好"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+                )],
+            )
+        });
+        let relay = RelayProfile {
+            upstream_base_url: format!("http://{address}"),
+            auth_contents: json!({"ANTHROPIC_AUTH_TOKEN": "claude-test-key"}).to_string(),
+            target_app: "claude".to_string(),
+            api_format: "OpenAI Chat Completions".to_string(),
+            route_enabled: true,
+            model_mapping_enabled: true,
+            model_mapping_json: json!([{
+                "routeId": "claude-sonnet-4-5",
+                "requestModel": "glm-5.2"
+            }])
+            .to_string(),
+            ..RelayProfile::default()
+        };
+        let body = json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 64,
+            "stream": false,
+            "messages": [{ "role": "user", "content": "你好" }]
+        })
+        .to_string();
+
+        let response = open_claude_desktop_messages_proxy_request_with_relay(
+            &body,
+            &relay,
+            &crate::settings::BackendSettings::default(),
+            &ClaudeMessagesRequestMetadata::default(),
+        )
+        .await
+        .expect("a Chat Completions supplier should still be reachable for Claude clients");
+
+        assert_eq!(
+            response.response_conversion,
+            Some(ResponseConversion::ChatToAnthropic),
+            "选了 Chat 格式就要把回应翻回 Anthropic"
+        );
+        assert!(response.requires_response_conversion);
+
+        let requests = server.join().expect("mock upstream should finish");
+        assert_eq!(requests.len(), 1);
+        let (head, sent_body) = requests[0]
+            .split_once("\r\n\r\n")
+            .expect("captured request should contain a body");
+        assert!(
+            head.contains("POST /v1/chat/completions"),
+            "上游要收到 Chat Completions 的地址：{head}"
+        );
+        let sent: Value = serde_json::from_str(sent_body).expect("sent body should be JSON");
+        assert_eq!(sent["model"], "glm-5.2");
+        assert_eq!(sent["messages"][0]["role"], "user");
+        assert_eq!(sent["messages"][0]["content"], "你好");
+        assert!(
+            sent.get("system").is_none(),
+            "Anthropic 的 system 字段不该原样送给 Chat 上游：{sent}"
+        );
     }
 }

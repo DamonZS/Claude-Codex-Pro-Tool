@@ -2365,6 +2365,16 @@ async fn handle_claude_desktop_messages_proxy_connection(
         write_http_stream_headers(stream, &status, &content_type).await?;
         let mut bytes_stream = upstream.response.bytes_stream();
         let mut lifecycle_guard = ClaudeMessagesSseGuard::default();
+        // 用户给这家供应商选了 OpenAI 兼容接口时，上游说的是 Chat Completions，
+        // 而 Claude 客户端只认 Anthropic 的事件序列 —— 这里逐块翻过去。
+        let mut anthropic_bridge = match upstream.response_conversion {
+            Some(crate::protocol_proxy::ResponseConversion::ChatToAnthropic) => {
+                let original: serde_json::Value =
+                    serde_json::from_str(request_body).unwrap_or(serde_json::Value::Null);
+                Some(crate::protocol_proxy::ChatSseToAnthropicConverter::with_request(&original))
+            }
+            _ => None,
+        };
         while let Some(chunk) = bytes_stream.next().await {
             let chunk = match chunk {
                 Ok(chunk) => chunk,
@@ -2384,9 +2394,25 @@ async fn handle_claude_desktop_messages_proxy_connection(
                 }
             };
             telemetry.push_bytes(&chunk);
-            let output = lifecycle_guard.push_bytes(&chunk);
+            let converted = match anthropic_bridge.as_mut() {
+                Some(bridge) => bridge.push_bytes(&chunk),
+                None => chunk.to_vec(),
+            };
+            if converted.is_empty() {
+                continue;
+            }
+            let output = lifecycle_guard.push_bytes(&converted);
             if !output.is_empty() {
                 stream.write_all(&output).await?;
+            }
+        }
+        if let Some(bridge) = anthropic_bridge.as_mut() {
+            let trailing = bridge.finish();
+            if !trailing.is_empty() {
+                let output = lifecycle_guard.push_bytes(&trailing);
+                if !output.is_empty() {
+                    stream.write_all(&output).await?;
+                }
             }
         }
         let trailing = lifecycle_guard.finish();
@@ -2416,6 +2442,38 @@ async fn handle_claude_desktop_messages_proxy_connection(
             remote_addr_text.as_deref(),
         );
     }
+    // 成功回来的 Chat Completions 回应也要翻成 Anthropic 的形态再交给客户端。
+    let (content_type, body) = match (
+        is_success,
+        upstream.response_conversion
+            == Some(crate::protocol_proxy::ResponseConversion::ChatToAnthropic),
+    ) {
+        (true, true) => {
+            match serde_json::from_slice::<serde_json::Value>(&body)
+                .map_err(anyhow::Error::from)
+                .and_then(|chat| {
+                    crate::protocol_proxy::chat_completions_to_anthropic_response(&chat)
+                })
+                .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from))
+            {
+                Ok(converted) => ("application/json; charset=utf-8".to_string(), converted),
+                Err(error) => {
+                    let failure = serde_json::json!({
+                        "type": "error",
+                        "error": {
+                            "type": "claude_desktop_proxy_error",
+                            "message": format!("上游的 Chat Completions 回应无法转成 Anthropic 格式：{error}")
+                        }
+                    });
+                    (
+                        "application/json; charset=utf-8".to_string(),
+                        serde_json::to_vec(&failure)?,
+                    )
+                }
+            }
+        }
+        _ => (content_type, body),
+    };
     write_http_response(stream, &status, &content_type, &body).await?;
     log_helper_response(
         if is_success {
