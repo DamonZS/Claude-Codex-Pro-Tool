@@ -337,6 +337,12 @@ pub fn local_claude_desktop_proxy_base_url(port: u16) -> String {
     format!("http://127.0.0.1:{port}/claude-desktop")
 }
 
+/// 命令行那只 Claude 走本机代理时的地址。它与桌面版那条分开：桌面版入口解析的是
+/// `claude-desktop` 目标的当前供应商，命令行入口解析的是 `claude` 目标的当前供应商。
+pub fn local_claude_code_proxy_base_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}/claude-code")
+}
+
 pub fn responses_to_chat_completions(body: Value) -> anyhow::Result<Value> {
     let mut body = body;
     normalize_responses_tool_output_call_ids(&mut body);
@@ -719,6 +725,14 @@ pub fn is_claude_desktop_messages_proxy_path(path: &str) -> bool {
         "/claude-desktop/messages"
             | "/claude-desktop/v1/messages"
             | "/claude-desktop/v1/v1/messages"
+    )
+}
+
+pub fn is_claude_code_messages_proxy_path(path: &str) -> bool {
+    let path = path.split_once('?').map_or(path, |(path, _)| path);
+    matches!(
+        path,
+        "/claude-code/messages" | "/claude-code/v1/messages" | "/claude-code/v1/v1/messages"
     )
 }
 
@@ -1235,13 +1249,30 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
     body: &str,
     metadata: &ClaudeMessagesRequestMetadata,
 ) -> anyhow::Result<UpstreamProxyResponse> {
+    open_claude_messages_proxy_request_for_target("claude-desktop", body, metadata).await
+}
+
+/// 命令行那只 Claude 的入口：与桌面版共用同一套转发实现，只是换成 `claude` 目标的当前供应商。
+/// 两个目标必须分开取，否则命令行的流量会被送到桌面版正在用的那家供应商。
+pub async fn open_claude_code_messages_proxy_request_with_metadata(
+    body: &str,
+    metadata: &ClaudeMessagesRequestMetadata,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    open_claude_messages_proxy_request_for_target("claude", body, metadata).await
+}
+
+async fn open_claude_messages_proxy_request_for_target(
+    target_app: &str,
+    body: &str,
+    metadata: &ClaudeMessagesRequestMetadata,
+) -> anyhow::Result<UpstreamProxyResponse> {
     let settings = load_proxy_settings(&SettingsStore::default())?;
-    let active = settings.active_relay_profile_for_target("claude-desktop");
-    let plan = crate::routing_failover::plan_for("claude-desktop", &active.id);
+    let active = settings.active_relay_profile_for_target(target_app);
+    let plan = crate::routing_failover::plan_for(target_app, &active.id);
 
     // 故障转移关闭时保持旧行为：先做路由开关校验，再转发一次。
     if !plan.enabled {
-        ensure_claude_desktop_route_enabled(&active)?;
+        ensure_claude_route_enabled(target_app, &active)?;
         return open_claude_desktop_messages_proxy_request_with_relay(
             body, &active, &settings, metadata,
         )
@@ -1255,7 +1286,7 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
             active.clone()
         } else {
             match settings.relay_profiles.iter().find(|profile| {
-                profile.id == *provider_id && relay_profile_targets(profile, "claude-desktop")
+                profile.id == *provider_id && relay_profile_targets(profile, target_app)
             }) {
                 Some(profile) => profile.clone(),
                 // 候选供应商已被删除或换了目标应用：跳过。
@@ -1264,8 +1295,8 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
         };
 
         // 每个候选都必须自己通过路由开关校验，否则一律计入失败。
-        if let Err(error) = ensure_claude_desktop_route_enabled(&relay) {
-            crate::routing_failover::record("claude-desktop", &relay.id, false);
+        if let Err(error) = ensure_claude_route_enabled(target_app, &relay) {
+            crate::routing_failover::record(target_app, &relay.id, false);
             last_error = Some(error);
             continue;
         }
@@ -1276,18 +1307,18 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
         .await
         {
             Ok(response) if crate::routing_failover::is_failover_status(response.status_code) => {
-                crate::routing_failover::record("claude-desktop", &relay.id, false);
+                crate::routing_failover::record(target_app, &relay.id, false);
                 last_response = Some(response);
             }
             Ok(response) => {
                 // Same as Codex: request-level 4xx do not touch the circuit.
                 if response.status_code < 400 {
-                    crate::routing_failover::record("claude-desktop", &relay.id, true);
+                    crate::routing_failover::record(target_app, &relay.id, true);
                 }
                 return Ok(response);
             }
             Err(error) => {
-                crate::routing_failover::record("claude-desktop", &relay.id, false);
+                crate::routing_failover::record(target_app, &relay.id, false);
                 last_error = Some(error);
             }
         }
@@ -1302,11 +1333,21 @@ pub async fn open_claude_desktop_messages_proxy_request_with_metadata(
     }
 }
 
-fn ensure_claude_desktop_route_enabled(relay: &RelayProfile) -> anyhow::Result<()> {
+/// 路由开关只看这家供应商自己的字段；两个目标用不同的说法，免得命令行用户去找桌面版的开关。
+fn ensure_claude_route_enabled(target_app: &str, relay: &RelayProfile) -> anyhow::Result<()> {
     if !relay.route_enabled {
-        anyhow::bail!("Claude Desktop 供应商路由已关闭，请重启 Claude Desktop 使官方配置生效");
+        let message = if target_app == "claude-desktop" {
+            "Claude Desktop 供应商路由已关闭，请重启 Claude Desktop 使官方配置生效"
+        } else {
+            "Claude 供应商路由已关闭，请在供应商页开启路由后再试"
+        };
+        anyhow::bail!(message);
     }
     Ok(())
+}
+
+fn ensure_claude_desktop_route_enabled(relay: &RelayProfile) -> anyhow::Result<()> {
+    ensure_claude_route_enabled("claude-desktop", relay)
 }
 
 async fn open_claude_desktop_messages_proxy_request_with_relay(
@@ -5029,6 +5070,35 @@ mod tests {
             ..disabled
         };
         ensure_claude_desktop_route_enabled(&enabled).unwrap();
+    }
+
+    #[test]
+    fn the_command_line_has_its_own_proxy_address() {
+        assert_eq!(
+            local_claude_code_proxy_base_url(DEFAULT_CLAUDE_DESKTOP_PROXY_PORT),
+            "http://127.0.0.1:57331/claude-code"
+        );
+        assert_ne!(
+            local_claude_code_proxy_base_url(DEFAULT_CLAUDE_DESKTOP_PROXY_PORT),
+            local_claude_desktop_proxy_base_url(DEFAULT_CLAUDE_DESKTOP_PROXY_PORT),
+            "the two entries must not share one address"
+        );
+    }
+
+    #[test]
+    fn the_command_line_and_the_desktop_have_their_own_paths() {
+        for path in [
+            "/claude-code/messages",
+            "/claude-code/v1/messages",
+            "/claude-code/v1/v1/messages",
+            "/claude-code/v1/messages?beta=1",
+        ] {
+            assert!(is_claude_code_messages_proxy_path(path), "{path}");
+            assert!(!is_claude_desktop_messages_proxy_path(path), "{path}");
+        }
+        for path in ["/claude-desktop/messages", "/claude-desktop/v1/messages"] {
+            assert!(!is_claude_code_messages_proxy_path(path), "{path}");
+        }
     }
 
     #[test]

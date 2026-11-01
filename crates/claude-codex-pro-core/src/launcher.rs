@@ -1184,6 +1184,7 @@ async fn handle_helper_connection(
         || crate::protocol_proxy::is_claude_desktop_gateway_health_path(path)
         || crate::protocol_proxy::is_claude_desktop_count_tokens_proxy_path(path)
         || crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
+        || crate::protocol_proxy::is_claude_code_messages_proxy_path(path)
         || crate::protocol_proxy::is_claude_desktop_models_proxy_path(path)
         || crate::protocol_proxy::is_models_proxy_path(path);
     if is_proxy_path && !proxy_request_is_authorized(method, &request) {
@@ -1254,7 +1255,16 @@ async fn handle_helper_connection(
         )
         .await;
     }
-    if crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
+    // 桌面版与命令行各有一条自己的入口：它们读的是各自目标应用的当前供应商。
+    let claude_messages_target =
+        if crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path) {
+            Some("claude-desktop")
+        } else if crate::protocol_proxy::is_claude_code_messages_proxy_path(path) {
+            Some("claude")
+        } else {
+            None
+        };
+    if let Some(target_app) = claude_messages_target
         && matches!(method, "POST" | "OPTIONS")
     {
         let metadata = crate::protocol_proxy::ClaudeMessagesRequestMetadata::from_inbound(
@@ -1269,6 +1279,7 @@ async fn handle_helper_connection(
             path,
             remote_addr_text,
             &metadata,
+            target_app,
         )
         .await;
     }
@@ -2277,6 +2288,7 @@ async fn handle_claude_desktop_messages_proxy_connection(
     path: &str,
     remote_addr_text: Option<String>,
     metadata: &crate::protocol_proxy::ClaudeMessagesRequestMetadata,
+    target_app: &str,
 ) -> anyhow::Result<()> {
     if method == "OPTIONS" {
         write_http_response(
@@ -2292,40 +2304,47 @@ async fn handle_claude_desktop_messages_proxy_connection(
 
     let mut telemetry =
         crate::request_telemetry::RequestObservation::capture("claude", "messages", request_body);
-    let upstream =
-        match crate::protocol_proxy::open_claude_desktop_messages_proxy_request_with_metadata(
+    let opened = if target_app == "claude" {
+        crate::protocol_proxy::open_claude_code_messages_proxy_request_with_metadata(
             request_body,
             metadata,
         )
         .await
-        {
-            Ok(upstream) => upstream,
-            Err(error) => {
-                let body = serde_json::to_vec(&serde_json::json!({
-                    "type": "error",
-                    "error": {
-                        "type": "claude_desktop_proxy_error",
-                        "message": error.to_string()
-                    }
-                }))?;
-                write_http_response(
-                    stream,
-                    "502 Bad Gateway",
-                    "application/json; charset=utf-8",
-                    &body,
-                )
-                .await?;
-                log_helper_response(
-                    "helper.claude_desktop_messages_proxy_failed",
-                    method,
-                    path,
-                    "502 Bad Gateway",
-                    remote_addr_text,
-                );
-                stream.shutdown().await?;
-                return Ok(());
-            }
-        };
+    } else {
+        crate::protocol_proxy::open_claude_desktop_messages_proxy_request_with_metadata(
+            request_body,
+            metadata,
+        )
+        .await
+    };
+    let upstream = match opened {
+        Ok(upstream) => upstream,
+        Err(error) => {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "type": "error",
+                "error": {
+                    "type": "claude_desktop_proxy_error",
+                    "message": error.to_string()
+                }
+            }))?;
+            write_http_response(
+                stream,
+                "502 Bad Gateway",
+                "application/json; charset=utf-8",
+                &body,
+            )
+            .await?;
+            log_helper_response(
+                "helper.claude_desktop_messages_proxy_failed",
+                method,
+                path,
+                "502 Bad Gateway",
+                remote_addr_text,
+            );
+            stream.shutdown().await?;
+            return Ok(());
+        }
+    };
 
     telemetry.upstream(
         upstream.status_code,

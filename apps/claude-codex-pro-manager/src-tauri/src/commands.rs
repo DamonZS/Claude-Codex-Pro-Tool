@@ -10007,7 +10007,7 @@ async fn claude_proxy_base_url_for_switch(
     }
     match ensure_claude_desktop_proxy_helper().await {
         Ok(port) => {
-            Some(claude_codex_pro_core::protocol_proxy::local_claude_desktop_proxy_base_url(port))
+            Some(claude_codex_pro_core::protocol_proxy::local_claude_code_proxy_base_url(port))
         }
         Err(error) => {
             log_manager_event(
