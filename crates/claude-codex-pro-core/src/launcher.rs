@@ -1729,10 +1729,28 @@ async fn handle_protocol_proxy_connection(
 
     if upstream.is_stream {
         write_http_stream_headers(stream, "200 OK", "text/event-stream; charset=utf-8").await?;
-        let mut converter = request_json
-            .as_ref()
-            .map(crate::protocol_proxy::ChatSseToResponsesConverter::with_request)
-            .unwrap_or_default();
+        let conversion = upstream.response_conversion;
+        // 上游说哪一套就翻哪一套；本来就是 Responses 的就原样透传。
+        let mut chat_converter = matches!(
+            conversion,
+            Some(crate::protocol_proxy::ResponseConversion::ChatToResponses)
+        )
+        .then(|| {
+            request_json
+                .as_ref()
+                .map(crate::protocol_proxy::ChatSseToResponsesConverter::with_request)
+                .unwrap_or_default()
+        });
+        let mut anthropic_converter = matches!(
+            conversion,
+            Some(crate::protocol_proxy::ResponseConversion::AnthropicToResponses)
+        )
+        .then(|| {
+            request_json
+                .as_ref()
+                .map(crate::protocol_proxy::AnthropicSseToResponsesConverter::with_request)
+                .unwrap_or_default()
+        });
         let mut bytes_stream = upstream.response.bytes_stream();
         let mut stream_failed = false;
 
@@ -1740,17 +1758,26 @@ async fn handle_protocol_proxy_connection(
             match chunk {
                 Ok(bytes) => {
                     telemetry.push_bytes(&bytes);
-                    let converted = converter.push_bytes(&bytes);
+                    let converted = if let Some(converter) = chat_converter.as_mut() {
+                        converter.push_bytes(&bytes)
+                    } else if let Some(converter) = anthropic_converter.as_mut() {
+                        converter.push_bytes(&bytes)
+                    } else {
+                        bytes.to_vec()
+                    };
                     if !converted.is_empty() {
                         stream.write_all(&converted).await?;
                     }
                 }
                 Err(error) => {
                     telemetry.fail(crate::request_telemetry::RequestFailure::Stream);
-                    let failed = converter.fail(
-                        format!("Stream error: {error}"),
-                        Some("stream_error".to_string()),
-                    );
+                    let failed = if let Some(converter) = chat_converter.as_mut() {
+                        converter.fail(format!("Stream error: {error}"), Some("stream_error".to_string()))
+                    } else if let Some(converter) = anthropic_converter.as_mut() {
+                        converter.fail(format!("Stream error: {error}"))
+                    } else {
+                        Vec::new()
+                    };
                     if !failed.is_empty() {
                         stream.write_all(&failed).await?;
                     }
@@ -1761,7 +1788,13 @@ async fn handle_protocol_proxy_connection(
         }
 
         if !stream_failed {
-            let tail = converter.finish();
+            let tail = if let Some(converter) = chat_converter.as_mut() {
+                converter.finish()
+            } else if let Some(converter) = anthropic_converter.as_mut() {
+                converter.finish()
+            } else {
+                Vec::new()
+            };
             if !tail.is_empty() {
                 stream.write_all(&tail).await?;
             }
@@ -1779,14 +1812,43 @@ async fn handle_protocol_proxy_connection(
     }
 
     let upstream_body = read_observed_proxy_body(upstream.response, &mut telemetry).await?;
-    let chat_json: serde_json::Value =
+    if upstream.response_conversion.is_none() {
+        // 上游本来就是 Responses：原样交给 Codex，不再走任何翻译。
+        let content_type = if upstream.content_type.trim().is_empty() {
+            "application/json; charset=utf-8".to_string()
+        } else {
+            upstream.content_type.clone()
+        };
+        write_http_response(stream, "200 OK", &content_type, &upstream_body).await?;
+        log_helper_response(
+            "helper.protocol_proxy_response_ok",
+            method,
+            path,
+            "200 OK",
+            remote_addr_text,
+        );
+        stream.shutdown().await?;
+        telemetry.finish();
+        return Ok(());
+    }
+    let upstream_json: serde_json::Value =
         serde_json::from_slice(&upstream_body).inspect_err(|_| {
             telemetry.fail(crate::request_telemetry::RequestFailure::InvalidResponse);
         })?;
-    let response_json = if let Some(request_json) = request_json.as_ref() {
-        crate::protocol_proxy::chat_completion_to_response_with_request(chat_json, request_json)
-    } else {
-        crate::protocol_proxy::chat_completion_to_response(chat_json)
+    let response_json = match upstream.response_conversion {
+        Some(crate::protocol_proxy::ResponseConversion::AnthropicToResponses) => {
+            crate::protocol_proxy::anthropic_to_responses_response(&upstream_json)
+        }
+        _ => {
+            if let Some(request_json) = request_json.as_ref() {
+                crate::protocol_proxy::chat_completion_to_response_with_request(
+                    upstream_json,
+                    request_json,
+                )
+            } else {
+                crate::protocol_proxy::chat_completion_to_response(upstream_json)
+            }
+        }
     }
     .inspect_err(|_| telemetry.fail(crate::request_telemetry::RequestFailure::InvalidResponse))?;
     let body = serde_json::to_vec(&response_json)?;
@@ -2365,13 +2427,21 @@ async fn handle_claude_desktop_messages_proxy_connection(
         write_http_stream_headers(stream, &status, &content_type).await?;
         let mut bytes_stream = upstream.response.bytes_stream();
         let mut lifecycle_guard = ClaudeMessagesSseGuard::default();
-        // 用户给这家供应商选了 OpenAI 兼容接口时，上游说的是 Chat Completions，
-        // 而 Claude 客户端只认 Anthropic 的事件序列 —— 这里逐块翻过去。
-        let mut anthropic_bridge = match upstream.response_conversion {
-            Some(crate::protocol_proxy::ResponseConversion::ChatToAnthropic) => {
-                let original: serde_json::Value =
-                    serde_json::from_str(request_body).unwrap_or(serde_json::Value::Null);
-                Some(crate::protocol_proxy::ChatSseToAnthropicConverter::with_request(&original))
+        // 用户给这家供应商选了 OpenAI 系的接口时，上游说的是 Chat Completions 或
+        // Responses，而 Claude 客户端只认 Anthropic 的事件序列 —— 这里逐块翻过去。
+        let original_request: serde_json::Value =
+            serde_json::from_str(request_body).unwrap_or(serde_json::Value::Null);
+        let mut chat_bridge = match upstream.response_conversion {
+            Some(crate::protocol_proxy::ResponseConversion::ChatToAnthropic) => Some(
+                crate::protocol_proxy::ChatSseToAnthropicConverter::with_request(&original_request),
+            ),
+            _ => None,
+        };
+        let mut responses_bridge = match upstream.response_conversion {
+            Some(crate::protocol_proxy::ResponseConversion::ResponsesToAnthropic) => {
+                Some(crate::protocol_proxy::ResponsesSseToAnthropicConverter::with_request(
+                    &original_request,
+                ))
             }
             _ => None,
         };
@@ -2394,9 +2464,12 @@ async fn handle_claude_desktop_messages_proxy_connection(
                 }
             };
             telemetry.push_bytes(&chunk);
-            let converted = match anthropic_bridge.as_mut() {
-                Some(bridge) => bridge.push_bytes(&chunk),
-                None => chunk.to_vec(),
+            let converted = if let Some(bridge) = chat_bridge.as_mut() {
+                bridge.push_bytes(&chunk)
+            } else if let Some(bridge) = responses_bridge.as_mut() {
+                bridge.push_bytes(&chunk)
+            } else {
+                chunk.to_vec()
             };
             if converted.is_empty() {
                 continue;
@@ -2406,13 +2479,17 @@ async fn handle_claude_desktop_messages_proxy_connection(
                 stream.write_all(&output).await?;
             }
         }
-        if let Some(bridge) = anthropic_bridge.as_mut() {
-            let trailing = bridge.finish();
-            if !trailing.is_empty() {
-                let output = lifecycle_guard.push_bytes(&trailing);
-                if !output.is_empty() {
-                    stream.write_all(&output).await?;
-                }
+        let mut bridge_tail = Vec::new();
+        if let Some(bridge) = chat_bridge.as_mut() {
+            bridge_tail.extend(bridge.finish());
+        }
+        if let Some(bridge) = responses_bridge.as_mut() {
+            bridge_tail.extend(bridge.finish());
+        }
+        if !bridge_tail.is_empty() {
+            let output = lifecycle_guard.push_bytes(&bridge_tail);
+            if !output.is_empty() {
+                stream.write_all(&output).await?;
             }
         }
         let trailing = lifecycle_guard.finish();
@@ -2442,27 +2519,31 @@ async fn handle_claude_desktop_messages_proxy_connection(
             remote_addr_text.as_deref(),
         );
     }
-    // 成功回来的 Chat Completions 回应也要翻成 Anthropic 的形态再交给客户端。
-    let (content_type, body) = match (
-        is_success,
-        upstream.response_conversion
-            == Some(crate::protocol_proxy::ResponseConversion::ChatToAnthropic),
-    ) {
-        (true, true) => {
-            match serde_json::from_slice::<serde_json::Value>(&body)
+    // 成功回来的 OpenAI 系回应也要翻成 Anthropic 的形态再交给客户端。
+    let (content_type, body) = match (is_success, upstream.response_conversion) {
+        (true, Some(conversion)) => {
+            let converted = serde_json::from_slice::<serde_json::Value>(&body)
                 .map_err(anyhow::Error::from)
-                .and_then(|chat| {
-                    crate::protocol_proxy::chat_completions_to_anthropic_response(&chat)
+                .and_then(|upstream_json| match conversion {
+                    crate::protocol_proxy::ResponseConversion::ChatToAnthropic => {
+                        crate::protocol_proxy::chat_completions_to_anthropic_response(&upstream_json)
+                    }
+                    crate::protocol_proxy::ResponseConversion::ResponsesToAnthropic => {
+                        crate::protocol_proxy::responses_to_anthropic_response(&upstream_json)
+                    }
+                    crate::protocol_proxy::ResponseConversion::ChatToResponses => Ok(upstream_json),
+                    // Codex 那条路才会出现，Claude 客户端这里用不到。
+                    crate::protocol_proxy::ResponseConversion::AnthropicToResponses => Ok(upstream_json),
                 })
-                .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from))
-            {
+                .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from));
+            match converted {
                 Ok(converted) => ("application/json; charset=utf-8".to_string(), converted),
                 Err(error) => {
                     let failure = serde_json::json!({
                         "type": "error",
                         "error": {
                             "type": "claude_desktop_proxy_error",
-                            "message": format!("上游的 Chat Completions 回应无法转成 Anthropic 格式：{error}")
+                            "message": format!("上游的回应无法转成 Anthropic 格式：{error}")
                         }
                     });
                     (

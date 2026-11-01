@@ -321,6 +321,27 @@ pub fn apply_relay_config_to_home_with_protocol(
     protocol: RelayProtocol,
     proxy_port: u16,
 ) -> anyhow::Result<RelayApplyResult> {
+    apply_relay_config_to_home_with_protocol_and_format(
+        home,
+        base_url,
+        bearer_token,
+        protocol,
+        proxy_port,
+        "",
+    )
+}
+
+/// 与 [pply_relay_config_to_home_with_protocol] 相同，只是还会读用户在这家供应商上声明的
+/// 「API 格式」：声明 Anthropic Messages 的上游也要让 Codex 走本机代理去转换。
+#[allow(clippy::too_many_arguments)]
+pub fn apply_relay_config_to_home_with_protocol_and_format(
+    home: &Path,
+    base_url: &str,
+    bearer_token: &str,
+    protocol: RelayProtocol,
+    proxy_port: u16,
+    api_format: &str,
+) -> anyhow::Result<RelayApplyResult> {
     let base_url = base_url.trim();
     if base_url.is_empty() {
         anyhow::bail!("中转 Base URL 不能为空");
@@ -329,7 +350,7 @@ pub fn apply_relay_config_to_home_with_protocol(
     if bearer_token.is_empty() {
         anyhow::bail!("中转 Key 不能为空");
     }
-    let codex_base_url = codex_base_url_for_protocol(base_url, protocol, proxy_port);
+    let codex_base_url = codex_base_url_for_profile(base_url, protocol, proxy_port, api_format);
     let updated = upsert_model_provider_config("", &codex_base_url, bearer_token)?;
     let auth_contents = serde_json::to_string_pretty(&json!({
         "OPENAI_API_KEY": bearer_token
@@ -581,28 +602,43 @@ pub async fn test_relay_profile(
 }
 
 pub fn relay_profile_uses_anthropic_messages(profile: &RelayProfile) -> bool {
-    let api_format = profile
-        .api_format
+    let api_format = profile.api_format.trim();
+    if !api_format.is_empty() {
+        return api_format_uses_anthropic_messages(api_format);
+    }
+
+    relay_profile_targets_claude(profile)
+}
+
+/// 用户在这家供应商上声明的「API 格式」是不是 Anthropic Messages。
+/// 归一化后只看关键词，避免 "Anthropic Messages" 与 "anthropic-messages" 被当成两种。
+#[must_use]
+pub fn api_format_uses_anthropic_messages(api_format: &str) -> bool {
+    let normalized = api_format
         .trim()
         .to_ascii_lowercase()
         .replace([' ', '_', '-'], "");
-    if !api_format.is_empty() {
-        return matches!(api_format.as_str(), "anthropic" | "anthropicmessages");
-    }
+    matches!(normalized.as_str(), "anthropic" | "anthropicmessages")
+}
 
-    matches!(
-        profile.target_app.trim().to_ascii_lowercase().as_str(),
-        "claude" | "claude-desktop" | "claude_desktop" | "claudedesktop"
-    )
+/// 这家供应商要不要经本机代理：Chat Completions 需要转换；
+/// 说 Anthropic Messages 的上游也需要，因为 Codex 只会说 Responses。
+fn codex_base_url_for_profile(
+    base_url: &str,
+    protocol: RelayProtocol,
+    proxy_port: u16,
+    api_format: &str,
+) -> String {
+    if protocol == RelayProtocol::ChatCompletions || api_format_uses_anthropic_messages(api_format)
+    {
+        crate::protocol_proxy::local_responses_proxy_base_url(proxy_port)
+    } else {
+        base_url.to_string()
+    }
 }
 
 fn codex_base_url_for_protocol(base_url: &str, protocol: RelayProtocol, proxy_port: u16) -> String {
-    match protocol {
-        RelayProtocol::Responses => base_url.to_string(),
-        RelayProtocol::ChatCompletions => {
-            crate::protocol_proxy::local_responses_proxy_base_url(proxy_port)
-        }
-    }
+    codex_base_url_for_profile(base_url, protocol, proxy_port, "")
 }
 
 pub fn clear_relay_config_to_home(home: &Path) -> anyhow::Result<RelayApplyResult> {
@@ -3026,6 +3062,59 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
 
+    #[test]
+    fn a_codex_supplier_that_speaks_anthropic_goes_through_our_proxy() {
+        let proxy = crate::protocol_proxy::local_responses_proxy_base_url(
+            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+        );
+        // 用户在这家供应商上选了 Anthropic Messages：Codex 只会说 Responses，
+        // 所以哪怕协议栏是 Responses，也必须经本机代理来转换。
+        assert_eq!(
+            codex_base_url_for_profile(
+                "https://upstream.example.com",
+                RelayProtocol::Responses,
+                crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+                "Anthropic Messages",
+            ),
+            proxy
+        );
+        // 原生 Responses 上游仍然是直连，不绕路。
+        assert_eq!(
+            codex_base_url_for_profile(
+                "https://upstream.example.com",
+                RelayProtocol::Responses,
+                crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+                "OpenAI Responses API",
+            ),
+            "https://upstream.example.com"
+        );
+    }
+
+    #[test]
+    fn the_api_format_rule_reads_the_users_wording() {
+        for value in [
+            "Anthropic Messages",
+            "anthropic",
+            "anthropic-messages",
+            " ANTHROPIC_MESSAGES ",
+        ] {
+            assert!(
+                api_format_uses_anthropic_messages(value),
+                "{value} 应被认成 Anthropic Messages"
+            );
+        }
+        for value in [
+            "",
+            "OpenAI Chat Completions",
+            "OpenAI Responses API",
+            "Gemini Native generateContent",
+        ] {
+            assert!(
+                !api_format_uses_anthropic_messages(value),
+                "{value} 不应被认成 Anthropic Messages"
+            );
+        }
+    }
     #[test]
     fn default_codex_home_prefers_codex_home_like_codex_runtime() {
         static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
