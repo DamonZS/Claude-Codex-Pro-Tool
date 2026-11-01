@@ -676,6 +676,573 @@ impl ChatSseToResponsesConverter {
     }
 }
 
+/// 上游该说哪一套话。
+///
+/// 客户端说的是哪一套是固定的：Claude 系客户端（Claude Code / Claude Desktop）只会说
+/// Anthropic Messages，Codex 只会说 Responses / Chat Completions。而上游说哪一套
+/// **由模型决定**：claude 系走 Anthropic，gpt 系走原生 Responses，其余（含国产模型）
+/// 走 OpenAI 兼容的 Chat Completions。两边不一致时就靠这套转换把话说圆。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpstreamInterface {
+    Anthropic,
+    ChatCompletions,
+    Responses,
+}
+
+pub fn upstream_interface_for_model(model: &str) -> UpstreamInterface {
+    let name = model.trim().to_ascii_lowercase();
+    if name.starts_with("claude") {
+        return UpstreamInterface::Anthropic;
+    }
+    if name.starts_with("gpt")
+        || name.starts_with("chatgpt")
+        || name.starts_with("o1")
+        || name.starts_with("o3")
+        || name.starts_with("o4")
+    {
+        return UpstreamInterface::Responses;
+    }
+    UpstreamInterface::ChatCompletions
+}
+
+/// 把 Anthropic 的内容（字符串，或若干内容块）拼成一段纯文本。
+fn anthropic_blocks_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => {
+            let mut joined = String::new();
+            for block in blocks {
+                match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text" => {
+                        if let Some(text) = block.get("text").and_then(Value::as_str) {
+                            joined.push_str(text);
+                        }
+                    }
+                    // 工具结果本身可以是一条消息序列。
+                    "tool_result" | "" => {
+                        if let Some(text) = block.get("content").and_then(anthropic_blocks_text) {
+                            joined.push_str(&text);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            }
+        }
+        Value::Object(map) => map.get("text").and_then(Value::as_str).map(str::to_string),
+        _ => None,
+    }
+}
+
+/// Anthropic Messages 请求 → Chat Completions 请求。
+///
+/// 只翻路由能影响的那部分：系统提示、消息里的内容块、工具定义与工具结果。
+/// 上游不认识 Anthropic 独有的东西（比如 `cache_control`），一律不往上带。
+pub fn anthropic_to_chat_completions_request(body: &Value) -> anyhow::Result<Value> {
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        anyhow::bail!("请求里没有 model，无法决定上游接口");
+    }
+
+    let mut messages: Vec<Value> = Vec::new();
+    if let Some(system) = body.get("system").and_then(anthropic_blocks_text) {
+        if !system.trim().is_empty() {
+            messages.push(json!({ "role": "system", "content": system }));
+        }
+    }
+
+    let source = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for message in source {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .to_string();
+        match message.get("content") {
+            Some(Value::String(text)) => {
+                messages.push(json!({ "role": role, "content": text }));
+            }
+            Some(Value::Array(blocks)) => {
+                let mut text = String::new();
+                let mut tool_calls: Vec<Value> = Vec::new();
+                let mut tool_results: Vec<Value> = Vec::new();
+                for block in blocks {
+                    match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                        "text" => {
+                            if let Some(part) = block.get("text").and_then(Value::as_str) {
+                                text.push_str(part);
+                            }
+                        }
+                        "tool_use" => {
+                            let arguments =
+                                block.get("input").cloned().unwrap_or_else(|| json!({}));
+                            tool_calls.push(json!({
+                                "id": block.get("id").cloned().unwrap_or_else(|| json!("")),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name").cloned().unwrap_or_else(|| json!("")),
+                                    "arguments": serde_json::to_string(&arguments)?,
+                                }
+                            }));
+                        }
+                        "tool_result" => {
+                            let content = block
+                                .get("content")
+                                .and_then(anthropic_blocks_text)
+                                .unwrap_or_default();
+                            tool_results.push(json!({
+                                "role": "tool",
+                                "tool_call_id": block.get("tool_use_id").cloned().unwrap_or_else(|| json!("")),
+                                "content": content,
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+                if role == "assistant" {
+                    let mut assistant = json!({
+                        "role": "assistant",
+                        "content": if text.is_empty() { Value::Null } else { json!(text) },
+                    });
+                    if !tool_calls.is_empty() {
+                        assistant["tool_calls"] = json!(tool_calls);
+                    }
+                    messages.push(assistant);
+                } else {
+                    messages.push(json!({ "role": "user", "content": text }));
+                }
+                // 工具结果在 Chat Completions 里是独立的一条，必须跟在发起调用的那条之后。
+                messages.extend(tool_results);
+            }
+            _ => {}
+        }
+    }
+
+    let mut request = json!({ "model": model, "messages": messages });
+    for key in ["stream", "max_tokens", "temperature", "top_p"] {
+        if let Some(value) = body.get(key) {
+            request[key] = value.clone();
+        }
+    }
+    if let Some(stops) = body.get("stop_sequences") {
+        request["stop"] = stops.clone();
+    }
+    if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+        let converted: Vec<Value> = tools
+            .iter()
+            .map(|tool| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": tool.get("name").cloned().unwrap_or_else(|| json!("")),
+                        "description": tool.get("description").cloned().unwrap_or_else(|| json!("")),
+                        "parameters": tool
+                            .get("input_schema")
+                            .cloned()
+                            .unwrap_or_else(|| json!({"type": "object", "properties": {}})),
+                    }
+                })
+            })
+            .collect();
+        if !converted.is_empty() {
+            request["tools"] = json!(converted);
+        }
+    }
+    if let Some(choice) = body.get("tool_choice") {
+        match choice.get("type").and_then(Value::as_str).unwrap_or("") {
+            "auto" => request["tool_choice"] = json!("auto"),
+            "any" => request["tool_choice"] = json!("required"),
+            "none" => request["tool_choice"] = json!("none"),
+            "tool" => {
+                request["tool_choice"] = json!({
+                    "type": "function",
+                    "function": { "name": choice.get("name").cloned().unwrap_or_else(|| json!("")) }
+                });
+            }
+            _ => {}
+        }
+    }
+
+    Ok(request)
+}
+
+/// Chat Completions 回应 → Anthropic Messages 回应（非流式）。
+pub fn chat_completions_to_anthropic_response(body: &Value) -> anyhow::Result<Value> {
+    let choice = body
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .ok_or_else(|| anyhow::anyhow!("上游没有返回 choices"))?;
+    let message = choice.get("message").cloned().unwrap_or_else(|| json!({}));
+
+    let mut content: Vec<Value> = Vec::new();
+    if let Some(text) = message.get("content").and_then(Value::as_str) {
+        if !text.is_empty() {
+            content.push(json!({ "type": "text", "text": text }));
+        }
+    }
+    if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for call in calls {
+            let arguments = call
+                .pointer("/function/arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            content.push(json!({
+                "type": "tool_use",
+                "id": call.get("id").cloned().unwrap_or_else(|| json!("")),
+                "name": call.pointer("/function/name").cloned().unwrap_or_else(|| json!("")),
+                "input": serde_json::from_str::<Value>(arguments).unwrap_or_else(|_| json!({})),
+            }));
+        }
+    }
+
+    let stop_reason = match choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .unwrap_or("stop")
+    {
+        "length" => "max_tokens",
+        "tool_calls" | "function_call" => "tool_use",
+        "stop" => "end_turn",
+        other => other,
+    };
+    let usage = body.get("usage").cloned().unwrap_or_else(|| json!({}));
+
+    Ok(json!({
+        "id": body.get("id").and_then(Value::as_str).unwrap_or("msg_bridge"),
+        "type": "message",
+        "role": "assistant",
+        "model": body.get("model").and_then(Value::as_str).unwrap_or(""),
+        "content": content,
+        "stop_reason": stop_reason,
+        "stop_sequence": Value::Null,
+        "usage": {
+            "input_tokens": usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
+            "output_tokens": usage.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0),
+        }
+    }))
+}
+
+/// Chat Completions 的 SSE → Anthropic Messages 的 SSE。
+///
+/// 客户端（Claude Code / Claude Desktop）按 Anthropic 的事件序列渲染，所以这里要把
+/// `choices[0].delta` 那种增量翻成 `message_start` / `content_block_*` / `message_delta`
+/// / `message_stop` 这一套；工具调用要翻成 `tool_use` 块加 `input_json_delta`。
+#[derive(Default)]
+pub struct ChatSseToAnthropicConverter {
+    buffer: String,
+    utf8_remainder: Vec<u8>,
+    started: bool,
+    text_block_open: bool,
+    tool_blocks: Vec<(usize, String)>,
+    next_tool_index: usize,
+    message_id: String,
+    model: String,
+    finish_reason: Option<String>,
+    input_tokens: u64,
+    output_tokens: u64,
+    /// 收尾事件只发一次：上游可能用 `[DONE]` 收尾，也可能只是把连接关掉。
+    done: bool,
+}
+
+impl ChatSseToAnthropicConverter {
+    pub fn with_request(original_request: &Value) -> Self {
+        Self {
+            message_id: original_request
+                .get("_bridge_message_id")
+                .and_then(Value::as_str)
+                .unwrap_or("msg_bridge")
+                .to_string(),
+            model: original_request
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            ..Self::default()
+        }
+    }
+
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> Vec<u8> {
+        append_utf8_safe(&mut self.buffer, &mut self.utf8_remainder, bytes);
+        let mut output = String::new();
+        while let Some(block) = take_sse_block(&mut self.buffer) {
+            if block.trim().is_empty() {
+                continue;
+            }
+            self.handle_block(&block, &mut output);
+        }
+        output.into_bytes()
+    }
+
+    pub fn finish(&mut self) -> Vec<u8> {
+        if self.done {
+            self.utf8_remainder.clear();
+            return Vec::new();
+        }
+        if !self.utf8_remainder.is_empty() {
+            self.buffer
+                .push_str(&String::from_utf8_lossy(&self.utf8_remainder));
+            self.utf8_remainder.clear();
+        }
+        let mut output = String::new();
+        self.close_blocks(&mut output);
+        self.emit_message_delta(&mut output);
+        output.into_bytes()
+    }
+
+    fn handle_block(&mut self, block: &str, output: &mut String) {
+        let mut data_parts = Vec::new();
+        for line in block.lines() {
+            if let Some(data) = strip_sse_field(line, "data") {
+                data_parts.push(data.to_string());
+            }
+        }
+        if data_parts.is_empty() {
+            return;
+        }
+        let data = data_parts.join("\n");
+        if data.trim() == "[DONE]" {
+            self.close_blocks(output);
+            self.emit_message_delta(output);
+            self.done = true;
+            return;
+        }
+        let Ok(chunk) = serde_json::from_str::<Value>(&data) else {
+            return;
+        };
+        if chunk.get("error").is_some() {
+            let message = chunk
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("上游返回了错误");
+            write_sse_event(
+                output,
+                "error",
+                &json!({ "type": "error", "error": { "type": "api_error", "message": message } }),
+            );
+            return;
+        }
+        if let Some(id) = chunk.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                self.message_id = id.to_string();
+            }
+        }
+        if let Some(model) = chunk.get("model").and_then(Value::as_str) {
+            if !model.is_empty() {
+                self.model = model.to_string();
+            }
+        }
+        if let Some(usage) = chunk.get("usage").and_then(Value::as_object) {
+            if let Some(value) = usage.get("prompt_tokens").and_then(Value::as_u64) {
+                self.input_tokens = value;
+            }
+            if let Some(value) = usage.get("completion_tokens").and_then(Value::as_u64) {
+                self.output_tokens = value;
+            }
+        }
+
+        self.emit_message_start(output);
+
+        let Some(choice) = chunk
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+        else {
+            return;
+        };
+        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
+            if !reason.is_empty() {
+                self.finish_reason = Some(reason.to_string());
+            }
+        }
+        let Some(delta) = choice.get("delta") else {
+            return;
+        };
+
+        if let Some(text) = delta.get("content").and_then(Value::as_str) {
+            if !text.is_empty() {
+                self.emit_text_delta(output, text);
+            }
+        }
+        if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+            for call in calls {
+                self.emit_tool_call_delta(output, call);
+            }
+        }
+    }
+
+    fn emit_message_start(&mut self, output: &mut String) {
+        if self.started {
+            return;
+        }
+        self.started = true;
+        write_sse_event(
+            output,
+            "message_start",
+            &json!({
+                "type": "message_start",
+                "message": {
+                    "id": self.message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": self.model,
+                    "content": [],
+                    "stop_reason": Value::Null,
+                    "stop_sequence": Value::Null,
+                    "usage": { "input_tokens": self.input_tokens, "output_tokens": 0 },
+                }
+            }),
+        );
+    }
+
+    fn emit_text_delta(&mut self, output: &mut String, text: &str) {
+        if !self.text_block_open {
+            self.text_block_open = true;
+            write_sse_event(
+                output,
+                "content_block_start",
+                &json!({
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": { "type": "text", "text": "" },
+                }),
+            );
+        }
+        write_sse_event(
+            output,
+            "content_block_delta",
+            &json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": { "type": "text_delta", "text": text },
+            }),
+        );
+    }
+
+    fn emit_tool_call_delta(&mut self, output: &mut String, call: &Value) {
+        // 上游用下标区分多个调用；这里按首次出现的顺序分配 Anthropic 的块下标。
+        let upstream_index = call
+            .get("index")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.next_tool_index as u64) as usize;
+        let known = self
+            .tool_blocks
+            .iter()
+            .any(|(index, _)| *index == upstream_index);
+        if !known {
+            self.close_text_block(output);
+            let block_index = self.next_tool_index + 1;
+            self.next_tool_index += 1;
+            self.tool_blocks.push((
+                upstream_index,
+                call.get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ));
+            write_sse_event(
+                output,
+                "content_block_start",
+                &json!({
+                    "type": "content_block_start",
+                    "index": block_index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": call.get("id").cloned().unwrap_or_else(|| json!("")),
+                        "name": call.pointer("/function/name").cloned().unwrap_or_else(|| json!("")),
+                        "input": {},
+                    },
+                }),
+            );
+        }
+        if let Some(partial) = call.pointer("/function/arguments").and_then(Value::as_str) {
+            if !partial.is_empty() {
+                let block_index = self
+                    .tool_blocks
+                    .iter()
+                    .position(|(index, _)| *index == upstream_index)
+                    .map(|position| position + 1)
+                    .unwrap_or(self.next_tool_index);
+                write_sse_event(
+                    output,
+                    "content_block_delta",
+                    &json!({
+                        "type": "content_block_delta",
+                        "index": block_index,
+                        "delta": { "type": "input_json_delta", "partial_json": partial },
+                    }),
+                );
+            }
+        }
+    }
+
+    fn close_text_block(&mut self, output: &mut String) {
+        if self.text_block_open {
+            self.text_block_open = false;
+            write_sse_event(
+                output,
+                "content_block_stop",
+                &json!({ "type": "content_block_stop", "index": 0 }),
+            );
+        }
+    }
+
+    fn close_blocks(&mut self, output: &mut String) {
+        self.close_text_block(output);
+        let stops: Vec<Value> = (1..=self.next_tool_index)
+            .map(|index| json!({ "type": "content_block_stop", "index": index }))
+            .collect();
+        self.tool_blocks.clear();
+        self.next_tool_index = 0;
+        for stop in stops {
+            write_sse_event(output, "content_block_stop", &stop);
+        }
+    }
+
+    fn emit_message_delta(&mut self, output: &mut String) {
+        let stop_reason = match self.finish_reason.as_deref().unwrap_or("stop") {
+            "length" => "max_tokens",
+            "tool_calls" | "function_call" => "tool_use",
+            "stop" => "end_turn",
+            other => other,
+        };
+        write_sse_event(
+            output,
+            "message_delta",
+            &json!({
+                "type": "message_delta",
+                "delta": { "stop_reason": stop_reason, "stop_sequence": Value::Null },
+                "usage": { "output_tokens": self.output_tokens },
+            }),
+        );
+        write_sse_event(output, "message_stop", &json!({ "type": "message_stop" }));
+        self.done = true;
+    }
+}
+
+/// 写一条 Anthropic 风格的 SSE 事件（`event:` 名字加一行 `data:`）。
+fn write_sse_event(output: &mut String, event: &str, payload: &Value) {
+    output.push_str("event: ");
+    output.push_str(event);
+    output.push('\n');
+    output.push_str("data: ");
+    output.push_str(&payload.to_string());
+    output.push_str("\n\n");
+}
+
 pub fn is_responses_proxy_path(path: &str) -> bool {
     let path = path.split_once('?').map_or(path, |(path, _)| path);
     matches!(
@@ -5993,5 +6560,224 @@ mod tests {
         assert_eq!(messages[0]["tool_calls"][0]["id"], "call-a");
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "call-a");
+    }
+    #[test]
+    fn the_upstream_interface_follows_the_model() {
+        assert_eq!(
+            upstream_interface_for_model("claude-opus-4-6"),
+            UpstreamInterface::Anthropic
+        );
+        assert_eq!(
+            upstream_interface_for_model("Claude-Fable-5"),
+            UpstreamInterface::Anthropic
+        );
+        assert_eq!(
+            upstream_interface_for_model("gpt-5.5"),
+            UpstreamInterface::Responses
+        );
+        assert_eq!(
+            upstream_interface_for_model("o3-mini"),
+            UpstreamInterface::Responses
+        );
+        assert_eq!(
+            upstream_interface_for_model("glm-5.2"),
+            UpstreamInterface::ChatCompletions
+        );
+        assert_eq!(
+            upstream_interface_for_model("deepseek-v4-pro-0813"),
+            UpstreamInterface::ChatCompletions
+        );
+        assert_eq!(
+            upstream_interface_for_model("qwen3-max"),
+            UpstreamInterface::ChatCompletions
+        );
+    }
+
+    #[test]
+    fn an_anthropic_request_becomes_chat_completions() {
+        let request = json!({
+            "model": "glm-5.2",
+            "max_tokens": 1024,
+            "stream": true,
+            "system": [{ "type": "text", "text": "你是助手" }],
+            "tools": [{
+                "name": "Read",
+                "description": "读文件",
+                "input_schema": { "type": "object", "properties": { "path": { "type": "string" } } }
+            }],
+            "tool_choice": { "type": "any" },
+            "messages": [
+                { "role": "user", "content": [{ "type": "text", "text": "看看 a.txt" }] },
+                { "role": "assistant", "content": [
+                    { "type": "text", "text": "好" },
+                    { "type": "tool_use", "id": "call-a", "name": "Read", "input": { "path": "a.txt" } }
+                ] },
+                { "role": "user", "content": [
+                    { "type": "tool_result", "tool_use_id": "call-a", "content": "内容" }
+                ] }
+            ]
+        });
+
+        let converted =
+            anthropic_to_chat_completions_request(&request).expect("conversion should work");
+        assert_eq!(converted["model"], "glm-5.2");
+        assert_eq!(converted["max_tokens"], 1024);
+        assert_eq!(converted["stream"], true);
+        assert_eq!(converted["tool_choice"], "required");
+
+        let messages = converted["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "你是助手");
+        assert_eq!(messages[1]["content"], "看看 a.txt");
+
+        let assistant = messages
+            .iter()
+            .find(|message| message["role"] == "assistant")
+            .expect("the assistant turn should be there");
+        assert_eq!(assistant["tool_calls"][0]["id"], "call-a");
+        assert_eq!(assistant["tool_calls"][0]["function"]["name"], "Read");
+        assert_eq!(
+            assistant["tool_calls"][0]["function"]["arguments"],
+            "{\"path\":\"a.txt\"}"
+        );
+
+        let tool = messages
+            .iter()
+            .find(|message| message["role"] == "tool")
+            .expect("the tool result should be its own message");
+        assert_eq!(tool["tool_call_id"], "call-a");
+        assert_eq!(tool["content"], "内容");
+
+        assert_eq!(
+            converted["tools"][0]["function"]["parameters"]["properties"]["path"]["type"],
+            "string"
+        );
+        assert_eq!(converted["tools"][0]["function"]["name"], "Read");
+    }
+
+    #[test]
+    fn a_chat_completion_becomes_an_anthropic_message() {
+        let response = json!({
+            "id": "chatcmpl-1",
+            "model": "glm-5.2",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "先读文件",
+                    "tool_calls": [{
+                        "id": "call-a",
+                        "type": "function",
+                        "function": { "name": "Read", "arguments": "{\"path\":\"a.txt\"}" }
+                    }]
+                }
+            }],
+            "usage": { "prompt_tokens": 12, "completion_tokens": 7 }
+        });
+
+        let converted =
+            chat_completions_to_anthropic_response(&response).expect("conversion should work");
+        assert_eq!(converted["type"], "message");
+        assert_eq!(converted["role"], "assistant");
+        assert_eq!(converted["stop_reason"], "tool_use");
+        assert_eq!(converted["content"][0]["type"], "text");
+        assert_eq!(converted["content"][0]["text"], "先读文件");
+        assert_eq!(converted["content"][1]["type"], "tool_use");
+        assert_eq!(converted["content"][1]["id"], "call-a");
+        assert_eq!(converted["content"][1]["name"], "Read");
+        assert_eq!(converted["content"][1]["input"]["path"], "a.txt");
+        assert_eq!(converted["usage"]["input_tokens"], 12);
+        assert_eq!(converted["usage"]["output_tokens"], 7);
+    }
+
+    #[test]
+    fn a_chat_stream_becomes_anthropic_events() {
+        let chunk = |value: &Value| format!("data: {value}\n\n");
+        let mut converter =
+            ChatSseToAnthropicConverter::with_request(&json!({ "model": "glm-5.2" }));
+        let mut output = String::new();
+        let push =
+            |converter: &mut ChatSseToAnthropicConverter, output: &mut String, payload: String| {
+                output.push_str(
+                    &String::from_utf8(converter.push_bytes(payload.as_bytes())).expect("utf8"),
+                );
+            };
+
+        push(
+            &mut converter,
+            &mut output,
+            chunk(&json!({
+                "id": "chatcmpl-1",
+                "model": "glm-5.2",
+                "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "你好" }, "finish_reason": null }]
+            })),
+        );
+        push(
+            &mut converter,
+            &mut output,
+            chunk(&json!({
+                "choices": [{ "index": 0, "delta": { "tool_calls": [
+                    { "index": 0, "id": "call-a", "type": "function", "function": { "name": "Read", "arguments": "{\"path\":" } }
+                ] }, "finish_reason": null }]
+            })),
+        );
+        push(
+            &mut converter,
+            &mut output,
+            chunk(&json!({
+                "choices": [{ "index": 0, "delta": { "tool_calls": [
+                    { "index": 0, "function": { "arguments": "\"a.txt\"}" } }
+                ] }, "finish_reason": "tool_calls" }],
+                "usage": { "prompt_tokens": 12, "completion_tokens": 7 }
+            })),
+        );
+        push(
+            &mut converter,
+            &mut output,
+            chunk(
+                &json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }] }),
+            ),
+        );
+        push(&mut converter, &mut output, "data: [DONE]\n\n".to_string());
+
+        assert!(
+            output.contains("event: message_start"),
+            "the client needs a message_start: {output}"
+        );
+        assert!(output.contains("\"type\":\"message_start\""));
+        assert!(
+            output.contains("\"text\":\"你好\"") && output.contains("\"type\":\"text_delta\""),
+            "the text should reach the client: {output}"
+        );
+        assert!(
+            output.contains("\"type\":\"tool_use\"")
+                && output.contains("\"id\":\"call-a\"")
+                && output.contains("\"name\":\"Read\""),
+            "the tool call should reach the client as a tool_use block: {output}"
+        );
+        assert!(
+            output.contains("\"partial_json\":\"{\\\"path\\\":\""),
+            "the first half of the arguments should reach the client: {output}"
+        );
+        assert!(
+            output.contains("\"partial_json\":\"\\\"a.txt\\\"}\""),
+            "the second half of the arguments should reach the client: {output}"
+        );
+        assert!(output.contains("\"stop_reason\":\"tool_use\""));
+        assert!(output.contains("\"output_tokens\":7"));
+        assert!(output.contains("event: message_stop"));
+        assert_eq!(output.matches("event: message_start").count(), 1);
+        assert_eq!(
+            output.matches("event: message_stop").count(),
+            1,
+            "the tail must be sent exactly once: {output}"
+        );
+
+        // 上游用 `[DONE]` 收过尾之后，连接关闭时不该再发一套收尾事件。
+        let extra = String::from_utf8(converter.finish()).expect("utf8");
+        assert!(extra.is_empty(), "nothing left to say: {extra}");
     }
 }
