@@ -1,4 +1,4 @@
-# Claude Codex Pro Tool 代码知识图谱
+# CCP（Claude-Codex-Pro-Tool） 代码知识图谱
 
 生成时间：2026-06-22  
 分支：`codex/memory-assist`  
@@ -8,7 +8,7 @@
 
 ## 项目概览
 
-Claude Codex Pro Tool 是一个 Rust/Tauri + React 的本地运维控制台，用来管理 Codex App、Claude Desktop 包装窗口、供应商配置、插件中心、会话维护、脚本市场与本地记忆辅助。
+CCP（Claude-Codex-Pro-Tool） 是一个 Rust/Tauri + React 的本地运维控制台，用来管理 Codex App、Claude Desktop 包装窗口、供应商配置、插件中心、会话维护、脚本市场与本地记忆辅助。
 
 ```mermaid
 flowchart LR
@@ -62,7 +62,7 @@ sequenceDiagram
   participant Inject as renderer-inject.js
   participant Bridge as bridge routes
 
-  User->>Launcher: 启动 Claude Codex Pro
+  User->>Launcher: 启动 CCP
   Launcher->>Core: 解析 Codex 路径/端口/配置
   Core->>Codex: 带调试端口启动 Codex
   Core->>Codex: 通过 CDP 注入 renderer-inject.js

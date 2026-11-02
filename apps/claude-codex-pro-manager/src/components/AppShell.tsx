@@ -308,10 +308,10 @@ export function AppShell({
         />
       ) : null}
       <aside className="ops-rail" aria-label="一级导航">
-        <button className="ops-brand" onClick={() => navigate("overview")} title="CCP 概览" type="button">
+        <button className="ops-brand" onClick={() => navigate("overview")} title="CCP · Claude-Codex-Pro-Tool" type="button">
           <span aria-hidden="true" className="ops-brand-mark">CCP</span>
           <span className="ops-brand-copy">
-            <strong>Claude Codex Pro</strong>
+            <strong>CCP</strong>
             <small>本地 AI 运维</small>
           </span>
         </button>

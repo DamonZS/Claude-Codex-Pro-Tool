@@ -1,8 +1,8 @@
-﻿# AGENTS.md
+# AGENTS.md
 
 ## 项目目的
 
-Claude Codex Pro Tool 是面向 Codex App 与 Claude Desktop 的本地运维控制台。它把 Codex 增强、供应商/Profile 切换、插件与 Skill 管理、启动器维护、更新工具和 Release 打包整合在一个 Rust + Tauri + React 工作区中。
+CCP（Claude-Codex-Pro-Tool） 是面向 Codex App 与 Claude Desktop 的本地运维控制台。它把 Codex 增强、供应商/Profile 切换、插件与 Skill 管理、启动器维护、更新工具和 Release 打包整合在一个 Rust + Tauri + React 工作区中。
 
 本项目采用 Harness Engineering 工作方式。AI 编码代理必须基于清晰上下文、明确规格、可验证验收标准和真实验证证据工作，不得一边猜需求一边修改代码。
 

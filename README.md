@@ -1,7 +1,12 @@
-# Claude Codex Pro Tool
+# CCP · Claude-Codex-Pro-Tool
 
 <p align="center">
-  <img src="assets/images/claude-codex-pro.png" alt="Claude Codex Pro Tool 图标" width="160">
+  <img src="assets/images/claude-codex-pro.png" alt="CCP（Claude-Codex-Pro-Tool）图标" width="160">
+</p>
+
+<p align="center">
+  <b>一个窗口，管好你所有的 AI 编程 Agent。</b><br>
+  Token 花在哪、第三方 API 一处切换、聊过的会话蒸馏成 Skill、Claude Desktop 也能自己操作电脑。
 </p>
 
 <p align="center">
@@ -11,14 +16,40 @@
 <p align="center">
   <img alt="Release" src="https://img.shields.io/github/v/release/DamonZS/Claude-Codex-Pro-Tool">
   <img alt="Stars" src="https://img.shields.io/github/stars/DamonZS/Claude-Codex-Pro-Tool">
+  <img alt="Downloads" src="https://img.shields.io/github/downloads/DamonZS/Claude-Codex-Pro-Tool/total">
   <img alt="License" src="https://img.shields.io/github/license/DamonZS/Claude-Codex-Pro-Tool">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2ea44f">
 </p>
 
-**一个窗口管好你所有的 AI 编程 Agent：看清每个 Agent 的 Token 花在哪，一处切换第三方 API，把聊过的会话蒸馏成可复用的 Skill 和记忆，让 Claude Desktop（含 API 模式）也能用上 Computer Use。**
+> **CCP** = **C**laude + **C**odex **P**ro Tool（全称 **Claude-Codex-Pro-Tool**）。它是给本机 AI 编程工具用的**运维控制台**：面向 Codex App、Claude Desktop、Claude Code，内置 36 种主流 Agent 工具的识别清单。Rust + Tauri 实现，数据只在本机，不装服务、不连云端。
+>
+> English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**: a token-usage dashboard across AI coding agents, a cc-switch-style third-party API provider switcher, a session-to-Skill distillation workbench, and a built-in **Computer Use MCP** for Claude Desktop.
 
-> Windows / macOS 本地 AI 运维控制台，面向 Codex App、Claude Desktop、Claude Code，内置 36 种主流 Agent 工具的识别清单。Rust + Tauri 实现，数据只在本机。
+<table>
+  <tr>
+    <td width="33%" align="center"><b>🎯 想知道钱和 Token 去哪了</b><br><sub>本地只读采集，一张看板看所有 Agent 的消耗趋势、缓存命中率、模型与项目排行</sub></td>
+    <td width="33%" align="center"><b>🔁 第三方 API 一处切换</b><br><sub>Codex / Claude / Claude Desktop 各自记住当前供应商，互不影响，支持一键导入 cc-switch</sub></td>
+    <td width="33%" align="center"><b>🧠 把踩过的坑沉淀下来</b><br><sub>蒸馏工作台：会话或整个项目 → Skill、Prompt、用户画像、任务记忆</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><b>🖱️ 让 Claude Desktop 也能动手</b><br><sub>内置 Computer Use MCP：截图、点击、拖拽、输入，带急停，默认关闭</sub></td>
+    <td width="33%" align="center"><b>⚡ 新机器装上就能跑</b><br><sub>CCP-Bot 本地模式：不需要 Docker、不需要虚拟机、不需要管理员权限</sub></td>
+    <td width="33%" align="center"><b>🧩 资产合成一张清单</b><br><sub>Claude 与 Codex 的插件、Skills、MCP 统一管理，点应用只改对应应用</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/latest"><b>⬇️ 下载最新版</b></a>
+  &nbsp;·&nbsp;
+  <a href="#界面预览">界面预览</a>
+  &nbsp;·&nbsp;
+  <a href="#核心功能">核心功能</a>
+  &nbsp;·&nbsp;
+  <a href="#常见问题">常见问题</a>
+</p>
+
 >
 > English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**: a token-usage dashboard across AI coding agents, a cc-switch-style third-party API provider switcher, a session-to-Skill distillation workbench, and a built-in **Computer Use MCP** for Claude Desktop.
 
@@ -60,16 +91,16 @@
    - Windows：`claude-codex-pro-*-windows-x64-setup.exe` 或 `claude-codex-pro-*-windows-x64.msi`
    - macOS Intel：`claude-codex-pro-*-macos-x64.dmg`
    - macOS Apple Silicon：`claude-codex-pro-*-macos-arm64.dmg`
-2. 打开 **Claude Codex Pro 管理工具**，在「供应商与路由」里新增供应商，或从本机 cc-switch 数据库导入已有配置。
+2. 打开 **CCP 管理工具**，在「供应商与路由」里新增供应商，或从本机 cc-switch 数据库导入已有配置。
 3. 用管理工具顶部的「启动/重启 Codex」「启动/重启 Claude」启动客户端（不要直接启动原始 Codex，否则没有增强）。
 4. 打开「概览」查看各 Agent 的 Token 用量；需要时再开启 Computer Use、蒸馏会话、安装 Skills。
 
 安装后有两个入口：
 
-- `Claude Codex Pro`：统一桌面程序；默认打开管理工具，内部以 `--launcher` 启动独立后台进程并加载 Codex 增强能力。
-- `Claude Codex Pro 管理工具`：运维控制台，管理 Codex、Claude、供应商、插件、脚本、日志、安装维护和更新。
+- `CCP`：统一桌面程序；默认打开管理工具，内部以 `--launcher` 启动独立后台进程并加载 Codex 增强能力。
+- `CCP 管理工具`：运维控制台，管理 Codex、Claude、供应商、插件、脚本、日志、安装维护和更新。
 
-Windows 安装包会创建桌面和开始菜单快捷方式；macOS DMG 包含 `Claude Codex Pro.app` 与 `Claude Codex Pro 管理工具.app`。
+Windows 安装包会创建桌面和开始菜单快捷方式；macOS DMG 包含 `CCP.app` 与 `CCP 管理工具.app`。
 
 > **Codex 模型选择由 Codex 原生逻辑负责。** CCP 不向 Codex 模型选择器注入候选项、不修改模型白名单或请求中的模型字段，也不通过前端增强显示特定模型。供应商页面仍可管理模型目录和路由配置；Codex 能否显示或调用某个模型取决于 Codex 自身版本、登录状态、配置和上游 API 能力。
 
@@ -204,7 +235,18 @@ experimental_bearer_token = "sk-..."
 
 ## 界面预览
 
-上方四张图分别是总览、Agent 概览、蒸馏工作台、插件 Skills 与 MCP。完整页面包括：概览（总览 / Agent 概览）、供应商与路由、蒸馏工作台、主题中心、系统提示词、会话、插件 Skills 与 MCP、设置（含 Computer Use）。
+上方四张图分别是总览、Agent 概览、蒸馏工作台、插件 Skills 与 MCP。更多页面：
+
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/suppliers.png"><img src="docs/screenshots/suppliers.png" alt="供应商与路由：每家 Agent 各自记住当前供应商" width="100%"></a><br><sub><b>供应商与路由</b> · 一处切换，互不影响；原生接口直连，格式不同才走本机代理</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/sessions.png"><img src="docs/screenshots/sessions.png" alt="会话管理：会话列表与续接合并" width="100%"></a><br><sub><b>会话管理</b> · 长对话续接识别与合并</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><a href="docs/screenshots/system-prompts.png"><img src="docs/screenshots/system-prompts.png" alt="系统提示词与指令模板" width="100%"></a><br><sub><b>系统提示词</b> · 指令模板集中管理</sub></td>
+    <td width="50%" align="center"><a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" alt="设置：含 Computer Use 与更新" width="100%"></a><br><sub><b>设置</b> · Computer Use、更新与维护入口</sub></td>
+  </tr>
+</table>
 
 ## 安全与隐私
 
@@ -242,7 +284,7 @@ experimental_bearer_token = "sk-..."
 ## 常见问题
 
 ### Codex 里没有看到增强标识
-确认是从 `Claude Codex Pro` 入口启动 Codex，而不是直接启动原始 Codex。仍然没有显示时，打开管理工具查看诊断和日志，重点检查 helper 端口、CDP 连接和 `renderer.script_loaded` 记录。
+确认是从 `CCP` 入口启动 Codex，而不是直接启动原始 Codex。仍然没有显示时，打开管理工具查看诊断和日志，重点检查 helper 端口、CDP 连接和 `renderer.script_loaded` 记录。
 
 ### Codex 模型菜单由谁负责？
 Codex 模型菜单、可见模型和当前选择均由 Codex 原生客户端管理。CCP 不注入模型候选、不追加“CCP 模型增强”组，也不覆盖请求中的 `model`、`model_slug` 或 `modelId`。模型没有显示时，请在 Codex 自身的登录状态、版本和配置，以及供应商上游模型目录中排查；CCP 的供应商模型列表仅用于配置和路由管理。
@@ -421,5 +463,5 @@ docs/                                 架构、评审与截图
 
 ## 说明
 
-Claude Codex Pro Tool 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。官方应用更新后，如果页面结构、协议、CLI、插件格式或配置路径变化，本项目的注入脚本和适配逻辑可能需要同步更新。
+CCP（Claude-Codex-Pro-Tool） 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。官方应用更新后，如果页面结构、协议、CLI、插件格式或配置路径变化，本项目的注入脚本和适配逻辑可能需要同步更新。
 

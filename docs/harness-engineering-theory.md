@@ -310,7 +310,7 @@ Harness Engineering 不能保证 AI 永远正确。它降低的是不确定性�
 
 ## 13. 在本项目中的默认解释
 
-在 Claude Codex Pro Tool 中，这套理论落地为以下默认规则：
+在 CCP（Claude-Codex-Pro-Tool） 中，这套理论落地为以下默认规则：
 
 - `AGENTS.md` 是所有代理的入口。
 - 重要任务必须先有 `spec/*.md` 和 `acceptance/*.md`。

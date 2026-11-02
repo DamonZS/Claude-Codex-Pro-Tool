@@ -1,6 +1,6 @@
 # 🔗 Leila Codex Offline 集成方案
 
-**目标:** 将 Leila-Codex-Offline 离线系统提示词功能集成到 Claude Codex Pro Manager  
+**目标:** 将 Leila-Codex-Offline 离线系统提示词功能集成到 CCP Manager  
 **位置:** 系统提示词页面  
 **优先级:** 功能增强  
 **创建日期:** 2026-01-09
@@ -359,7 +359,7 @@ impl SystemPromptManager {
                 content: include_str!("../../assets/prompts/professional.md").to_string(),
                 category: PromptCategory::Professional,
                 version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
+                author: "CCP".to_string(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 tags: vec!["专业".to_string(), "可靠".to_string()],
@@ -376,7 +376,7 @@ impl SystemPromptManager {
                 content: include_str!("../../assets/prompts/creative.md").to_string(),
                 category: PromptCategory::Creative,
                 version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
+                author: "CCP".to_string(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 tags: vec!["创意".to_string(), "头脑风暴".to_string()],
@@ -393,7 +393,7 @@ impl SystemPromptManager {
                 content: include_str!("../../assets/prompts/technical.md").to_string(),
                 category: PromptCategory::Technical,
                 version: "1.0.0".to_string(),
-                author: "Claude Codex Pro".to_string(),
+                author: "CCP".to_string(),
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 tags: vec!["技术".to_string(), "代码".to_string()],

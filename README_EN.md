@@ -1,7 +1,12 @@
-# Claude Codex Pro Tool
+# CCP · Claude-Codex-Pro-Tool
 
 <p align="center">
-  <img src="assets/images/claude-codex-pro.png" alt="Claude Codex Pro Tool icon" width="160">
+  <img src="assets/images/claude-codex-pro.png" alt="CCP (Claude-Codex-Pro-Tool) icon" width="160">
+</p>
+
+<p align="center">
+  <b>One window for every AI coding agent you run.</b><br>
+  See where the tokens go, switch third-party APIs in one place, distil past sessions into Skills, and let Claude Desktop use the computer.
 </p>
 
 <p align="center">
@@ -11,16 +16,41 @@
 <p align="center">
   <img alt="Release" src="https://img.shields.io/github/v/release/DamonZS/Claude-Codex-Pro-Tool">
   <img alt="Stars" src="https://img.shields.io/github/stars/DamonZS/Claude-Codex-Pro-Tool">
+  <img alt="Downloads" src="https://img.shields.io/github/downloads/DamonZS/Claude-Codex-Pro-Tool/total">
   <img alt="License" src="https://img.shields.io/github/license/DamonZS/Claude-Codex-Pro-Tool">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2ea44f">
 </p>
 
-**One window for all your AI coding agents: see where each agent's tokens go, switch third-party APIs in one place, distill past sessions into reusable Skills and memory, and give Claude Desktop (including API mode) a built-in Computer Use.**
-
-> A local AI operations console for Codex App, Claude Desktop, and Claude Code on Windows and macOS, with a built-in detection list of 36 popular agent tools. Built with Rust + Tauri; your data stays on your machine.
+> **CCP** = **C**laude + **C**odex **P**ro Tool — full name **Claude-Codex-Pro-Tool**: a local operations console for **Codex App**, **Claude Desktop** and **Claude Code** on Windows and macOS, with a built-in detection list of 36 popular agent tools. Built with Rust + Tauri; your data never leaves the machine.
 >
-> Keywords: Codex, Claude Desktop, Claude Code, API relay, third-party API provider switcher, cc-switch alternative, model mapping, OpenAI Responses, Chat Completions, Anthropic Messages, MCP, Skills, Computer Use MCP, token usage dashboard, session repair, Tauri, Rust.
+> 中文说明：[README.md](README.md)
+
+<table>
+  <tr>
+    <td width="33%" align="center"><b>🎯 Know where the money and tokens go</b><br><sub>Read-only local collection; one dashboard for usage trends, cache hit rate, model and project rankings</sub></td>
+    <td width="33%" align="center"><b>🔁 Switch third-party APIs once</b><br><sub>Codex / Claude / Claude Desktop each remember their own provider, with cc-switch import</sub></td>
+    <td width="33%" align="center"><b>🧠 Keep what you learned</b><br><sub>Distillation workbench: sessions or a whole project → Skills, prompts, profiles, task memories</sub></td>
+  </tr>
+  <tr>
+    <td width="33%" align="center"><b>🖱️ Let Claude Desktop act</b><br><sub>Built-in Computer Use MCP: screenshot, click, drag, type — with an instant stop, off by default</sub></td>
+    <td width="33%" align="center"><b>⚡ Runs on a fresh machine</b><br><sub>CCP-Bot local mode: no Docker, no virtual machine, no administrator rights</sub></td>
+    <td width="33%" align="center"><b>🧩 One inventory for assets</b><br><sub>Claude and Codex plugins, Skills and MCP servers in one list; applying only touches that app</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases/latest"><b>⬇️ Download the latest release</b></a>
+  &nbsp;·&nbsp;
+  <a href="#screenshots">Screenshots</a>
+  &nbsp;·&nbsp;
+  <a href="#core-features">Core features</a>
+  &nbsp;·&nbsp;
+  <a href="#faq">FAQ</a>
+</p>
+
+> Keywords: Codex, Claude Desktop, Claude Code, API relay, third-party API provider switcher, cc-switch alternative, model mapping, OpenAI Responses, Chat Completions, Anthropic Messages, MCP, Skills, Computer Use MCP, token usage dashboard, session repair, Tauri, Rust. CCP: Claude-Codex-Pro-Tool.
 
 <table>
   <tr>
@@ -60,16 +90,16 @@
    - Windows: `claude-codex-pro-*-windows-x64-setup.exe` or `claude-codex-pro-*-windows-x64.msi`
    - macOS Intel: `claude-codex-pro-*-macos-x64.dmg`
    - macOS Apple Silicon: `claude-codex-pro-*-macos-arm64.dmg`
-2. Open **Claude Codex Pro Manager** and add a provider under Providers & Routing, or import existing ones from a local cc-switch database.
+2. Open **CCP Manager** and add a provider under Providers & Routing, or import existing ones from a local cc-switch database.
 3. Launch clients with the manager's "Start/Restart Codex" and "Start/Restart Claude" buttons (launching the original Codex directly gives you no enhancements).
 4. Open Overview to see each agent's token usage; then enable Computer Use, distill sessions, or install Skills as needed.
 
 Installation provides two entries:
 
-- `Claude Codex Pro`: the unified desktop program. It opens the manager by default and starts the independent background process with `--launcher` to load Codex enhancements.
-- `Claude Codex Pro 管理工具` (Manager): the operations console for Codex, Claude, providers, plugins, scripts, logs, installation maintenance, and updates.
+- `CCP`: the unified desktop program. It opens the manager by default and starts the independent background process with `--launcher` to load Codex enhancements.
+- `CCP 管理工具` (Manager): the operations console for Codex, Claude, providers, plugins, scripts, logs, installation maintenance, and updates.
 
-The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG contains `Claude Codex Pro.app` and `Claude Codex Pro 管理工具.app`.
+The Windows installer creates Desktop and Start Menu shortcuts. The macOS DMG contains `CCP.app` and `CCP 管理工具.app`.
 
 > **Codex owns the model picker.** CCP does not inject model candidates, change the Codex model whitelist, or override model fields in requests. The Providers page can still manage provider catalogs and routing configuration, but Codex decides which models are visible and selectable based on its own version, login state, configuration, and upstream API capabilities.
 
@@ -242,7 +272,7 @@ The four images above show the Overview, the Agent overview, the Distillation Wo
 ## FAQ
 
 ### The Codex enhancement badge does not appear
-Make sure you launched Codex from the `Claude Codex Pro` entry rather than the original Codex. If it still does not appear, open the manager's diagnostics and logs and check the helper port, the CDP connection, and `renderer.script_loaded` records.
+Make sure you launched Codex from the `CCP` entry rather than the original Codex. If it still does not appear, open the manager's diagnostics and logs and check the helper port, the CDP connection, and `renderer.script_loaded` records.
 
 ### Who controls the Codex model picker?
 The native Codex client owns the model menu, visible models, and current selection. CCP does not inject model candidates, add a "CCP model enhancement" group, or override `model`, `model_slug`, or `modelId` in Codex requests. If a model is missing, check Codex's own login state, version, and configuration, and the provider's upstream model catalog; CCP's provider model list is only for configuration and routing.
@@ -421,5 +451,5 @@ See [MAINTAINERS.md](MAINTAINERS.md) for the authorized maintainer list. See [LI
 
 ## Disclaimer
 
-Claude Codex Pro Tool is an external enhancement tool. It is not an official project of OpenAI, Anthropic, Claude, or Codex. When official applications change page structure, protocols, CLI behavior, plugin formats, or configuration paths, this project's injection scripts and adapters may need corresponding updates.
+CCP (Claude-Codex-Pro-Tool) is an external enhancement tool. It is not an official project of OpenAI, Anthropic, Claude, or Codex. When official applications change page structure, protocols, CLI behavior, plugin formats, or configuration paths, this project's injection scripts and adapters may need corresponding updates.
 
