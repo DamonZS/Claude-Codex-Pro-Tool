@@ -23,6 +23,10 @@
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-2ea44f">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/demo.gif" alt="CCP in 30 seconds: token dashboard, third-party API switching, session distillation, agent clients, tools and skills" width="860">
+</p>
+
 > **CCP** = **C**laude + **C**odex **P**ro Tool — full name **Claude-Codex-Pro-Tool**: a local operations console for **Codex App**, **Claude Desktop** and **Claude Code** on Windows and macOS, with a built-in detection list of 36 popular agent tools. Built with Rust + Tauri; your data never leaves the machine.
 >
 > 中文说明：[README.md](README.md)
