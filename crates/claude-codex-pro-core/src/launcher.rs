@@ -4069,6 +4069,49 @@ mod tests {
         let _ = server.shutdown().await;
     }
 
+    /// 再往前一步：不直接调 handler，而是把一条真的 HTTP 请求写进 socket，
+    /// 让真正的分发函数读到路径、选到 agent 那条路。这条覆盖的是「路由」本身。
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_agent_chat_path_is_reached_through_a_real_http_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let accepted = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+        let mut client = tokio::net::TcpStream::connect(address).await.unwrap();
+        let server = accepted.await.unwrap();
+
+        let body = r#"{"model":"gpt-x","messages":[{"role":"user","content":"你好"}]}"#;
+        let request = format!(
+            "POST /agent/no-such-agent-provider/v1/chat/completions HTTP/1.1\r\n\
+             Host: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        client.write_all(request.as_bytes()).await.unwrap();
+        client.flush().await.unwrap();
+
+        let (handled, response) = tokio::join!(handle_helper_connection(server, None), async {
+            let mut text = String::new();
+            let _ = client.read_to_string(&mut text).await;
+            text
+        });
+
+        assert!(handled.is_ok(), "分发不该报错：{handled:?}");
+        assert!(
+            response.starts_with("HTTP/1.1 502 Bad Gateway"),
+            "缺少供应商时要回 502，实际是：{}",
+            response.lines().next().unwrap_or_default()
+        );
+        assert!(
+            response.contains("\"status\":\"failed\""),
+            "要有一句说得清的失败原因：{response}"
+        );
+    }
+
     #[cfg(windows)]
     #[tokio::test(flavor = "current_thread")]
     async fn helper_port_query_times_out_without_blocking_runtime_or_leaking_child() {
