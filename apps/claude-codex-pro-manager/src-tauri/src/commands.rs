@@ -17175,4 +17175,39 @@ mod restart_wait_tests {
         assert!(!status.debug_port_online);
         assert!(status.message.contains("9230"));
     }
+
+    #[ignore = "在真机上跑满 20 秒，用来证明等待有上界而不是干等 90 秒"]
+    #[test]
+    fn live_wait_gives_up_in_twenty_seconds_instead_of_ninety() {
+        let request = LaunchRequest {
+            app_path: r"C:\Program Files\WindowsApps\OpenAI.Codex\app".to_string(),
+            // 9231 故意选一个不会有人监听的端口，代表「注入没生效」。
+            debug_port: 9231,
+            helper_port: 57399,
+            skip_provider_sync: true,
+        };
+        let started_ms = current_time_ms();
+        let begin = Instant::now();
+        let outcome = tauri::async_runtime::block_on(wait_for_codex_launch_ports(
+            &request,
+            started_ms,
+            REPAIR_CODEX_RESTART_TIMEOUT,
+        ));
+        let elapsed = begin.elapsed();
+        println!(
+            "elapsed_ms={} outcome={:?}",
+            elapsed.as_millis(),
+            outcome.as_ref().map(|status| status.status.as_str())
+        );
+        assert!(
+            elapsed < Duration::from_secs(35),
+            "等待必须在十几秒内收场，不能烧满 {} 秒的超时",
+            REPAIR_CODEX_RESTART_TIMEOUT.as_secs()
+        );
+        if let Some(status) = outcome {
+            assert_eq!(status.status, "running_degraded");
+            assert!(!status.debug_port_online);
+            assert!(status.message.contains("9231"));
+        }
+    }
 }

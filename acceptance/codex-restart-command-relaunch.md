@@ -106,4 +106,4 @@
 
 22. 真机复现与结果一致
    - 通过标准：在 Codex 桌面端（进程名为 `ChatGPT.exe`，调试端口 9230）点「启动/重启 Codex」，日志里出现 `manager.restart_injection_ports_stalled` 或 15 秒内的 `status: "ok"`，界面不再出现「未能在限定时间内启动」的 90 秒假失败。
-   - 证据：`%USERPROFILE%\.claude-codex-pro\claude-codex-pro.log` 的 `manager.ui.action.result` 行。
+   - 证据：真机跑 `cargo test -p claude-codex-pro-manager --lib restart_wait_tests -- --include-ignored --nocapture`，`live_wait_gives_up_in_twenty_seconds_instead_of_ninety` 打出 `elapsed_ms=21244 outcome=None` —— 同样的场景在修复前会烧满 90 秒；再加上 `%USERPROFILE%\.claude-codex-pro\claude-codex-pro.log` 的 `manager.ui.action.result` 行。
