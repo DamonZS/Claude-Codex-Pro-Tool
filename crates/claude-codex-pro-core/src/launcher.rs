@@ -1984,10 +1984,14 @@ async fn handle_agent_chat_proxy_connection(
     path: &str,
     remote_addr_text: Option<String>,
 ) -> anyhow::Result<()> {
-    let mut telemetry =
-        crate::request_telemetry::RequestObservation::capture("agent", "chat_completions", request_body);
+    let mut telemetry = crate::request_telemetry::RequestObservation::capture(
+        "agent",
+        "chat_completions",
+        request_body,
+    );
     let upstream =
-        match crate::protocol_proxy::open_agent_chat_proxy_request(provider_id, request_body).await {
+        match crate::protocol_proxy::open_agent_chat_proxy_request(provider_id, request_body).await
+        {
             Ok(upstream) => upstream,
             Err(error) => {
                 let body = serde_json::to_vec(&serde_json::json!({
@@ -2034,15 +2038,15 @@ async fn handle_agent_chat_proxy_connection(
     if upstream.is_stream && is_success {
         write_http_stream_headers(stream, &status, &content_type).await?;
         let mut anthropic_bridge = match conversion {
-            Some(crate::protocol_proxy::ResponseConversion::AnthropicToChat) => {
-                Some(crate::protocol_proxy::AnthropicSseToChatConverter::with_request(&original_request))
-            }
+            Some(crate::protocol_proxy::ResponseConversion::AnthropicToChat) => Some(
+                crate::protocol_proxy::AnthropicSseToChatConverter::with_request(&original_request),
+            ),
             _ => None,
         };
         let mut responses_bridge = match conversion {
-            Some(crate::protocol_proxy::ResponseConversion::ResponsesToChat) => {
-                Some(crate::protocol_proxy::ResponsesSseToChatConverter::with_request(&original_request))
-            }
+            Some(crate::protocol_proxy::ResponseConversion::ResponsesToChat) => Some(
+                crate::protocol_proxy::ResponsesSseToChatConverter::with_request(&original_request),
+            ),
             _ => None,
         };
         let mut bytes_stream = upstream.response.bytes_stream();
@@ -2092,10 +2096,14 @@ async fn handle_agent_chat_proxy_connection(
                 .map_err(anyhow::Error::from)
                 .and_then(|upstream_json| match conversion {
                     crate::protocol_proxy::ResponseConversion::AnthropicToChat => {
-                        crate::protocol_proxy::anthropic_to_chat_completions_response(&upstream_json)
+                        crate::protocol_proxy::anthropic_to_chat_completions_response(
+                            &upstream_json,
+                        )
                     }
                     crate::protocol_proxy::ResponseConversion::ResponsesToChat => {
-                        crate::protocol_proxy::responses_to_chat_completions_response(&upstream_json)
+                        crate::protocol_proxy::responses_to_chat_completions_response(
+                            &upstream_json,
+                        )
                     }
                     _ => Ok(upstream_json),
                 })
@@ -2710,7 +2718,9 @@ async fn handle_claude_desktop_messages_proxy_connection(
                     }
                     // agent 那条路才会出现，Claude 客户端这里用不到。
                     crate::protocol_proxy::ResponseConversion::AnthropicToChat
-                    | crate::protocol_proxy::ResponseConversion::ResponsesToChat => Ok(upstream_json),
+                    | crate::protocol_proxy::ResponseConversion::ResponsesToChat => {
+                        Ok(upstream_json)
+                    }
                 })
                 .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from));
             match converted {
@@ -4013,6 +4023,50 @@ mod tests {
             assert!(!helper_backend_online(port).await);
             peer.await.unwrap();
         }
+    }
+
+    /// 走真实 socket 过一遍新的 agent 入口：请求从 TCP 进来、回应从 TCP 出去。
+    /// 供应商不在库里时也要回一句说得清的 502，而不是卡住或给出空连接。
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_agent_chat_path_answers_over_a_real_socket() {
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (client, accepted) =
+            tokio::join!(tokio::net::TcpStream::connect(address), listener.accept());
+        let mut client = client.unwrap();
+        let (mut server, _) = accepted.unwrap();
+
+        let body =
+            r#"{"model":"gpt-x","stream":false,"messages":[{"role":"user","content":"你好"}]}"#;
+        let handler = handle_agent_chat_proxy_connection(
+            &mut server,
+            "no-such-agent-provider",
+            body,
+            "POST",
+            "/agent/no-such-agent-provider/v1/chat/completions",
+            Some("127.0.0.1:1".to_string()),
+        );
+        let (handled, response) = tokio::join!(handler, async {
+            let mut text = String::new();
+            let _ = client.read_to_string(&mut text).await;
+            text
+        });
+
+        assert!(handled.is_ok(), "handler 不该报错：{handled:?}");
+        assert!(
+            response.starts_with("HTTP/1.1 502 Bad Gateway"),
+            "缺少供应商时要回 502，实际是：{}",
+            response.lines().next().unwrap_or_default()
+        );
+        assert!(
+            response.contains("\"status\":\"failed\""),
+            "要有一句说得清的失败原因：{response}"
+        );
+        let _ = server.shutdown().await;
     }
 
     #[cfg(windows)]
