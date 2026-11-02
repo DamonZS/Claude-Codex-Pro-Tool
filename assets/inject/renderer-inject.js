@@ -3053,13 +3053,10 @@
     }, 4000);
   }
 
+  // 桥接不是 HTTP 端口：走注入时安装的 __codexSessionDeleteBridge 绑定，
+  // 和 /settings/get、/backend/status 走的是同一条通道。
   async function callUpdateBridge(path) {
-    const response = await fetch(helperBase + path, {
-      method: "POST",
-      headers: withHelperToken({ "Content-Type": "application/json" }),
-      body: "{}",
-    });
-    return await response.json();
+    return await postJson(path, {});
   }
 
   async function checkClaudeCodexProUpdate() {

@@ -29,6 +29,14 @@
 | A10 更新检查 | 版本已是最新时提示「已是最新版本 <版本>」；把 `version::VERSION` 临时调低（或指向更旧 release）时能提示发现新版本并进入下载 |
 | A11 安装启动 | 真机下载安装包后 `launch_installer` 拉起安装程序（与 `update::perform_update` 既有行为一致） |
 
+## 桥接通道（A15–A16，2026-11-02 补）
+
+| 项 | 通过标准 | 证据 |
+| --- | --- | --- |
+| A15 徽标走的是桥接而不是 HTTP | `renderer-inject.js` 的 `callUpdateBridge` 必须调用 `postJson(path, {})`，不得 `fetch(helperBase + path)`（`helperBase` 指向协议代理端口，没有 `/update/*` 路由，会 404） | `node --check` 通过；`fetch(helperBase` 在注入脚本里只剩 `/backend/status` 那两条既有回退 |
+| A16 注入页能真的拿到更新结果 | 通过 CDP 调 `window.__codexSessionDeleteBridge("/update/check", {})` 必须返回 `status: ok` 的 JSON，且 `payload.currentVersion` 与当前安装版本一致 | `cargo test -p claude-codex-pro-core --test bridge_update_live -- --include-ignored --nocapture`：`{"status":"ok","message":"已经是最新版本","payload":{"currentVersion":"V1.70",…,"updateAvailable":false}}` |
+
+> 踩坑记录：第一版用 `fetch("http://127.0.0.1:57321/update/check")` 直连，57321 是 **协议代理**（Codex/Responses 转发）而不是桥接服务；请求打进去只会 404，徽标于是永远提示「检查更新失败」。桥接是注入时通过 CDP 安装的 JS 绑定 `__codexSessionDeleteBridge`，与 `/settings/get`、`/backend/status` 同一条通道。
 ## 已知非目标
 
 - 不验证 GitHub API 的限流与离线分支以外的网络异常。
