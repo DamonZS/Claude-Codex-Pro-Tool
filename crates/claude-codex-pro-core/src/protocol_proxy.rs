@@ -571,6 +571,10 @@ pub enum ResponseConversion {
     ResponsesToAnthropic,
     /// Anthropic Messages → Responses（Codex 客户端选了 Anthropic 格式的供应商）。
     AnthropicToResponses,
+    /// Anthropic Messages → Chat Completions（只认 chat 的 agent 选了 Anthropic 格式的供应商）。
+    AnthropicToChat,
+    /// Responses → Chat Completions（只认 chat 的 agent 选了 Responses 格式的供应商）。
+    ResponsesToChat,
 }
 
 pub struct UpstreamProxyResponse {
@@ -691,6 +695,949 @@ impl ChatSseToResponsesConverter {
     }
 }
 
+// 让「只会说 OpenAI Chat Completions 的 agent」也能用 Anthropic / Responses 上游。
+//
+// 客户端说的是哪一套是固定的（WorkBuddy、Cursor 只说 chat），而用户选的「上游接口」
+// 可能不是 chat —— 于是中间必须有本机代理把话说圆。这一批函数就是这条路上的翻译：
+//
+// - `chat_completions_to_anthropic_request` / `anthropic_to_chat_completions_response`
+// - `AnthropicSseToChatConverter`（Anthropic 事件流 → `choices[0].delta` 流）
+// - `chat_completions_to_responses_request` / `responses_to_chat_completions_response`
+// - `ResponsesSseToChatConverter`（Responses 事件流 → `choices[0].delta` 流）
+//
+// 反方向的翻译（Anthropic → Chat 请求、Chat → Anthropic 回应）早就在用，见
+// [anthropic_to_chat_completions_request] 与 [chat_completions_to_anthropic_response]。
+
+/// Chat Completions 的 `tools` → Anthropic 的 `tools`。
+fn chat_tools_to_anthropic(tools: &Value) -> Vec<Value> {
+    tools
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let function = item.get("function")?;
+                    let name = function.get("name").and_then(Value::as_str)?.trim();
+                    if name.is_empty() {
+                        return None;
+                    }
+                    let mut tool = json!({ "name": name });
+                    if let Some(description) = function.get("description").and_then(Value::as_str) {
+                        tool["description"] = json!(description);
+                    }
+                    tool["input_schema"] = function
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or_else(|| json!({ "type": "object", "properties": {} }));
+                    Some(tool)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Chat Completions 的 `tool_choice` → Anthropic 的 `tool_choice`。
+fn chat_tool_choice_to_anthropic(choice: &Value) -> Option<Value> {
+    match choice {
+        Value::String(value) => match value.trim() {
+            "auto" => Some(json!({ "type": "auto" })),
+            "required" => Some(json!({ "type": "any" })),
+            // Anthropic 没有「禁止调用工具」这一档：不给 tool_choice 就等于让它自己决定。
+            _ => None,
+        },
+        Value::Object(object) => object
+            .get("function")
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            .map(|name| json!({ "type": "tool", "name": name })),
+        _ => None,
+    }
+}
+
+/// Chat Completions 的多段 content → Anthropic 的 content blocks。
+fn chat_content_to_anthropic_blocks(content: &Value) -> Vec<Value> {
+    match content {
+        Value::String(text) => {
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![json!({ "type": "text", "text": text })]
+            }
+        }
+        Value::Array(parts) => parts
+            .iter()
+            .filter_map(|part| {
+                let kind = part.get("type").and_then(Value::as_str).unwrap_or("text");
+                match kind {
+                    "text" | "input_text" | "output_text" => part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                        .map(|text| json!({ "type": "text", "text": text })),
+                    _ => None,
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// OpenAI Chat Completions 的请求 → Anthropic Messages 的请求。
+///
+/// Anthropic 要求 `max_tokens` 必填，而 Chat 允许省略 —— 省略时给一个保守的默认值，
+/// 免得上游直接拿 400 回给用户的客户端。
+pub fn chat_completions_to_anthropic_request(body: &Value) -> anyhow::Result<Value> {
+    const FALLBACK_MAX_TOKENS: u64 = 4096;
+
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        anyhow::bail!("请求里没有 model，无法决定上游接口");
+    }
+
+    let mut system_parts: Vec<String> = Vec::new();
+    let mut messages: Vec<Value> = Vec::new();
+    let source = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for message in source {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .trim()
+            .to_string();
+        match role.as_str() {
+            "system" | "developer" => {
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        system_parts.push(text.to_string());
+                    }
+                } else if let Some(text) = message.get("content").and_then(anthropic_blocks_text) {
+                    if !text.trim().is_empty() {
+                        system_parts.push(text);
+                    }
+                }
+            }
+            "tool" => {
+                let tool_use_id = message
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool_use_unknown")
+                    .to_string();
+                let mut block = json!({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                });
+                let content = message.get("content");
+                if let Some(text) = content.and_then(Value::as_str) {
+                    block["content"] = json!([{ "type": "text", "text": text }]);
+                } else if let Some(blocks) = content {
+                    let text = anthropic_blocks_text(blocks).unwrap_or_default();
+                    block["content"] = json!([{ "type": "text", "text": text }]);
+                }
+                messages.push(json!({ "role": "user", "content": [block] }));
+            }
+            _ => {
+                let mut blocks = chat_content_to_anthropic_blocks(
+                    message.get("content").unwrap_or(&Value::Null),
+                );
+                if role == "assistant" {
+                    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                        for call in tool_calls {
+                            let function = call.get("function").cloned().unwrap_or(Value::Null);
+                            let name = function
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("tool")
+                                .to_string();
+                            let arguments = function
+                                .get("arguments")
+                                .and_then(Value::as_str)
+                                .unwrap_or("{}");
+                            let input: Value = serde_json::from_str(arguments)
+                                .unwrap_or_else(|_| json!({ "arguments": arguments }));
+                            blocks.push(json!({
+                                "type": "tool_use",
+                                "id": call
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("tool_use_unknown"),
+                                "name": name,
+                                "input": input,
+                            }));
+                        }
+                    }
+                }
+                if blocks.is_empty() {
+                    continue;
+                }
+                messages.push(json!({ "role": role, "content": blocks }));
+            }
+        }
+    }
+
+    if messages.is_empty() {
+        anyhow::bail!("请求里没有 messages，没什么可以发给上游");
+    }
+
+    let mut request = json!({ "model": model, "messages": messages });
+    if !system_parts.is_empty() {
+        request["system"] = json!(system_parts.join("\n\n"));
+    }
+    request["max_tokens"] = json!(
+        body.get("max_tokens")
+            .or_else(|| body.get("max_completion_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(FALLBACK_MAX_TOKENS)
+    );
+    if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+        request["stream"] = json!(true);
+    }
+    for key in ["temperature", "top_p"] {
+        if let Some(value) = body.get(key).and_then(Value::as_f64) {
+            request[key] = json!(value);
+        }
+    }
+    if let Some(stop) = body.get("stop") {
+        match stop {
+            Value::String(text) => request["stop_sequences"] = json!([text]),
+            Value::Array(_) => request["stop_sequences"] = stop.clone(),
+            _ => {}
+        }
+    }
+    if let Some(tools) = body.get("tools") {
+        let tools = chat_tools_to_anthropic(tools);
+        if !tools.is_empty() {
+            request["tools"] = json!(tools);
+        }
+    }
+    if let Some(choice) = body.get("tool_choice") {
+        if let Some(choice) = chat_tool_choice_to_anthropic(choice) {
+            request["tool_choice"] = choice;
+        }
+    }
+    Ok(request)
+}
+
+/// Anthropic 的 `stop_reason` → Chat Completions 的 `finish_reason`。
+fn anthropic_stop_reason_to_finish_reason(stop_reason: Option<&str>) -> &'static str {
+    match stop_reason {
+        Some("max_tokens") => "length",
+        Some("tool_use") => "tool_calls",
+        Some("refusal") => "content_filter",
+        _ => "stop",
+    }
+}
+
+/// Anthropic Messages 的回应 → OpenAI Chat Completions 的回应。
+pub fn anthropic_to_chat_completions_response(body: &Value) -> anyhow::Result<Value> {
+    let mut text = String::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+    if let Some(blocks) = body.get("content").and_then(Value::as_array) {
+        for block in blocks {
+            match block.get("type").and_then(Value::as_str).unwrap_or("") {
+                "text" => {
+                    if let Some(value) = block.get("text").and_then(Value::as_str) {
+                        text.push_str(value);
+                    }
+                }
+                "tool_use" => tool_calls.push(json!({
+                    "id": block.get("id").and_then(Value::as_str).unwrap_or("call_unknown"),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                        "arguments": serde_json::to_string(
+                            block.get("input").unwrap_or(&json!({}))
+                        )?,
+                    }
+                })),
+                _ => {}
+            }
+        }
+    }
+
+    let finish_reason =
+        anthropic_stop_reason_to_finish_reason(body.get("stop_reason").and_then(Value::as_str));
+    let mut message = json!({ "role": "assistant", "content": text });
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = json!(tool_calls);
+    }
+    let usage = body.get("usage").cloned().unwrap_or_else(|| json!({}));
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let id = body
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("chatcmpl-bridge");
+
+    Ok(json!({
+        "id": id,
+        "object": "chat.completion",
+        "created": 0,
+        "model": body.get("model").and_then(Value::as_str).unwrap_or(""),
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish_reason }],
+        "usage": {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+    }))
+}
+
+/// 写出一个 Chat Completions 风格的 `data:` 分片。
+fn write_chat_chunk(output: &mut String, chunk: &Value) {
+    output.push_str("data: ");
+    output.push_str(&chunk.to_string());
+    output.push_str("\n\n");
+}
+
+/// Chat 分片的公共外壳。
+fn chat_chunk_shell(id: &str, model: &str, delta: Value, finish_reason: Option<&str>) -> Value {
+    json!({
+        "id": id,
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [{ "index": 0, "delta": delta, "finish_reason": finish_reason }],
+    })
+}
+
+/// Anthropic 的事件流 → Chat Completions 的分片流。
+///
+/// Claude 系上游按 `message_start` / `content_block_*` / `message_delta` 说话，而只说
+/// chat 的客户端（WorkBuddy、Cursor）只认 `choices[0].delta` 与结尾的 `[DONE]`。
+#[derive(Default)]
+pub struct AnthropicSseToChatConverter {
+    buffer: String,
+    utf8_remainder: Vec<u8>,
+    model: String,
+    id: String,
+    started: bool,
+    tool_index: i64,
+    open_tools: usize,
+    finish_reason: Option<String>,
+    output_tokens: u64,
+    input_tokens: u64,
+    /// 收尾只发一次：上游可能用 `message_stop` 收尾，也可能只是把连接关掉。
+    done: bool,
+    failed: bool,
+}
+
+impl AnthropicSseToChatConverter {
+    #[must_use]
+    pub fn with_request(original_request: &Value) -> Self {
+        Self {
+            model: original_request
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            id: "chatcmpl-bridge".to_string(),
+            ..Self::default()
+        }
+    }
+
+    fn handle_event(&mut self, event: &str, data: &str, output: &mut String) {
+        if data.trim().is_empty() {
+            return;
+        }
+        let Ok(payload) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        match event {
+            "message_start" => {
+                if let Some(message) = payload.get("message") {
+                    if let Some(model) = message.get("model").and_then(Value::as_str) {
+                        self.model = model.to_string();
+                    }
+                    if let Some(id) = message.get("id").and_then(Value::as_str) {
+                        self.id = id.to_string();
+                    }
+                    self.input_tokens = message
+                        .get("usage")
+                        .and_then(|usage| usage.get("input_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                }
+                if !self.started {
+                    self.started = true;
+                    let chunk = chat_chunk_shell(
+                        &self.id,
+                        &self.model,
+                        json!({ "role": "assistant", "content": "" }),
+                        None,
+                    );
+                    write_chat_chunk(output, &chunk);
+                }
+            }
+            "content_block_start" => {
+                let block = payload.get("content_block").cloned().unwrap_or(Value::Null);
+                if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                    let chunk = chat_chunk_shell(
+                        &self.id,
+                        &self.model,
+                        json!({
+                            "tool_calls": [{
+                                "index": self.tool_index,
+                                "id": block.get("id").and_then(Value::as_str).unwrap_or("call"),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                                    "arguments": "",
+                                }
+                            }]
+                        }),
+                        None,
+                    );
+                    write_chat_chunk(output, &chunk);
+                    self.tool_index += 1;
+                    self.open_tools += 1;
+                }
+            }
+            "content_block_delta" => {
+                let delta = payload.get("delta").cloned().unwrap_or(Value::Null);
+                match delta.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text_delta" => {
+                        if let Some(text) = delta.get("text").and_then(Value::as_str) {
+                            let chunk = chat_chunk_shell(
+                                &self.id,
+                                &self.model,
+                                json!({ "content": text }),
+                                None,
+                            );
+                            write_chat_chunk(output, &chunk);
+                        }
+                    }
+                    "input_json_delta" => {
+                        if let Some(partial) = delta.get("partial_json").and_then(Value::as_str) {
+                            let index = (self.tool_index - self.open_tools as i64).max(0);
+                            let chunk = chat_chunk_shell(
+                                &self.id,
+                                &self.model,
+                                json!({ "tool_calls": [{ "index": index, "function": { "arguments": partial } }] }),
+                                None,
+                            );
+                            write_chat_chunk(output, &chunk);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "message_delta" => {
+                if let Some(stop_reason) = payload
+                    .get("delta")
+                    .and_then(|delta| delta.get("stop_reason"))
+                    .and_then(Value::as_str)
+                {
+                    self.finish_reason = Some(stop_reason.to_string());
+                }
+                self.output_tokens = payload
+                    .get("usage")
+                    .and_then(|usage| usage.get("output_tokens"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(self.output_tokens);
+            }
+            "message_stop" => self.emit_finish(output),
+            "error" => {
+                self.failed = true;
+                write_chat_chunk(output, &payload);
+                output.push_str("data: [DONE]\n\n");
+            }
+            _ => {}
+        }
+    }
+
+    fn emit_finish(&mut self, output: &mut String) {
+        if self.done || self.failed {
+            return;
+        }
+        self.done = true;
+        let reason = anthropic_stop_reason_to_finish_reason(self.finish_reason.as_deref());
+        let mut chunk = chat_chunk_shell(&self.id, &self.model, json!({}), Some(reason));
+        chunk["usage"] = json!({
+            "prompt_tokens": self.input_tokens,
+            "completion_tokens": self.output_tokens,
+            "total_tokens": self.input_tokens + self.output_tokens,
+        });
+        write_chat_chunk(output, &chunk);
+        output.push_str("data: [DONE]\n\n");
+    }
+
+    /// 喂进上游给的一段字节，吐出该发给客户端的 SSE 文本。
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> String {
+        let mut output = String::new();
+        append_utf8_safe(&mut self.buffer, &mut self.utf8_remainder, bytes);
+        while let Some(block) = take_sse_block(&mut self.buffer) {
+            let mut event = String::new();
+            let mut data = String::new();
+            for line in block.lines() {
+                if let Some(value) = strip_sse_field(line, "event") {
+                    event = value.trim().to_string();
+                } else if let Some(value) = strip_sse_field(line, "data") {
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(value);
+                }
+            }
+            if event.is_empty() && data.trim() == "[DONE]" {
+                self.emit_finish(&mut output);
+                continue;
+            }
+            self.handle_event(&event, &data, &mut output);
+        }
+        output
+    }
+
+    /// 上游把连接关了：该收尾就收尾。
+    pub fn finish(&mut self) -> String {
+        let mut output = String::new();
+        self.emit_finish(&mut output);
+        output
+    }
+}
+
+/// 一次性把整段 Anthropic SSE 翻成 Chat 分片（非流式场景用）。
+#[must_use]
+pub fn anthropic_sse_to_chat_sse_with_request(input: &str, original_request: &Value) -> String {
+    let mut converter = AnthropicSseToChatConverter::with_request(original_request);
+    let mut output = converter.push_bytes(input.as_bytes());
+    output.push_str(&converter.finish());
+    output
+}
+
+/// Chat Completions 的请求 → OpenAI Responses 的请求。
+pub fn chat_completions_to_responses_request(body: &Value) -> anyhow::Result<Value> {
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if model.is_empty() {
+        anyhow::bail!("请求里没有 model，无法决定上游接口");
+    }
+
+    let mut instructions: Vec<String> = Vec::new();
+    let mut input: Vec<Value> = Vec::new();
+    let source = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for message in source {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user")
+            .trim()
+            .to_string();
+        match role.as_str() {
+            "system" | "developer" => {
+                if let Some(text) = message.get("content").and_then(Value::as_str) {
+                    if !text.trim().is_empty() {
+                        instructions.push(text.to_string());
+                    }
+                }
+            }
+            "tool" => {
+                let call_id = message
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("call_unknown");
+                let output = message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                input.push(json!({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                }));
+            }
+            _ => {
+                let text = match message.get("content") {
+                    Some(Value::String(text)) => text.clone(),
+                    Some(Value::Array(parts)) => parts
+                        .iter()
+                        .filter_map(|part| {
+                            part.get("text").and_then(Value::as_str).map(str::to_string)
+                        })
+                        .collect::<Vec<_>>()
+                        .join(""),
+                    _ => String::new(),
+                };
+                let kind = if role == "assistant" {
+                    "output_text"
+                } else {
+                    "input_text"
+                };
+                if !text.is_empty() {
+                    input.push(json!({
+                        "type": "message",
+                        "role": role,
+                        "content": [{ "type": kind, "text": text }],
+                    }));
+                }
+                if role == "assistant" {
+                    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+                        for call in tool_calls {
+                            let function = call.get("function").cloned().unwrap_or(Value::Null);
+                            input.push(json!({
+                                "type": "function_call",
+                                "call_id": call.get("id").and_then(Value::as_str).unwrap_or("call_unknown"),
+                                "name": function.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                                "arguments": function.get("arguments").and_then(Value::as_str).unwrap_or("{}"),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if input.is_empty() {
+        anyhow::bail!("请求里没有 messages，没什么可以发给上游");
+    }
+
+    let mut request = json!({ "model": model, "input": input });
+    if !instructions.is_empty() {
+        request["instructions"] = json!(instructions.join("\n\n"));
+    }
+    let max_tokens = body
+        .get("max_tokens")
+        .or_else(|| body.get("max_completion_tokens"))
+        .and_then(Value::as_u64);
+    if let Some(max_tokens) = max_tokens {
+        request["max_output_tokens"] = json!(max_tokens);
+    }
+    if body.get("stream").and_then(Value::as_bool).unwrap_or(false) {
+        request["stream"] = json!(true);
+    }
+    for key in ["temperature", "top_p"] {
+        if let Some(value) = body.get(key).and_then(Value::as_f64) {
+            request[key] = json!(value);
+        }
+    }
+    if let Some(tools) = body.get("tools").and_then(Value::as_array) {
+        let tools: Vec<Value> = tools
+            .iter()
+            .filter_map(|item| {
+                let function = item.get("function")?;
+                let name = function.get("name").and_then(Value::as_str)?.trim();
+                if name.is_empty() {
+                    return None;
+                }
+                let mut tool = json!({ "type": "function", "name": name });
+                if let Some(description) = function.get("description").and_then(Value::as_str) {
+                    tool["description"] = json!(description);
+                }
+                if let Some(parameters) = function.get("parameters") {
+                    tool["parameters"] = parameters.clone();
+                }
+                Some(tool)
+            })
+            .collect();
+        if !tools.is_empty() {
+            request["tools"] = json!(tools);
+        }
+    }
+    Ok(request)
+}
+
+/// OpenAI Responses 的回应 → Chat Completions 的回应。
+pub fn responses_to_chat_completions_response(body: &Value) -> anyhow::Result<Value> {
+    let mut text = String::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+    if let Some(output) = body.get("output").and_then(Value::as_array) {
+        for item in output {
+            match item.get("type").and_then(Value::as_str).unwrap_or("") {
+                "message" => {
+                    if let Some(content) = item.get("content").and_then(Value::as_array) {
+                        for block in content {
+                            if let Some(value) = block.get("text").and_then(Value::as_str) {
+                                text.push_str(value);
+                            }
+                        }
+                    }
+                }
+                "function_call" => tool_calls.push(json!({
+                    "id": item.get("call_id").and_then(Value::as_str).unwrap_or("call_unknown"),
+                    "type": "function",
+                    "function": {
+                        "name": item.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                        "arguments": item.get("arguments").and_then(Value::as_str).unwrap_or("{}"),
+                    }
+                })),
+                _ => {}
+            }
+        }
+    }
+
+    let incomplete = body
+        .get("incomplete_details")
+        .and_then(|details| details.get("reason"))
+        .and_then(Value::as_str);
+    let finish_reason = match incomplete {
+        Some("max_output_tokens") => "length",
+        _ if !tool_calls.is_empty() => "tool_calls",
+        _ => "stop",
+    };
+    let mut message = json!({ "role": "assistant", "content": text });
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = json!(tool_calls);
+    }
+    let usage = body.get("usage").cloned().unwrap_or_else(|| json!({}));
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+
+    Ok(json!({
+        "id": body.get("id").and_then(Value::as_str).unwrap_or("chatcmpl-bridge"),
+        "object": "chat.completion",
+        "created": 0,
+        "model": body.get("model").and_then(Value::as_str).unwrap_or(""),
+        "choices": [{ "index": 0, "message": message, "finish_reason": finish_reason }],
+        "usage": {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }
+    }))
+}
+
+/// Responses 的事件流 → Chat Completions 的分片流。
+#[derive(Default)]
+pub struct ResponsesSseToChatConverter {
+    buffer: String,
+    utf8_remainder: Vec<u8>,
+    model: String,
+    id: String,
+    started: bool,
+    /// `item_id` → (工具序号, 名字)，用来把 `function_call_arguments.delta` 落到正确的
+    /// `tool_calls[index]` 上。
+    tool_items: Vec<(String, i64, String)>,
+    loaded: usize,
+    failed: bool,
+    done: bool,
+}
+
+impl ResponsesSseToChatConverter {
+    #[must_use]
+    pub fn with_request(original_request: &Value) -> Self {
+        Self {
+            model: original_request
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            id: "chatcmpl-bridge".to_string(),
+            ..Self::default()
+        }
+    }
+
+    fn tool_index_for(&self, item_id: &str) -> i64 {
+        self.tool_items
+            .iter()
+            .find(|(id, _, _)| id == item_id)
+            .map(|(_, index, _)| *index)
+            .unwrap_or(0)
+    }
+
+    fn handle_event(&mut self, event: &str, data: &str, output: &mut String) {
+        if data.trim().is_empty() {
+            return;
+        }
+        let Ok(payload) = serde_json::from_str::<Value>(data) else {
+            return;
+        };
+        match event {
+            "response.created" => {
+                if let Some(response) = payload.get("response") {
+                    if let Some(id) = response.get("id").and_then(Value::as_str) {
+                        self.id = id.to_string();
+                    }
+                    if let Some(model) = response.get("model").and_then(Value::as_str) {
+                        self.model = model.to_string();
+                    }
+                }
+                if !self.started {
+                    self.started = true;
+                    let chunk = chat_chunk_shell(
+                        &self.id,
+                        &self.model,
+                        json!({ "role": "assistant", "content": "" }),
+                        None,
+                    );
+                    write_chat_chunk(output, &chunk);
+                }
+            }
+            "response.output_item.added" => {
+                let item = payload.get("item").cloned().unwrap_or(Value::Null);
+                if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                    let item_id = item
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .unwrap_or("item")
+                        .to_string();
+                    let index = self.loaded as i64;
+                    self.loaded += 1;
+                    self.tool_items.push((
+                        item_id,
+                        index,
+                        item.get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tool")
+                            .to_string(),
+                    ));
+                    let chunk = chat_chunk_shell(
+                        &self.id,
+                        &self.model,
+                        json!({
+                            "tool_calls": [{
+                                "index": index,
+                                "id": item.get("call_id").and_then(Value::as_str).unwrap_or("call"),
+                                "type": "function",
+                                "function": {
+                                    "name": item.get("name").and_then(Value::as_str).unwrap_or("tool"),
+                                    "arguments": "",
+                                }
+                            }]
+                        }),
+                        None,
+                    );
+                    write_chat_chunk(output, &chunk);
+                }
+            }
+            "response.output_text.delta" => {
+                if let Some(text) = payload.get("delta").and_then(Value::as_str) {
+                    let chunk =
+                        chat_chunk_shell(&self.id, &self.model, json!({ "content": text }), None);
+                    write_chat_chunk(output, &chunk);
+                }
+            }
+            "response.function_call_arguments.delta" => {
+                let item_id = payload.get("item_id").and_then(Value::as_str).unwrap_or("");
+                if let Some(partial) = payload.get("delta").and_then(Value::as_str) {
+                    let index = self.tool_index_for(item_id);
+                    let chunk = chat_chunk_shell(
+                        &self.id,
+                        &self.model,
+                        json!({ "tool_calls": [{ "index": index, "function": { "arguments": partial } }] }),
+                        None,
+                    );
+                    write_chat_chunk(output, &chunk);
+                }
+            }
+            "response.completed" => {
+                let response = payload.get("response").cloned().unwrap_or(Value::Null);
+                let incomplete = response
+                    .get("incomplete_details")
+                    .and_then(|details| details.get("reason"))
+                    .and_then(Value::as_str);
+                let reason = if incomplete == Some("max_output_tokens") {
+                    "length"
+                } else if self.loaded > 0 {
+                    "tool_calls"
+                } else {
+                    "stop"
+                };
+                let mut chunk = chat_chunk_shell(&self.id, &self.model, json!({}), Some(reason));
+                if let Some(usage) = response.get("usage") {
+                    chunk["usage"] = json!({
+                        "prompt_tokens": usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0),
+                        "completion_tokens": usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0),
+                        "total_tokens": usage.get("total_tokens").and_then(Value::as_u64).unwrap_or(0),
+                    });
+                }
+                write_chat_chunk(output, &chunk);
+                output.push_str("data: [DONE]\n\n");
+                self.done = true;
+            }
+            "response.failed" | "error" => {
+                self.failed = true;
+                write_chat_chunk(output, &payload);
+                output.push_str("data: [DONE]\n\n");
+            }
+            _ => {}
+        }
+    }
+
+    fn emit_finish(&mut self, output: &mut String) {
+        if self.done || self.failed {
+            return;
+        }
+        self.done = true;
+        let reason = if self.loaded > 0 {
+            "tool_calls"
+        } else {
+            "stop"
+        };
+        let chunk = chat_chunk_shell(&self.id, &self.model, json!({}), Some(reason));
+        write_chat_chunk(output, &chunk);
+        output.push_str("data: [DONE]\n\n");
+    }
+
+    /// 喂进上游给的一段字节，吐出该发给客户端的 SSE 文本。
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> String {
+        let mut output = String::new();
+        append_utf8_safe(&mut self.buffer, &mut self.utf8_remainder, bytes);
+        while let Some(block) = take_sse_block(&mut self.buffer) {
+            let mut event = String::new();
+            let mut data = String::new();
+            for line in block.lines() {
+                if let Some(value) = strip_sse_field(line, "event") {
+                    event = value.trim().to_string();
+                } else if let Some(value) = strip_sse_field(line, "data") {
+                    if !data.is_empty() {
+                        data.push('\n');
+                    }
+                    data.push_str(value);
+                }
+            }
+            if event.is_empty() && data.trim() == "[DONE]" {
+                self.emit_finish(&mut output);
+                continue;
+            }
+            self.handle_event(&event, &data, &mut output);
+        }
+        output
+    }
+
+    /// 上游把连接关了：该收尾就收尾。
+    pub fn finish(&mut self) -> String {
+        let mut output = String::new();
+        self.emit_finish(&mut output);
+        output
+    }
+}
+
+/// 一次性把整段 Responses SSE 翻成 Chat 分片（非流式场景用）。
+#[must_use]
+pub fn responses_sse_to_chat_sse_with_request(input: &str, original_request: &Value) -> String {
+    let mut converter = ResponsesSseToChatConverter::with_request(original_request);
+    let mut output = converter.push_bytes(input.as_bytes());
+    output.push_str(&converter.finish());
+    output
+}
 /// 上游该说哪一套话。
 ///
 /// 客户端说的是哪一套是固定的：Claude 系客户端（Claude Code / Claude Desktop）只会说
@@ -3738,6 +4685,228 @@ pub async fn open_chat_completions_proxy_request(
             .map(str::to_string),
         response: upstream,
     })
+}
+
+/// 只认 OpenAI Chat Completions 的 agent（WorkBuddy、Cursor 之类）走的入口端口。
+///
+/// 这些客户端说不出别的协议，所以它连的那家**供应商**只要不是 chat 上游，就得由本机代理
+/// 替它翻译。地址形如 `http://127.0.0.1:<port>/agent/<providerId>/v1/chat/completions`。
+pub const DEFAULT_AGENT_PROXY_PORT: u16 = 57341;
+
+/// 写进 agent 配置文件的地址：本机代理 + 这家供应商的编号。
+pub fn agent_chat_proxy_base_url(provider_id: &str) -> String {
+    format!(
+        "http://127.0.0.1:{}/agent/{provider_id}",
+        recorded_agent_proxy_port()
+    )
+}
+
+/// 记下代理真正绑上的端口（管理器启动它时写），没记过就用默认值。
+fn recorded_agent_proxy_port() -> u16 {
+    if let Some(port) = std::env::var("CCP_AGENT_PROXY_PORT")
+        .ok()
+        .and_then(|value| value.trim().parse::<u16>().ok())
+    {
+        return port;
+    }
+    std::fs::read_to_string(agent_proxy_port_file())
+        .ok()
+        .and_then(|value| value.trim().parse::<u16>().ok())
+        .unwrap_or(DEFAULT_AGENT_PROXY_PORT)
+}
+
+fn agent_proxy_port_file() -> std::path::PathBuf {
+    crate::paths::default_app_state_dir().join("agent-proxy-port")
+}
+
+/// 管理器把代理绑上的端口写在状态目录里，写配置文件的这一侧才读得到。
+pub fn remember_agent_proxy_port(port: u16) -> std::io::Result<()> {
+    std::fs::write(agent_proxy_port_file(), format!("{port}\n"))
+}
+
+const AGENT_PROXY_PREFIX: &str = "/agent/";
+
+/// `/agent/<providerId>/…/chat/completions` → 这家供应商的 id。
+#[must_use]
+pub fn is_agent_chat_proxy_path(path: &str) -> Option<String> {
+    let path = path.split('?').next().unwrap_or(path);
+    let rest = path.strip_prefix(AGENT_PROXY_PREFIX)?;
+    let mut segments = rest.split('/');
+    let provider_id = segments.next().unwrap_or("").trim();
+    if provider_id.is_empty() {
+        return None;
+    }
+    let tail: Vec<&str> = segments.collect();
+    let tail = tail.as_slice();
+    if matches!(
+        tail,
+        ["chat", "completions"]
+            | ["v1", "chat", "completions"]
+            | ["v1", "v1", "chat", "completions"]
+    ) {
+        Some(provider_id.to_string())
+    } else {
+        None
+    }
+}
+
+/// 上游该说哪一套话 —— 由这家供应商自己的「接口格式」决定。
+enum AgentChatUpstream {
+    /// 上游就说 chat：把请求原样递过去。
+    Chat,
+    /// 上游说 Anthropic Messages：一来一回都要翻译。
+    Anthropic,
+    /// 上游说 Responses：一来一回都要翻译。
+    Responses,
+}
+
+fn agent_chat_upstream_for(
+    provider: &crate::agent_providers::AgentProvider,
+) -> anyhow::Result<AgentChatUpstream> {
+    match provider.api_format {
+        crate::agent_providers::ApiFormat::Anthropic => Ok(AgentChatUpstream::Anthropic),
+        crate::agent_providers::ApiFormat::OpenaiResponses => Ok(AgentChatUpstream::Responses),
+        crate::agent_providers::ApiFormat::GeminiNative => anyhow::bail!(
+            "这是 Gemini 原生 generateContent 的供应商，和 OpenAI Chat Completions 之间还没有转换器；请把这家供应商的接口改成 Anthropic Messages 或 OpenAI 兼容。"
+        ),
+        // 说 chat 的供应商（也是这类 agent 一直以来的用法）原样递过去。
+        crate::agent_providers::ApiFormat::OpenaiChat => Ok(AgentChatUpstream::Chat),
+    }
+}
+
+/// 一次 agent 请求算清楚之后要带出去的东西。
+///
+/// 数据库连接（rusqlite）不能跨 `.await` 活着 —— 否则 tokio 就没法把这个 future 派到别的
+/// 线程上跑。所以「读库算计划」与「真的发出去」分成两步。
+struct AgentChatPlan {
+    provider_id: String,
+    request_model: Option<String>,
+    url: String,
+    api_key: String,
+    upstream: AgentChatUpstream,
+    outgoing: Value,
+    is_stream: bool,
+    conversion: Option<ResponseConversion>,
+    target_is_loopback: bool,
+}
+
+/// 读库：这家供应商该说哪一套话、这把请求要发去哪里。
+fn agent_chat_plan_in_store(
+    store: &crate::agent_providers::AgentProviderStore,
+    provider_id: &str,
+    body: &str,
+) -> anyhow::Result<AgentChatPlan> {
+    let (provider, api_key) = store
+        .get_with_key(provider_id)?
+        .ok_or_else(|| anyhow::anyhow!("找不到这家 agent 供应商：{provider_id}"))?;
+    if provider.base_url.trim().is_empty() {
+        anyhow::bail!("这家 agent 供应商还没有填 Base URL");
+    }
+    if api_key.trim().is_empty() {
+        anyhow::bail!("这家 agent 供应商还没有填 Key");
+    }
+
+    let request_json: Value = serde_json::from_str(body)?;
+    let is_stream = request_json
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let upstream = agent_chat_upstream_for(&provider)?;
+    let (url, conversion, outgoing) = match upstream {
+        AgentChatUpstream::Chat => (
+            chat_completions_url(&provider.base_url),
+            None,
+            request_json.clone(),
+        ),
+        AgentChatUpstream::Anthropic => (
+            claude_messages_url(&provider.base_url),
+            Some(ResponseConversion::AnthropicToChat),
+            chat_completions_to_anthropic_request(&request_json)?,
+        ),
+        AgentChatUpstream::Responses => (
+            responses_url(&provider.base_url),
+            Some(ResponseConversion::ResponsesToChat),
+            chat_completions_to_responses_request(&request_json)?,
+        ),
+    };
+
+    Ok(AgentChatPlan {
+        provider_id: provider.id.clone(),
+        request_model: request_json
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        url,
+        api_key,
+        upstream,
+        outgoing,
+        is_stream,
+        conversion,
+        target_is_loopback: crate::http_client::url_target_is_loopback(&provider.base_url),
+    })
+}
+
+/// 发出去：这一步只碰网络，不碰数据库。
+async fn send_agent_chat_plan(plan: AgentChatPlan) -> anyhow::Result<UpstreamProxyResponse> {
+    let AgentChatPlan {
+        provider_id,
+        request_model,
+        url,
+        api_key,
+        upstream,
+        outgoing,
+        is_stream,
+        conversion,
+        target_is_loopback,
+    } = plan;
+    let client = if is_stream {
+        crate::http_client::streaming_proxy_client_for("", target_is_loopback)?
+    } else {
+        crate::http_client::proxied_client_for("", target_is_loopback)?
+    };
+    let mut request = client
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json");
+    request = match upstream {
+        AgentChatUpstream::Anthropic => request
+            .header("x-api-key", api_key.trim())
+            .header("anthropic-version", "2023-06-01"),
+        _ => request.bearer_auth(api_key.trim()),
+    };
+    let upstream_response = request.json(&outgoing).send().await?;
+    let status_code = upstream_response.status().as_u16();
+    let content_type = upstream_response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(UpstreamProxyResponse {
+        status_code,
+        is_stream: is_stream || content_type.contains("text/event-stream"),
+        content_type,
+        requires_response_conversion: conversion.is_some(),
+        response_conversion: conversion,
+        provider_id,
+        request_model,
+        response: upstream_response,
+    })
+}
+
+/// 只认 chat 的 agent 发来的请求 → 真正该发给上游的那一个。
+///
+/// 回来的响应带着 [ResponseConversion]，代理按它把上游的话翻回 chat。
+pub async fn open_agent_chat_proxy_request(
+    provider_id: &str,
+    body: &str,
+) -> anyhow::Result<UpstreamProxyResponse> {
+    // 数据库连接活不过这一行：tokio 要这个 future 是 Send，而 rusqlite 的连接不是 Sync。
+    let plan = {
+        let store = crate::agent_providers::AgentProviderStore::open_default()?;
+        agent_chat_plan_in_store(&store, provider_id, body)?
+    };
+    send_agent_chat_plan(plan).await
 }
 
 pub async fn handle_responses_proxy_request(body: &str) -> anyhow::Result<ProxyHttpResponse> {
@@ -6987,6 +8156,377 @@ mod tests {
         }
         for path in ["/claude-desktop/messages", "/claude-desktop/v1/messages"] {
             assert!(!is_claude_code_messages_proxy_path(path), "{path}");
+        }
+    }
+
+    #[test]
+    fn the_agent_path_names_the_supplier() {
+        for (path, expected) in [
+            ("/agent/workbuddy-1/v1/chat/completions", "workbuddy-1"),
+            ("/agent/workbuddy-1/chat/completions", "workbuddy-1"),
+            ("/agent/workbuddy-1/v1/v1/chat/completions", "workbuddy-1"),
+            ("/agent/workbuddy-1/v1/chat/completions?x=1", "workbuddy-1"),
+        ] {
+            assert_eq!(
+                is_agent_chat_proxy_path(path).as_deref(),
+                Some(expected),
+                "{path}"
+            );
+        }
+        for path in [
+            "/v1/chat/completions",
+            "/agent//v1/chat/completions",
+            "/agent/workbuddy-1/v1/responses",
+            "/agent/workbuddy-1",
+            "/claude-code/v1/messages",
+        ] {
+            assert!(is_agent_chat_proxy_path(path).is_none(), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_chat_request_becomes_an_anthropic_messages_request() {
+        let chat = json!({
+            "model": "glm-5.2",
+            "stream": true,
+            "max_tokens": 512,
+            "stop": ["\n\n"],
+            "messages": [
+                { "role": "system", "content": "你是同事。" },
+                { "role": "user", "content": "把这个函数改成异步的。" },
+                { "role": "assistant", "content": "", "tool_calls": [
+                    { "id": "call_1", "type": "function", "function": { "name": "read_file", "arguments": "{\"path\":\"a.ts\"}" } }
+                ]},
+                { "role": "tool", "tool_call_id": "call_1", "content": "export const a = 1;" }
+            ],
+            "tools": [
+                { "type": "function", "function": { "name": "read_file", "description": "读文件", "parameters": { "type": "object", "properties": { "path": { "type": "string" } } } } }
+            ],
+            "tool_choice": "required"
+        });
+
+        let anthropic =
+            chat_completions_to_anthropic_request(&chat).expect("translate chat to anthropic");
+        assert_eq!(anthropic["model"], "glm-5.2");
+        assert_eq!(anthropic["system"], "你是同事。");
+        assert_eq!(anthropic["max_tokens"], 512);
+        assert_eq!(anthropic["stream"], true);
+        assert_eq!(anthropic["stop_sequences"], json!(["\n\n"]));
+        assert_eq!(anthropic["messages"][0]["role"], "user");
+        assert_eq!(anthropic["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(anthropic["messages"][1]["content"][0]["type"], "tool_use");
+        assert_eq!(
+            anthropic["messages"][1]["content"][0]["input"],
+            json!({ "path": "a.ts" })
+        );
+        assert_eq!(
+            anthropic["messages"][2]["content"][0]["type"],
+            "tool_result"
+        );
+        assert_eq!(
+            anthropic["messages"][2]["content"][0]["tool_use_id"],
+            "call_1"
+        );
+        assert_eq!(anthropic["tools"][0]["name"], "read_file");
+        assert_eq!(anthropic["tools"][0]["input_schema"]["type"], "object");
+        assert_eq!(anthropic["tool_choice"], json!({ "type": "any" }));
+        assert!(anthropic.get("messages_removed").is_none());
+    }
+
+    #[test]
+    fn a_chat_request_without_max_tokens_still_names_one() {
+        let chat = json!({
+            "model": "glm-5.2",
+            "messages": [{ "role": "user", "content": "你好" }]
+        });
+        let anthropic = chat_completions_to_anthropic_request(&chat).expect("translate");
+        assert_eq!(
+            anthropic["max_tokens"], 4096,
+            "Anthropic 必填，缺了就得给个默认值"
+        );
+    }
+
+    #[test]
+    fn an_anthropic_answer_becomes_a_chat_answer() {
+        let anthropic = json!({
+            "id": "msg_1",
+            "model": "glm-5.2",
+            "stop_reason": "tool_use",
+            "content": [
+                { "type": "text", "text": "我先读一下文件。" },
+                { "type": "tool_use", "id": "toolu_1", "name": "read_file", "input": { "path": "a.ts" } }
+            ],
+            "usage": { "input_tokens": 12, "output_tokens": 34 }
+        });
+
+        let chat = anthropic_to_chat_completions_response(&anthropic)
+            .expect("translate anthropic to chat");
+        assert_eq!(chat["choices"][0]["message"]["content"], "我先读一下文件。");
+        assert_eq!(chat["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(
+            chat["choices"][0]["message"]["tool_calls"][0]["id"],
+            "toolu_1"
+        );
+        assert_eq!(
+            chat["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
+            "{\"path\":\"a.ts\"}"
+        );
+        assert_eq!(chat["usage"]["prompt_tokens"], 12);
+        assert_eq!(chat["usage"]["total_tokens"], 46);
+    }
+
+    #[test]
+    fn an_anthropic_stream_becomes_chat_chunks() {
+        let request = json!({ "model": "glm-5.2" });
+        let stream = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_9\",\"model\":\"glm-5.2\",\"usage\":{\"input_tokens\":7}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"好\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+        );
+
+        let chat_sse = anthropic_sse_to_chat_sse_with_request(stream, &request);
+        assert!(chat_sse.contains("\"object\":\"chat.completion.chunk\""));
+        assert!(chat_sse.contains("\"content\":\"好\""));
+        assert!(chat_sse.contains("\"finish_reason\":\"stop\""));
+        assert!(chat_sse.contains("\"prompt_tokens\":7"));
+        assert!(chat_sse.trim_end().ends_with("[DONE]"));
+    }
+
+    #[test]
+    fn a_chat_request_becomes_a_responses_request() {
+        let chat = json!({
+            "model": "gpt-5.2",
+            "max_completion_tokens": 256,
+            "messages": [
+                { "role": "system", "content": "你是同事。" },
+                { "role": "user", "content": "你好" },
+                { "role": "assistant", "tool_calls": [
+                    { "id": "call_7", "type": "function", "function": { "name": "read_file", "arguments": "{\"path\":\"b.ts\"}" } }
+                ]},
+                { "role": "tool", "tool_call_id": "call_7", "content": "export const b = 2;" }
+            ]
+        });
+
+        let responses =
+            chat_completions_to_responses_request(&chat).expect("translate chat to responses");
+        assert_eq!(responses["model"], "gpt-5.2");
+        assert_eq!(responses["instructions"], "你是同事。");
+        assert_eq!(responses["max_output_tokens"], 256);
+        assert_eq!(responses["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(responses["input"][1]["type"], "function_call");
+        assert_eq!(responses["input"][1]["call_id"], "call_7");
+        assert_eq!(responses["input"][2]["type"], "function_call_output");
+        assert!(responses.get("messages").is_none());
+    }
+
+    #[test]
+    fn a_responses_answer_becomes_a_chat_answer() {
+        let responses = json!({
+            "id": "resp_1",
+            "model": "gpt-5.2",
+            "status": "completed",
+            "output": [
+                { "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "好了。" }] },
+                { "type": "function_call", "call_id": "call_9", "name": "read_file", "arguments": "{\"path\":\"c.ts\"}" }
+            ],
+            "usage": { "input_tokens": 5, "output_tokens": 6, "total_tokens": 11 }
+        });
+
+        let chat = responses_to_chat_completions_response(&responses)
+            .expect("translate responses to chat");
+        assert_eq!(chat["choices"][0]["message"]["content"], "好了。");
+        assert_eq!(chat["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(
+            chat["choices"][0]["message"]["tool_calls"][0]["id"],
+            "call_9"
+        );
+        assert_eq!(chat["usage"]["completion_tokens"], 6);
+    }
+
+    #[test]
+    fn a_responses_stream_becomes_chat_chunks() {
+        let request = json!({ "model": "gpt-5.2" });
+        let stream = concat!(
+            "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_2\",\"model\":\"gpt-5.2\"}}\n\n",
+            "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"item_1\",\"type\":\"function_call\",\"call_id\":\"call_2\",\"name\":\"read_file\"}}\n\n",
+            "event: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"item_1\",\"delta\":\"{\\\"path\\\"\"}\n\n",
+            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_2\",\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":4,\"total_tokens\":6}}}\n\n"
+        );
+
+        let chat_sse = responses_sse_to_chat_sse_with_request(stream, &request);
+        assert!(chat_sse.contains("\"tool_calls\""));
+        assert!(chat_sse.contains("\"name\":\"read_file\""));
+        assert!(chat_sse.contains("{\\\"path\\\""));
+        assert!(chat_sse.contains("\"finish_reason\":\"tool_calls\""));
+        assert!(chat_sse.trim_end().ends_with("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn a_chat_only_agent_reaches_an_anthropic_messages_supplier() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(
+                    200,
+                    r#"{"id":"msg_1","model":"glm-5.2","content":[{"type":"text","text":"好"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"#,
+                )],
+            )
+        });
+
+        let directory = tempfile::tempdir().expect("create temporary database directory");
+        let mut store =
+            crate::agent_providers::AgentProviderStore::open(&directory.path().join("ccp.db"))
+                .expect("open agent provider store");
+        let mut provider = agent_provider(
+            crate::agent_providers::ApiFormat::Anthropic,
+            format!("http://{address}"),
+        );
+        let saved = store.save(&mut provider).expect("save the agent supplier");
+
+        let opened = open_agent_chat_proxy_request_for_test(
+            &store,
+            &saved.id,
+            r#"{"model":"glm-5.2","messages":[{"role":"user","content":"你好"}],"stream":false}"#,
+        )
+        .await
+        .expect("open the agent chat request");
+
+        assert_eq!(
+            opened.response_conversion,
+            Some(ResponseConversion::AnthropicToChat)
+        );
+        assert_eq!(opened.status_code, 200);
+
+        let requests = server.join().expect("join mock upstream");
+        assert!(
+            requests[0].starts_with("POST /v1/messages HTTP/1.1"),
+            "{requests:?}"
+        );
+        assert!(
+            requests[0].contains("x-api-key: agent-test-key"),
+            "{requests:?}"
+        );
+        assert!(
+            requests[0].contains("anthropic-version: 2023-06-01"),
+            "{requests:?}"
+        );
+        assert!(requests[0].contains(r#""max_tokens":"#), "{requests:?}");
+        assert!(
+            !requests[0].contains(r#""messages":[{"role":"user","content":""#),
+            "{requests:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_chat_only_agent_reaches_a_responses_supplier() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock upstream");
+        let address = listener.local_addr().expect("read mock upstream address");
+        let server = thread::spawn(move || {
+            capture_mock_upstream_requests(
+                listener,
+                vec![(
+                    200,
+                    r#"{"id":"resp_1","model":"gpt-5.2","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}"#,
+                )],
+            )
+        });
+
+        let directory = tempfile::tempdir().expect("create temporary database directory");
+        let mut store =
+            crate::agent_providers::AgentProviderStore::open(&directory.path().join("ccp.db"))
+                .expect("open agent provider store");
+        let mut provider = agent_provider(
+            crate::agent_providers::ApiFormat::OpenaiResponses,
+            format!("http://{address}"),
+        );
+        let saved = store.save(&mut provider).expect("save the agent supplier");
+
+        let opened = open_agent_chat_proxy_request_for_test(
+            &store,
+            &saved.id,
+            r#"{"model":"gpt-5.2","messages":[{"role":"user","content":"你好"}],"stream":false}"#,
+        )
+        .await
+        .expect("open the agent chat request");
+
+        assert_eq!(
+            opened.response_conversion,
+            Some(ResponseConversion::ResponsesToChat)
+        );
+
+        let requests = server.join().expect("join mock upstream");
+        assert!(
+            requests[0].starts_with("POST /v1/responses HTTP/1.1"),
+            "{requests:?}"
+        );
+        assert!(
+            requests[0].contains("authorization: Bearer agent-test-key"),
+            "{requests:?}"
+        );
+        assert!(requests[0].contains(r#""input":"#), "{requests:?}");
+        assert!(!requests[0].contains(r#""messages""#), "{requests:?}");
+    }
+
+    #[tokio::test]
+    async fn a_gemini_native_supplier_says_so_instead_of_guessing() {
+        let directory = tempfile::tempdir().expect("create temporary database directory");
+        let mut store =
+            crate::agent_providers::AgentProviderStore::open(&directory.path().join("ccp.db"))
+                .expect("open agent provider store");
+        let mut provider = agent_provider(
+            crate::agent_providers::ApiFormat::GeminiNative,
+            "https://generativelanguage.googleapis.com".to_string(),
+        );
+        let saved = store.save(&mut provider).expect("save the agent supplier");
+
+        let error = agent_chat_plan_in_store(
+            &store,
+            &saved.id,
+            r#"{"model":"gemini-2.0","messages":[{"role":"user","content":"你好"}]}"#,
+        )
+        .map(|_| ())
+        .expect_err("Gemini native must not be guessed at");
+        assert!(error.to_string().contains("Gemini 原生"), "{error}");
+    }
+
+    /// 测试用：把库交给它，其余与线上那条路一模一样。
+    /// 测试用：库由调用方给，其余与线上那条路一模一样。
+    async fn open_agent_chat_proxy_request_for_test(
+        store: &crate::agent_providers::AgentProviderStore,
+        provider_id: &str,
+        body: &str,
+    ) -> anyhow::Result<UpstreamProxyResponse> {
+        let plan = agent_chat_plan_in_store(store, provider_id, body)?;
+        send_agent_chat_plan(plan).await
+    }
+
+    fn agent_provider(
+        format: crate::agent_providers::ApiFormat,
+        base_url: String,
+    ) -> crate::agent_providers::AgentProvider {
+        crate::agent_providers::AgentProvider {
+            id: String::new(),
+            // gemini 原生只属于 gemini 那家；其余格式都用只认 chat 的 workbuddy 来试。
+            app_id: if format == crate::agent_providers::ApiFormat::GeminiNative {
+                "gemini"
+            } else {
+                "workbuddy"
+            }
+            .to_string(),
+            name: "国产模型中转".to_string(),
+            base_url,
+            api_key: Some("agent-test-key".to_string()),
+            has_api_key: true,
+            api_format: format,
+            models: vec!["glm-5.2".to_string()],
+            default_model: "glm-5.2".to_string(),
+            notes: String::new(),
+            sort_index: 0,
         }
     }
 

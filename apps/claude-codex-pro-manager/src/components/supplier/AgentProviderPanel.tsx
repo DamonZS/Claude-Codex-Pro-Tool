@@ -289,6 +289,9 @@ function AgentProviderEditor({
               </select>
             </label>
           ) : null}
+          {formats.length > 1 && draft.apiFormat !== "openai-chat" ? (
+            <small className="ap-hint">这个 Agent 只会说 Chat Completions。选了别的格式，CCP 会把地址写成它自己在本机的代理 —— 由代理替它转成上游要的那套协议。</small>
+          ) : null}
           <label className={`st-input${show("models") ? " invalid" : ""}`}>
             <span>模型</span>
             <textarea onChange={(event) => setModelsText(event.target.value)} placeholder={"每行一个，或用逗号分隔"} rows={4} spellCheck={false} value={modelsText} />

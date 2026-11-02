@@ -77,6 +77,7 @@ mod settings_commands;
 pub use settings_commands::*;
 
 static CLAUDE_DESKTOP_PROXY_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
+static AGENT_PROXY_PORT: OnceLock<Mutex<Option<u16>>> = OnceLock::new();
 static SETTINGS_WRITE_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 static SETTINGS_SAVE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -1854,6 +1855,71 @@ pub async fn open_claude_desktop() -> CommandResult<ClaudeDesktopActionPayload> 
     };
     log_claude_desktop_command("open", &command_result);
     command_result
+}
+
+/// 确保给配置文件型 agent 用的那条代理入口在线，返回它绑上的端口。
+///
+/// 只认 chat 的 agent 一旦选了非 chat 的上游，配置里要写的就是这个端口。
+pub fn ensure_agent_proxy_helper_blocking() -> anyhow::Result<u16> {
+    if let Some(port) = cached_agent_proxy_port() {
+        return Ok(port);
+    }
+    tauri::async_runtime::block_on(ensure_agent_proxy_helper())
+}
+
+async fn ensure_agent_proxy_helper() -> anyhow::Result<u16> {
+    if let Some(port) = cached_agent_proxy_port() {
+        if claude_codex_pro_core::launcher::ensure_detached_helper(port)
+            .await
+            .is_ok()
+        {
+            return Ok(port);
+        }
+    }
+    let preferred = claude_codex_pro_core::protocol_proxy::DEFAULT_AGENT_PROXY_PORT;
+    match claude_codex_pro_core::launcher::ensure_detached_helper(preferred).await {
+        Ok(()) => {
+            set_cached_agent_proxy_port(preferred);
+            Ok(preferred)
+        }
+        Err(first_error) => {
+            let fallback = claude_codex_pro_core::ports::find_available_loopback_port();
+            if fallback == 0 || fallback == preferred {
+                return Err(first_error);
+            }
+            claude_codex_pro_core::launcher::ensure_detached_helper(fallback)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Agent 代理回退端口 {fallback} 启动失败（首选端口 {preferred} 也已失败）：{first_error}"
+                    )
+                })?;
+            set_cached_agent_proxy_port(fallback);
+            log_manager_event(
+                "manager.agent_proxy.fallback_port",
+                json!({
+                    "preferredPort": preferred,
+                    "fallbackPort": fallback,
+                    "reason": first_error.to_string()
+                }),
+            );
+            Ok(fallback)
+        }
+    }
+}
+
+fn cached_agent_proxy_port() -> Option<u16> {
+    AGENT_PROXY_PORT
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|guard| *guard)
+}
+
+fn set_cached_agent_proxy_port(port: u16) {
+    if let Ok(mut guard) = AGENT_PROXY_PORT.get_or_init(|| Mutex::new(None)).lock() {
+        *guard = Some(port);
+    }
 }
 
 async fn ensure_claude_desktop_proxy_helper() -> anyhow::Result<u16> {

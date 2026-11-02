@@ -1181,6 +1181,7 @@ async fn handle_helper_connection(
     // so it is answered normally by the handlers below.
     let is_proxy_path = crate::protocol_proxy::is_responses_proxy_path(path)
         || crate::protocol_proxy::is_chat_completions_proxy_path(path)
+        || crate::protocol_proxy::is_agent_chat_proxy_path(path).is_some()
         || crate::protocol_proxy::is_claude_desktop_gateway_health_path(path)
         || crate::protocol_proxy::is_claude_desktop_count_tokens_proxy_path(path)
         || crate::protocol_proxy::is_claude_desktop_messages_proxy_path(path)
@@ -1221,6 +1222,19 @@ async fn handle_helper_connection(
             remote_addr_text,
         )
         .await;
+    }
+    if let Some(provider_id) = crate::protocol_proxy::is_agent_chat_proxy_path(path) {
+        if method == "POST" {
+            return handle_agent_chat_proxy_connection(
+                &mut stream,
+                &provider_id,
+                request_body,
+                method,
+                path,
+                remote_addr_text,
+            )
+            .await;
+        }
     }
     if crate::protocol_proxy::is_chat_completions_proxy_path(path) && method == "POST" {
         return handle_chat_completions_proxy_connection(
@@ -1962,6 +1976,159 @@ async fn handle_chat_completions_proxy_connection(
     Ok(())
 }
 
+async fn handle_agent_chat_proxy_connection(
+    stream: &mut tokio::net::TcpStream,
+    provider_id: &str,
+    request_body: &str,
+    method: &str,
+    path: &str,
+    remote_addr_text: Option<String>,
+) -> anyhow::Result<()> {
+    let mut telemetry =
+        crate::request_telemetry::RequestObservation::capture("agent", "chat_completions", request_body);
+    let upstream =
+        match crate::protocol_proxy::open_agent_chat_proxy_request(provider_id, request_body).await {
+            Ok(upstream) => upstream,
+            Err(error) => {
+                let body = serde_json::to_vec(&serde_json::json!({
+                    "status": "failed",
+                    "message": error.to_string()
+                }))?;
+                write_http_response(
+                    stream,
+                    "502 Bad Gateway",
+                    "application/json; charset=utf-8",
+                    &body,
+                )
+                .await?;
+                log_helper_response(
+                    "helper.agent_chat_proxy_failed",
+                    method,
+                    path,
+                    "502 Bad Gateway",
+                    remote_addr_text,
+                );
+                stream.shutdown().await?;
+                return Ok(());
+            }
+        };
+
+    telemetry.upstream(
+        upstream.status_code,
+        upstream.is_stream,
+        "chat_completions",
+        Some(&upstream.provider_id),
+        upstream.request_model.as_deref(),
+    );
+    let status = upstream.status();
+    let is_success = upstream.is_success();
+    let content_type = if upstream.content_type.is_empty() {
+        "application/json; charset=utf-8".to_string()
+    } else {
+        upstream.content_type.clone()
+    };
+    let original_request: serde_json::Value =
+        serde_json::from_str(request_body).unwrap_or(serde_json::Value::Null);
+    let conversion = upstream.response_conversion;
+
+    if upstream.is_stream && is_success {
+        write_http_stream_headers(stream, &status, &content_type).await?;
+        let mut anthropic_bridge = match conversion {
+            Some(crate::protocol_proxy::ResponseConversion::AnthropicToChat) => {
+                Some(crate::protocol_proxy::AnthropicSseToChatConverter::with_request(&original_request))
+            }
+            _ => None,
+        };
+        let mut responses_bridge = match conversion {
+            Some(crate::protocol_proxy::ResponseConversion::ResponsesToChat) => {
+                Some(crate::protocol_proxy::ResponsesSseToChatConverter::with_request(&original_request))
+            }
+            _ => None,
+        };
+        let mut bytes_stream = upstream.response.bytes_stream();
+        while let Some(chunk) = bytes_stream.next().await {
+            let chunk = chunk.inspect_err(|_| {
+                telemetry.fail(crate::request_telemetry::RequestFailure::Stream)
+            })?;
+            telemetry.push_bytes(&chunk);
+            let converted = if let Some(bridge) = anthropic_bridge.as_mut() {
+                bridge.push_bytes(&chunk).into_bytes()
+            } else if let Some(bridge) = responses_bridge.as_mut() {
+                bridge.push_bytes(&chunk).into_bytes()
+            } else {
+                chunk.to_vec()
+            };
+            if converted.is_empty() {
+                continue;
+            }
+            stream.write_all(&converted).await?;
+        }
+        let mut tail = Vec::new();
+        if let Some(bridge) = anthropic_bridge.as_mut() {
+            tail.extend(bridge.finish().into_bytes());
+        }
+        if let Some(bridge) = responses_bridge.as_mut() {
+            tail.extend(bridge.finish().into_bytes());
+        }
+        if !tail.is_empty() {
+            stream.write_all(&tail).await?;
+        }
+        log_helper_response(
+            "helper.agent_chat_proxy_stream_ok",
+            method,
+            path,
+            &status,
+            remote_addr_text,
+        );
+        stream.shutdown().await?;
+        telemetry.finish();
+        return Ok(());
+    }
+
+    let body = read_observed_proxy_body(upstream.response, &mut telemetry).await?;
+    let (content_type, body) = match (is_success, conversion) {
+        (true, Some(conversion)) => {
+            let converted = serde_json::from_slice::<serde_json::Value>(&body)
+                .map_err(anyhow::Error::from)
+                .and_then(|upstream_json| match conversion {
+                    crate::protocol_proxy::ResponseConversion::AnthropicToChat => {
+                        crate::protocol_proxy::anthropic_to_chat_completions_response(&upstream_json)
+                    }
+                    crate::protocol_proxy::ResponseConversion::ResponsesToChat => {
+                        crate::protocol_proxy::responses_to_chat_completions_response(&upstream_json)
+                    }
+                    _ => Ok(upstream_json),
+                })
+                .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from));
+            match converted {
+                Ok(bytes) => ("application/json; charset=utf-8".to_string(), bytes),
+                Err(error) => (
+                    "application/json; charset=utf-8".to_string(),
+                    serde_json::to_vec(&serde_json::json!({
+                        "status": "failed",
+                        "message": format!("上游的回应无法转成 OpenAI Chat Completions：{error}")
+                    }))?,
+                ),
+            }
+        }
+        _ => (content_type, body),
+    };
+    write_http_response(stream, &status, &content_type, &body).await?;
+    log_helper_response(
+        if is_success {
+            "helper.agent_chat_proxy_ok"
+        } else {
+            "helper.agent_chat_proxy_upstream_error"
+        },
+        method,
+        path,
+        &status,
+        remote_addr_text,
+    );
+    stream.shutdown().await?;
+    telemetry.finish();
+    Ok(())
+}
 async fn read_observed_proxy_body(
     response: reqwest::Response,
     telemetry: &mut crate::request_telemetry::RequestObservation,
@@ -2541,6 +2708,9 @@ async fn handle_claude_desktop_messages_proxy_connection(
                     crate::protocol_proxy::ResponseConversion::AnthropicToResponses => {
                         Ok(upstream_json)
                     }
+                    // agent 那条路才会出现，Claude 客户端这里用不到。
+                    crate::protocol_proxy::ResponseConversion::AnthropicToChat
+                    | crate::protocol_proxy::ResponseConversion::ResponsesToChat => Ok(upstream_json),
                 })
                 .and_then(|message| serde_json::to_vec(&message).map_err(anyhow::Error::from));
             match converted {

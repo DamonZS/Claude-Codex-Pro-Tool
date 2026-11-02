@@ -82,9 +82,26 @@ pub fn allowed_formats(app_id: &str) -> &'static [ApiFormat] {
         "openclaw" | "pi" => &[OpenaiChat, OpenaiResponses, Anthropic],
         "hermes" => &[OpenaiChat, Anthropic],
         "mcode" => &[Anthropic, OpenaiChat, OpenaiResponses],
-        "workbuddy" | "cursor" => &[OpenaiChat],
+        // 只认 chat 的两个 agent 也允许选别的上游格式：选了就由本机代理替它们转。
+        "workbuddy" | "cursor" => &[OpenaiChat, Anthropic, OpenaiResponses],
         _ => &[],
     }
+}
+
+/// 这个供应商选的接口，是不是 agent 自己就会说的那一种。
+pub fn agent_chat_needs_proxy(api_format: ApiFormat) -> bool {
+    api_format != ApiFormat::OpenaiChat
+}
+/// Where a chat-only agent should actually send its requests.
+///
+/// Chat upstreams are written as they are. Anything else — Anthropic Messages, the Responses
+/// API — cannot be spoken by these agents at all, so they are pointed at the local proxy that
+/// translates on their behalf.
+pub fn agent_chat_base_url(provider: &AgentProvider) -> String {
+    if provider.api_format == ApiFormat::OpenaiChat {
+        return provider.base_url.clone();
+    }
+    crate::protocol_proxy::agent_chat_proxy_base_url(&provider.id)
 }
 
 /// A supplier stored for one config-file agent.
@@ -758,11 +775,13 @@ mod tests {
         blank_model.models = vec!["  ".to_string()];
         assert!(validate(&blank_model, true).is_err(), "空白模型必须失败");
 
+        // chat-only 的 agent 现在允许选 Anthropic / Responses 上游（本机代理替它转），
+        // 但 gemini 原生依然只有 gemini 那家能用。
         let mut wrong_format = good.clone();
-        wrong_format.api_format = ApiFormat::Anthropic;
+        wrong_format.api_format = ApiFormat::GeminiNative;
         assert!(
             validate(&wrong_format, true).is_err(),
-            "workbuddy 不支持 anthropic"
+            "workbuddy 不接受 gemini 原生"
         );
 
         let mut no_default = provider("gemini");
@@ -917,8 +936,16 @@ mod tests {
         assert_eq!(apply_mode("workbuddy"), Some(ApplyMode::Additive));
         assert_eq!(apply_mode("nope"), None);
 
-        assert_eq!(allowed_formats("workbuddy"), &[ApiFormat::OpenaiChat]);
-        assert_eq!(allowed_formats("cursor"), &[ApiFormat::OpenaiChat]);
+        assert_eq!(
+            allowed_formats("workbuddy"),
+            &[
+                ApiFormat::OpenaiChat,
+                ApiFormat::Anthropic,
+                ApiFormat::OpenaiResponses
+            ]
+        );
+        // 只认 chat 的 agent 也能选别的上游：选了就由本机代理替它转。
+        assert_eq!(allowed_formats("cursor"), allowed_formats("workbuddy"));
         assert_eq!(allowed_formats("gemini"), &[ApiFormat::GeminiNative]);
         assert_eq!(
             allowed_formats("grok"),

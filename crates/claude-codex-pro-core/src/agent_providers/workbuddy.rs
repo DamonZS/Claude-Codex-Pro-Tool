@@ -28,7 +28,7 @@ impl AgentWriter for WorkBuddyWriter {
 
         // 只清理自己写过的元素，用户手写的元素保持原样。
         entries.retain(|entry| entry.get(OWNER_KEY).and_then(|v| v.as_str()) != Some(&provider.id));
-        let url = chat_completions_url(&provider.base_url);
+        let url = chat_completions_url(&super::agent_chat_base_url(provider));
         for model in &provider.models {
             entries.push(serde_json::json!({
                 "id": model,
@@ -174,6 +174,24 @@ mod tests {
         assert_eq!(entries[0]["id"], "user-model");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_non_chat_upstream_is_written_as_our_proxy() {
+        let dir = temp_dir("workbuddy-proxy");
+        let mut supplier = provider("wb-1", &["glm-5.2"], "https://api.example.com");
+        supplier.api_format = crate::agent_providers::ApiFormat::Anthropic;
+
+        WorkBuddyWriter
+            .apply(&dir, &supplier, "sk-1")
+            .expect("write the workbuddy file");
+
+        let entries = read_entries(&dir.join(CONFIG_FILE));
+        let url = entries[0]["url"].as_str().unwrap_or_default();
+        assert_eq!(
+            url,
+            crate::protocol_proxy::agent_chat_proxy_base_url("wb-1") + "/chat/completions"
+        );
     }
 
     #[test]
