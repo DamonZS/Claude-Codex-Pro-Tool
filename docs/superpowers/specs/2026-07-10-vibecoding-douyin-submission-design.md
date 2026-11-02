@@ -2,7 +2,7 @@
 
 ## 目标
 
-为 Claude Codex Pro Tool 准备第一篇面向开发者的抖音 VibeCoding 大赏投稿，突出项目的本地 AI 工具控制台定位、工程实现和 VibeCoding 开发过程。
+为 CCP（Claude-Codex-Pro-Tool） 准备第一篇面向开发者的抖音 VibeCoding 大赏投稿，突出项目的本地 AI 工具控制台定位、工程实现和 VibeCoding 开发过程。
 
 ## 受众与定位
 

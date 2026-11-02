@@ -2,7 +2,7 @@
 
 > 主题：为开发者做一个本地 AI 运维控制台
 >
-> 项目：Claude Codex Pro Tool
+> 项目：CCP（Claude-Codex-Pro-Tool）
 >
 > 适用平台：抖音、小红书、小黑盒
 
@@ -26,7 +26,7 @@
 
 以前用 Codex、Claude Desktop 和各种 MCP 工具时，配置、插件、会话、记忆和更新都散落在不同地方。
 
-所以我做了一个本地 AI 工作台：Claude Codex Pro Tool。
+所以我做了一个本地 AI 工作台：CCP（Claude-Codex-Pro-Tool）。
 
 它基于 Rust + Tauri + React，支持多供应商/Profile 切换、Codex 启动增强、Claude Desktop 管理、插件中心、Ponytail、MCP、盘古记忆、Zed Remote、Watcher 自恢复和自动更新。
 
@@ -56,7 +56,7 @@
 
 ### 正文
 
-最近在做一个自己的 AI 开发工具控制台：Claude Codex Pro Tool。
+最近在做一个自己的 AI 开发工具控制台：CCP（Claude-Codex-Pro-Tool）。
 
 最初的想法很简单——Codex、Claude Desktop、MCP、插件、Skills、供应商配置和历史会话，全部都需要单独管理，时间久了很容易变成：
 
@@ -114,7 +114,7 @@ AI 编程工具越来越多之后，真正麻烦的往往不是调用模型，�
 - Agent 之间如何共享长期经验。
 - Watcher、更新和 Release 如何维护。
 
-Claude Codex Pro Tool 的做法，是把这些能力整合到一个本地 Tauri 管理工具中。
+CCP（Claude-Codex-Pro-Tool） 的做法，是把这些能力整合到一个本地 Tauri 管理工具中。
 
 整体结构分为几层：
 

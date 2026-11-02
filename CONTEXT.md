@@ -1,8 +1,8 @@
-# Claude Codex Pro Tool Context
+# CCP（Claude-Codex-Pro-Tool） Context
 
 ## Purpose
 
-Claude Codex Pro Tool is a local operations console for Codex App and Claude Desktop. It combines Codex enhancement, provider/profile switching, plugin and skill management, launcher maintenance, update tooling, and release packaging in one Rust + Tauri + React workspace.
+CCP（Claude-Codex-Pro-Tool） is a local operations console for Codex App and Claude Desktop. It combines Codex enhancement, provider/profile switching, plugin and skill management, launcher maintenance, update tooling, and release packaging in one Rust + Tauri + React workspace.
 
 ## Domain Vocabulary
 

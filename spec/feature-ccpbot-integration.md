@@ -4,7 +4,7 @@
 
 CCP-Bot（原 OpenBot，已完成中文化与品牌改名）是一个独立部署的 Web 应用栈：`app`（React/Vite，默认 :3010）与 `server`（Hono，默认 :3001）在开发模式下由 `bun run dev` 于宿主机并行启动，生产模式下以 Docker Compose 编排（postgres / server / worker / agent-* / supervisor）。
 
-用户本机的 CCP-Bot 源码位于 `D:\Project\OpenBot`。日常工作在 CCP（Claude Codex Pro Tool）中完成，切到浏览器开另一个标签页看 CCP-Bot 打断工作流：两套窗口、两套滚动位置、两套剪贴板焦点。用户据此提出把 CCP-Bot 整合进 CCP。
+用户本机的 CCP-Bot 源码位于 `D:\Project\OpenBot`。日常工作在 CCP（CCP（Claude-Codex-Pro-Tool））中完成，切到浏览器开另一个标签页看 CCP-Bot 打断工作流：两套窗口、两套滚动位置、两套剪贴板焦点。用户据此提出把 CCP-Bot 整合进 CCP。
 
 整合有三种形态，本规格只覆盖第一种：
 

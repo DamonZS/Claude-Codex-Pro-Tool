@@ -1,6 +1,6 @@
 # Maintainers
 
-This file records the official maintainers for Claude Codex Pro Tool.
+This file records the official maintainers for CCP（Claude-Codex-Pro-Tool）.
 
 Repository: <https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
