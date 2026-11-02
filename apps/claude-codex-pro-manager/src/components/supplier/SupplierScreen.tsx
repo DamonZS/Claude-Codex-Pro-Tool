@@ -1396,7 +1396,7 @@ env_key = "OPENAI_API_KEY"
                       <Button onClick={addSupplierDirectModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
                     </div>
                   </div>
-                  <p className="supplier-inline-note">配置 Claude Desktop 可用的 Sonnet、Opus、Haiku、Fable 模型。留空时 Claude Desktop 会自动读取 /v1/models；勾选 1M 会声明支持 1M 上下文。</p>
+                  <p className="supplier-inline-note">配置 Claude Desktop 可用的 Sonnet、Opus、Haiku、Fable 模型。留空时 Claude Desktop 会自动读取 /v1/models；勾选 1M 会声明支持 1M 上下文。这些模型会写进 Claude Desktop 自己的模型清单（inferenceModels）；下面的配置 JSON 只写默认模型，那里只有一个模型是正常的。</p>
                   {supplierDirectModels.length ? (
                     <div className="supplier-direct-model-rows">
                       {supplierDirectModels.map((row, index) => (
@@ -1438,7 +1438,7 @@ env_key = "OPENAI_API_KEY"
                     <Button onClick={addSupplierCodexCatalogModel} type="button" variant="outline"><Plus className="h-4 w-4" />添加模型</Button>
                   </div>
                 </div>
-                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；勾选 1M 直接落 1000000 上下文，不勾时按「最大上下文」的 K 值生效（留空默认 256K）。</p>
+                <p className="supplier-inline-note">菜单显示名用于 Codex 模型选择；实际请求模型发送给上游；勾选 1M 直接落 1000000 上下文，不勾时按「最大上下文」的 K 值生效（留空默认 256K）。这些行会写进 Codex 的模型目录 ~/.codex/model-catalogs/relay-（档案 id）.json，config.toml 里只记一句「去哪读」——所以 config.toml 看上去只有一个模型是正常的；改完列表要点「保存并使用」才会重写目录。</p>
                 <div className="supplier-codex-catalog-grid header"><span>菜单显示名</span><span>实际请求模型</span><span>1M 上下文</span><span>最大上下文（K）</span><span /></div>
                 {supplierCodexCatalogModels.length ? supplierCodexCatalogModels.map((row, index) => (
                   <div className="supplier-codex-catalog-grid" key={row.rowId}>

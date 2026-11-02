@@ -3132,6 +3132,60 @@ mod tests {
     }
 
     #[test]
+    fn the_models_of_a_codex_supplier_land_in_its_catalog_file() {
+        // 桌面上的现象：供应商里填了五个模型，~/.codex/model-catalogs/relay-gpt.json
+        // 却还是旧的。这条测试走真实的应用路径（apply_relay_profile_to_home_…），
+        // 断言列表里的每个模型都进了目录文件，config.toml 也指过去。
+        let home = std::env::temp_dir().join(format!(
+            "ccp-catalog-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+
+        let profile = RelayProfile {
+            id: "gpt".to_string(),
+            name: "GPT".to_string(),
+            target_app: "codex".to_string(),
+            base_url: "https://upstream.example.com".to_string(),
+            api_key: "sk-test".to_string(),
+            protocol: RelayProtocol::Responses,
+            api_format: "OpenAI Responses API".to_string(),
+            relay_mode: crate::settings::RelayMode::PureApi,
+            model: "gpt-6.1-sol".to_string(),
+            model_list: "gpt-6.1-sol\ngpt-6-astra\ngpt-5.6-sol".to_string(),
+            ..RelayProfile::default()
+        };
+
+        apply_relay_profile_to_home_with_switch_rules(&home, &profile, "").expect("apply");
+
+        let catalog_path = home.join("model-catalogs").join("relay-gpt.json");
+        let catalog = std::fs::read_to_string(&catalog_path)
+            .unwrap_or_else(|error| panic!("{}: {error}", catalog_path.display()));
+        let parsed: Value = serde_json::from_str(&catalog).expect("catalog json");
+        let models: Vec<String> = parsed["models"]
+            .as_array()
+            .expect("models")
+            .iter()
+            .filter_map(|entry| entry["slug"].as_str().map(ToString::to_string))
+            .collect();
+        assert_eq!(
+            models,
+            vec!["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-sol"],
+            "{catalog}"
+        );
+
+        let config = std::fs::read_to_string(home.join("config.toml")).expect("config.toml");
+        assert!(config.contains("model_catalog_json"), "{config}");
+        assert!(config.contains("relay-gpt.json"), "{config}");
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+    #[test]
     fn the_api_format_rule_reads_the_users_wording() {
         for value in [
             "Anthropic Messages",
