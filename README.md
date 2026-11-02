@@ -50,6 +50,12 @@
   <a href="#常见问题">常见问题</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/DamonZS/Claude-Codex-Pro-Tool/stargazers"><b>⭐ 点个 Star</b></a>
+  <sub>如果它帮到了你，这是最实际的鼓励</sub>
+</p>
+
+<p align="center"><sub><b>English?</b> CCP is a local Rust + Tauri control panel for Codex App / Claude Desktop / Claude Code on Windows & macOS. <a href="README_EN.md">Read the English README →</a></sub></p>
 >
 > English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**: a token-usage dashboard across AI coding agents, a cc-switch-style third-party API provider switcher, a session-to-Skill distillation workbench, and a built-in **Computer Use MCP** for Claude Desktop.
 
@@ -85,6 +91,20 @@
 - 想把反复踩的坑和成熟流程沉淀成 Skill，而不是每次重新解释。
 - 希望功能真实可验证，不想要“按钮看起来有、实际没实现”。
 
+## 和同类工具比
+
+先说实话：**如果你只是想在中转之间快速切换，任何切换器都够用**。CCP 值得装，是因为它把「运维」也一起做了 —— 下面这些都在同一个窗口里，数据只在本机：
+
+| 你会遇到的事 | 手动改配置文件 | 只做切换的工具 | CCP |
+|---|---|---|---|
+| 换供应商 / 中转 | 每次都要改 TOML / JSON，容易改乱 | 它的强项 | 三个客户端各自记住当前供应商，互不影响 |
+| 想知道 Token 花在哪 | 只能翻日志 | — | 本机只读采集 + 看板、缓存命中率、模型与项目排行 |
+| 把会话沉淀成 Skill | 手工整理 | — | 蒸馏工作台：会话或项目 → Skill、Prompt、用户画像、任务记忆 |
+| 让 Claude Desktop 动手操作 | 自己配 MCP | — | 内置 Computer Use MCP：截图、点击、输入，带急停，默认关闭 |
+| 新机器上跑本地栈 | 装 Docker / WSL / 虚拟机 | — | CCP-Bot 本地模式：不要 Docker、不要虚拟机、不要管理员权限 |
+| 插件 / Skills / MCP 资产 | 散落在各处 | — | 合成一张清单，点应用只改对应应用 |
+
+> 「只做切换的工具」那一列描述的是它的定位，不是缺点 —— 一件事做好也是本事。CCP 的取舍是：把切换、看板、蒸馏、Computer Use、本地模式放进同一个窗口，代价是它比一个纯切换器大得多。
 ## 快速开始
 
 1. 从 [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases) 下载并安装：
@@ -315,6 +335,17 @@ sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ 管理工�
 ### 是否支持 Intel Mac？
 支持。Release 分别提供 `macos-x64.dmg` 和 `macos-arm64.dmg`，Intel Mac 用 x64，Apple Silicon 用 arm64。
 
+### CCP 会弄坏我原来的 Claude Desktop / Codex 配置吗？
+
+会改，但每一次都留痕：改前自动备份（同目录的 `.bak-*`）、只动它自己管的字段、界面里有恢复入口。数据只在本机，不装服务、不上传任何东西。想更保险就先备份一次配置目录。
+
+### 现在是什么协议？可以商用、可以二次开发吗？
+
+**MIT**。可以自由使用、修改、分发、商用，保留版权声明即可。名称、Logo 与官方发布渠道不随 MIT 授权 —— fork 请改名，别让用户以为是官方版本。详见 [LICENSE](LICENSE)、[TRADEMARK.md](TRADEMARK.md)、[RULES.md](RULES.md)。
+
+### 我可以贡献代码或提需求吗？
+
+欢迎。开了 [Discussions](https://github.com/DamonZS/Claude-Codex-Pro-Tool/discussions) 用来讨论，issue / PR 模板在 `.github/`，方向见 [ROADMAP.md](ROADMAP.md)。
 ## 构建与开发
 
 本项目是 Rust workspace + Tauri 管理工具 + Vite/React 前端。仓库根目录的 `package.json` 来自上游结构，不用于构建本项目；实际前端依赖在 `apps/claude-codex-pro-manager` 下安装和构建。
@@ -451,16 +482,15 @@ docs/                                 架构、评审与截图
 - Issues：<https://github.com/DamonZS/Claude-Codex-Pro-Tool/issues>
 - 讨论群二维码：<https://kcnl7iasnc4t.feishu.cn/wiki/O4T8wAodLiz05MkpqVkcoI7SnRd?from=from_copylink>
 
-## 协议与规则
+## 协议与许可
 
-本仓库采用自定义源码可见限制协议，不是 OSI 认证开源协议。未经 DamonZS 或授权维护者书面允许，禁止以任何方式修改、发布、分发、改名、重打包或隐藏本项目来源，包括人工修改、AI 辅助修改、脚本、codemod、批量替换、自动化重写、二进制补丁和元数据改写。
+- **代码是 MIT**：可以自由使用、修改、分发、商用，保留版权声明即可。见 [LICENSE](LICENSE)。
+- **名称、Logo、官方安装包不随 MIT 授权**：fork 请改名，别让用户以为你是官方版本。见 [TRADEMARK.md](TRADEMARK.md)。
+- **署名**：请不要删除作者信息、仓库地址、版权声明与协议文件 —— 这是我们唯一的请求。见 [RULES.md](RULES.md)。
+- **欢迎贡献**：issue / PR 都欢迎，提交即表示同意按 MIT 授权你的贡献。见 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [ROADMAP.md](ROADMAP.md)。
+- **第三方组件**：字体、图标、插件目录条目与依赖各自遵循其原始许可。
 
-作者信息、仓库地址、版权声明、产品名称、品牌、发布者、赞助或支付身份、协议和规则文件不得被删除、替换、隐藏或弱化。
-
-这些限制不约束 DamonZS、仓库所有者、授权维护者以及在其指令下工作的 AI 助手、脚本、CI、codemod、格式化工具或自动化工具。官方项目后续开发可以继续使用 AI 和自动化能力。
-
-授权维护者名单见 [MAINTAINERS.md](MAINTAINERS.md)。详见 [LICENSE](LICENSE) 和 [RULES.md](RULES.md)。
-
+> 2026-11 之前，本仓库用的是「源码可见、限制修改与分发」的自定义协议。改成 MIT 是为了让二次开发、PR、清单收录和商用都没有障碍 —— 工具好用，就别让许可挡住人。
 ## 说明
 
 CCP（Claude-Codex-Pro-Tool） 是外部增强工具，不是 OpenAI、Anthropic、Claude 或 Codex 的官方项目。官方应用更新后，如果页面结构、协议、CLI、插件格式或配置路径变化，本项目的注入脚本和适配逻辑可能需要同步更新。

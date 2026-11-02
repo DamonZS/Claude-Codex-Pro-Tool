@@ -14,12 +14,13 @@ Repository: <https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
 ## Maintainer Rights
 
-The owner and authorized collaborators are Authorized Maintainers under
-[LICENSE](LICENSE) and [RULES.md](RULES.md).
+The owner and authorized collaborators maintain the official repository: they
+merge changes, cut releases, and speak for the project.
 
-They may maintain the official project using any development method approved by
-the owner, including manual editing, AI assistants, coding agents, scripts,
-codemods, automated formatting, CI workflows, and release automation.
+The code is MIT, so anyone may fork, modify, and redistribute it. What is
+reserved to the project is its identity — the name `CCP` /
+`Claude-Codex-Pro-Tool`, the logo and app icon, and the official release
+channel. See [TRADEMARK.md](TRADEMARK.md) and [RULES.md](RULES.md).
 
-External users, forks, mirrors, or third-party distributors are not Authorized
-Maintainers unless DamonZS explicitly grants that status.
+Forks and third-party distributions are welcome; please rename them and make
+clear they are not the official build.

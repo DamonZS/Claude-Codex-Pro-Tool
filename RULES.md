@@ -1,104 +1,24 @@
 # Repository Rules
 
-These rules apply to Claude Codex Pro Tool.
+适用仓库：<https://github.com/DamonZS/Claude-Codex-Pro-Tool>
 
-Repository: <https://github.com/DamonZS/Claude-Codex-Pro-Tool>
+维护者名单见 [MAINTAINERS.md](MAINTAINERS.md)。协议见 [LICENSE](LICENSE)（MIT）。品牌与官方渠道见 [TRADEMARK.md](TRADEMARK.md)。
 
-Authorized maintainers are recorded in [MAINTAINERS.md](MAINTAINERS.md).
+## 代码许可
 
-## Core Rule
+MIT。你可以 fork、修改、分发、商用，只要在副本里保留 `LICENSE` 的版权与许可声明。
 
-Do not modify this project unless DamonZS or an authorized maintainer has
-explicitly permitted you to do so.
+## 项目要求（不是额外许可限制，是署名与身份规则）
 
-This restriction is not limited to AI. It covers every modification method:
+- 不要删除或隐藏作者信息、仓库地址、版权声明、产品名称、发布者身份、赞助或支付身份。
+- Fork 请改名，不要用 `CCP` 作为你发布版本的名称，也不要让用户以为你是官方版本。
+- 官方安装包只从 GitHub Releases 发布；其它渠道的包请自行核对来源与校验和。
+- 提交贡献即表示你同意按 MIT 授权你的贡献（见 [CONTRIBUTING.md](CONTRIBUTING.md)）。
 
-- manual editing;
-- AI-assisted editing;
-- coding agents;
-- scripts;
-- codemods;
-- batch replacement;
-- generated patches;
-- automated refactoring;
-- build-time rewriting;
-- binary patching;
-- asset replacement;
-- package metadata rewriting;
-- release metadata rewriting.
+## 这些规则约束谁
 
-## Protected Information
+所有人，包括维护者。维护者同样不在官方发布里隐藏来源、不删除署名、不替换协议文件。
 
-Do not remove, rewrite, hide, replace, or weaken:
+## 为什么改协议
 
-- author names;
-- repository owner information;
-- repository links;
-- copyright notices;
-- license text;
-- these rules;
-- product name and branding;
-- release publisher information;
-- sponsorship, donation, or payment identities;
-- package names and metadata that identify the original project.
-
-## Distribution Rules
-
-Without written authorization, you may not publish or distribute:
-
-- modified source code;
-- modified binaries;
-- repackaged installers;
-- renamed releases;
-- mirror repositories that hide the original repository;
-- forks that replace author or ownership information;
-- derivative products based on this project.
-
-## Allowed Without Extra Permission
-
-You may:
-
-- read the source code;
-- clone the repository for personal review;
-- build and run an unmodified copy for personal or internal evaluation;
-- report bugs through GitHub Issues;
-- discuss features or implementation details;
-- link to the official repository with attribution.
-
-## Maintainer Exemption
-
-These rules do not restrict DamonZS, the repository owner, authorized
-maintainers listed in [MAINTAINERS.md](MAINTAINERS.md), collaborators with
-write/admin access granted by the owner, or tools acting under their
-instruction.
-
-Authorized maintainers may use any development method needed to maintain this
-project, including:
-
-- AI assistants;
-- coding agents;
-- scripts;
-- codemods;
-- automated formatting;
-- CI workflows;
-- release automation;
-- manual editing.
-
-This exemption is deliberate. It prevents the rules from blocking future
-development of the official project.
-
-## Contributions
-
-Do not submit code, documentation, assets, workflow changes, generated patches,
-or metadata changes unless an authorized maintainer has requested or approved
-them.
-
-Bug reports and feature discussions are welcome.
-
-Accepted contributions may be used, modified, distributed, sublicensed, or
-relicensed by DamonZS and authorized maintainers as part of this project.
-
-## License
-
-See [LICENSE](LICENSE). The repository is source-available under a custom
-restricted license, not an OSI-approved open source license.
+2026-11 之前本仓库使用的是"源码可见、限制修改与分发"的自定义协议。它挡住了 issue、PR、二次开发和 awesome 列表收录，也让很多想给 Star 的开发者直接离开。作者决定改成 MIT：代码自由，身份受保护。

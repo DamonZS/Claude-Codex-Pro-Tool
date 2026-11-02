@@ -84,6 +84,20 @@
 - Want to turn repeated lessons and proven workflows into Skills instead of re-explaining them.
 - Expect features to be observable and verifiable, not decorative buttons.
 
+## How is this different?
+
+Let's be honest: **if all you want is to switch between API relays, any switcher does that.** CCP is worth installing because it does the ops work too, in one window, with data that never leaves your machine:
+
+| What you run into | Editing config by hand | A switcher-only tool | CCP |
+|---|---|---|---|
+| Switching provider / relay | edit TOML / JSON every time | its main job | each client remembers its own provider, independently |
+| Where did the tokens go | dig through logs | — | local read-only collection + dashboard, cache hit rate, model and project rankings |
+| Turning sessions into Skills | organise by hand | — | distillation workbench: session or project → Skill, Prompt, profile, task memory |
+| Claude Desktop acting on your machine | wire up an MCP yourself | — | built-in Computer Use MCP with a kill switch, off by default |
+| Running a stack on a fresh machine | install Docker / WSL / a VM | — | CCP-Bot local mode: no Docker, no VM, no admin rights |
+| Plugin / Skill / MCP assets | scattered everywhere | — | one catalogue, applied only to the client you pick |
+
+> The "switcher-only tool" column describes its scope, not a shortcoming — doing one thing well is a feature. CCP's trade-off is putting switching, dashboards, distillation, Computer Use and local mode in the same window, which makes it much bigger than a switcher.
 ## Quick Start
 
 1. Download and install from [GitHub Releases](https://github.com/DamonZS/Claude-Codex-Pro-Tool/releases):
@@ -303,6 +317,17 @@ sudo xattr -rd com.apple.quarantine /Applications/Claude\ Codex\ Pro\ 管理工�
 ### Does it support Intel Macs?
 Yes. Releases provide `macos-x64.dmg` and `macos-arm64.dmg`; use x64 on Intel Macs and arm64 on Apple Silicon.
 
+### Will CCP break my existing Claude Desktop / Codex setup?
+
+It does change files, but it leaves a trail: it backs them up first (`.bak-*` next to the original), only touches the fields it manages, and the UI has a restore entry point. Everything stays on your machine — no service, no upload. If you want extra safety, back up the config folder once.
+
+### What licence is this? Can I use it commercially or fork it?
+
+**MIT.** Use, modify, redistribute, and commercialize it freely, keeping the copyright notice. The name, logo and official release channel are not covered by the MIT grant — rename forks and don't imply official status. See [LICENSE](LICENSE), [TRADEMARK.md](TRADEMARK.md), [RULES.md](RULES.md).
+
+### Can I contribute or request features?
+
+Yes. There are [Discussions](https://github.com/DamonZS/Claude-Codex-Pro-Tool/discussions) for open questions, issue and PR templates under `.github/`, and a direction in [ROADMAP.md](ROADMAP.md).
 ## Build and Development
 
 This project is a Rust workspace plus a Tauri manager and a Vite/React frontend. The root `package.json` comes from the upstream structure and is not used to build this project; frontend dependencies are installed and built under `apps/claude-codex-pro-manager`.
@@ -439,16 +464,15 @@ docs/                                 architecture, reviews, and screenshots
 - Issues: <https://github.com/DamonZS/Claude-Codex-Pro-Tool/issues>
 - Discussion-group QR code: <https://kcnl7iasnc4t.feishu.cn/wiki/O4T8wAodLiz05MkpqVkcoI7SnRd?from=from_copylink>
 
-## License and Repository Rules
+## License
 
-This repository uses a custom source-available restrictive license and is not licensed under an OSI-approved open-source license. Without written permission from DamonZS or an authorized maintainer, modifying, publishing, distributing, renaming, repackaging, or hiding the origin of this project is prohibited. This restriction covers manual edits, AI-assisted edits, scripts, codemods, bulk replacement, automated rewrites, binary patches, and metadata changes.
+- **The code is MIT**: use, modify, redistribute, and commercialize it freely, keeping the copyright notice. See [LICENSE](LICENSE).
+- **The name, logo, and official release channel are not covered by the MIT grant**: please rename forks and don't imply official status. See [TRADEMARK.md](TRADEMARK.md).
+- **Attribution**: please don't strip the author, the repository URL, copyright notices, or the license files. See [RULES.md](RULES.md).
+- **Contributions**: issues and PRs are welcome — submitting one means you agree to license it under MIT. See [CONTRIBUTING.md](CONTRIBUTING.md) and [ROADMAP.md](ROADMAP.md).
+- **Third-party parts**: fonts, icons, catalog entries, and dependencies keep their own licenses.
 
-Author information, repository URLs, copyright notices, product names, branding, publisher identity, sponsorship or payment identity, license files, and rule files must not be removed, replaced, hidden, or weakened.
-
-These restrictions do not apply to DamonZS, the repository owner, authorized maintainers, or AI assistants, scripts, CI, codemods, formatters, and automation working under their direction. Official project development may continue to use AI and automation.
-
-See [MAINTAINERS.md](MAINTAINERS.md) for the authorized maintainer list. See [LICENSE](LICENSE) and [RULES.md](RULES.md) for the complete terms.
-
+> Until November 2026 this repository used a custom source-available license that restricted modification and redistribution. It is MIT now, so forks, PRs, awesome-list listings, and commercial use are no longer blocked.
 ## Disclaimer
 
 CCP (Claude-Codex-Pro-Tool) is an external enhancement tool. It is not an official project of OpenAI, Anthropic, Claude, or Codex. When official applications change page structure, protocols, CLI behavior, plugin formats, or configuration paths, this project's injection scripts and adapters may need corresponding updates.
