@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
 use crate::settings::{BackendSettings, SettingsStore};
@@ -243,6 +243,8 @@ pub async fn handle_bridge_request(
         "/codex-model-catalog" | "/codex-config-model" => ctx.runtime.codex_model_catalog().await,
         "/diagnostics/log" => diagnostic_log_value(payload.clone()),
         "/ads" => ctx.runtime.ads().await,
+        "/update/check" => update_check_value().await,
+        "/update/install" => update_install_value().await,
         "/zed-remote/status" => ctx.runtime.zed_remote_status().await,
         "/zed-remote/resolve-host" => ctx.runtime.resolve_zed_remote_host(payload.clone()).await,
         "/zed-remote/fallback-request" => {
@@ -767,6 +769,58 @@ where
     Ok(serde_json::to_value(result?)?)
 }
 
+fn update_check_response(check: &crate::update::UpdateCheck) -> Value {
+    let latest = check.latest_version.clone().unwrap_or_default();
+    json!({
+        "status": "ok",
+        "message": if check.update_available {
+            format!("发现新版本 {latest}")
+        } else {
+            "已经是最新版本".to_string()
+        },
+        "payload": {
+            "currentVersion": check.current_version,
+            "latestVersion": check.latest_version,
+            "releaseSummary": check.release_summary,
+            "assetName": check.asset_name,
+            "assetUrl": check.asset_url,
+            "updateAvailable": check.update_available
+        }
+    })
+}
+
+async fn update_check_value() -> anyhow::Result<Value> {
+    let check = crate::update::check_for_update(crate::version::VERSION).await?;
+    Ok(update_check_response(&check))
+}
+
+fn update_install_response(
+    version: &str,
+    installer_path: &std::path::Path,
+    launched: bool,
+) -> Value {
+    json!({
+        "status": "ok",
+        "message": format!("已启动 {version} 的安装包"),
+        "payload": {
+            "version": version,
+            "installerPath": installer_path.to_string_lossy(),
+            "launched": launched
+        }
+    })
+}
+
+async fn update_install_value() -> anyhow::Result<Value> {
+    let release = crate::update::fetch_current_release().await?;
+    let download_dir = std::env::temp_dir().join("claude-codex-pro-update");
+    let install = crate::update::perform_update(&release, &download_dir).await?;
+    Ok(update_install_response(
+        &install.release.version,
+        &install.installer_path,
+        install.launched,
+    ))
+}
+
 fn diagnostic_log_value(payload: Value) -> anyhow::Result<Value> {
     let event = payload
         .get("event")
@@ -867,4 +921,70 @@ fn empty_user_script_inventory() -> Value {
         "enabled": true,
         "scripts": []
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::update::UpdateCheck;
+
+    fn sample_check(update_available: bool, latest: Option<&str>) -> UpdateCheck {
+        UpdateCheck {
+            current_version: "1.67".to_string(),
+            latest_version: latest.map(str::to_string),
+            release_summary: "notes".to_string(),
+            asset_name: Some("CCP_1.68_x64-setup.exe".to_string()),
+            asset_url: Some("https://example.test/asset".to_string()),
+            update_available,
+        }
+    }
+
+    #[test]
+    fn update_check_response_reports_a_newer_release() {
+        let value = update_check_response(&sample_check(true, Some("1.68")));
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["message"], "发现新版本 1.68");
+        assert_eq!(value["payload"]["updateAvailable"], true);
+        assert_eq!(value["payload"]["currentVersion"], "1.67");
+        assert_eq!(value["payload"]["latestVersion"], "1.68");
+        assert_eq!(value["payload"]["assetName"], "CCP_1.68_x64-setup.exe");
+    }
+
+    #[test]
+    fn update_check_response_reports_the_current_release() {
+        let value = update_check_response(&sample_check(false, Some("1.67")));
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["message"], "已经是最新版本");
+        assert_eq!(value["payload"]["updateAvailable"], false);
+    }
+
+    #[test]
+    fn update_install_response_names_the_version_and_the_installer() {
+        let path = std::path::PathBuf::from("C:\\Temp\\CCP_1.68_x64-setup.exe");
+        let value = update_install_response("1.68", &path, true);
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["message"], "已启动 1.68 的安装包");
+        assert_eq!(value["payload"]["version"], "1.68");
+        assert_eq!(value["payload"]["launched"], true);
+        assert!(value["payload"]["installerPath"]
+            .as_str()
+            .unwrap_or_default()
+            .ends_with("CCP_1.68_x64-setup.exe"));
+    }
+
+    #[test]
+    #[ignore = "talks to the GitHub release feed; run explicitly for live evidence"]
+    fn live_update_check_reaches_the_published_release() {
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        let value = runtime
+            .block_on(update_check_value())
+            .expect("the update check should answer");
+        assert_eq!(value["status"], "ok");
+        assert_eq!(value["payload"]["currentVersion"], crate::version::VERSION);
+        assert!(
+            value["payload"]["latestVersion"].is_string()
+                || value["payload"]["latestVersion"].is_null()
+        );
+        println!("live update check: {value}");
+    }
 }
