@@ -55,7 +55,7 @@
   const claudeCodexProMenuId = "claude-codex-pro-menu";
   const claudeCodexProMenuFloatingClass = "claude-codex-pro-menu-floating";
   const claudeCodexProMenuVersion = "13";
-  const claudeCodexProTriggerVersion = "6";
+  const claudeCodexProTriggerVersion = "7";
   const claudeCodexProModalTheme = "pangu-control-deck";
   const codexDeleteVersion = "7";
   const codexExportVersion = "1";
@@ -3008,6 +3008,10 @@
 
   function showClaudeCodexProUpdateToast(message, tone) {
     if (!document.body) return;
+    // 同一个页面被重新注入时，上一代闭包留下的那条浮条要收掉，否则会并排出现两条。
+    document.querySelectorAll('.claude-codex-pro-update-toast').forEach((node) => {
+      if (node !== claudeCodexProUpdateToast) node.remove();
+    });
     if (!claudeCodexProUpdateToast) {
       const toast = document.createElement("div");
       toast.className = "claude-codex-pro-update-toast";
@@ -3134,6 +3138,15 @@
     trigger.className = "claude-codex-pro-trigger";
     setClaudeCodexProTriggerLabel(trigger);
     if (trigger.dataset.claudeCodexProTriggerInstalled === claudeCodexProTriggerVersion) return;
+    // 页面没刷新时，这枚按钮可能已经被上一代注入脚本绑过：那个闭包还指着旧的 helper 端口。
+    // 直接换一个新节点，让旧监听连同旧闭包一起离开页面。
+    if (trigger.dataset.claudeCodexProTriggerInstalled) {
+      const freshTrigger = trigger.cloneNode(true);
+      delete freshTrigger.dataset.claudeCodexProTriggerInstalled;
+      trigger.replaceWith(freshTrigger);
+      configureClaudeCodexProTrigger(menu, freshTrigger, nativeButtonClass);
+      return;
+    }
     trigger.dataset.claudeCodexProTriggerInstalled = claudeCodexProTriggerVersion;
     trigger.addEventListener("click", (event) => {
       event.preventDefault();

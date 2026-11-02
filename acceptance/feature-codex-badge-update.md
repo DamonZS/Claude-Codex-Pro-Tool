@@ -37,6 +37,14 @@
 | A16 注入页能真的拿到更新结果 | 通过 CDP 调 `window.__codexSessionDeleteBridge("/update/check", {})` 必须返回 `status: ok` 的 JSON，且 `payload.currentVersion` 与当前安装版本一致 | `cargo test -p claude-codex-pro-core --test bridge_update_live -- --include-ignored --nocapture`：`{"status":"ok","message":"已经是最新版本","payload":{"currentVersion":"V1.70",…,"updateAvailable":false}}` |
 
 > 踩坑记录：第一版用 `fetch("http://127.0.0.1:57321/update/check")` 直连，57321 是 **协议代理**（Codex/Responses 转发）而不是桥接服务；请求打进去只会 404，徽标于是永远提示「检查更新失败」。桥接是注入时通过 CDP 安装的 JS 绑定 `__codexSessionDeleteBridge`，与 `/settings/get`、`/backend/status` 同一条通道。
+## 重绑定与浮条去重（A17，2026-11-02 补）
+
+| 项 | 通过标准 | 证据 |
+| --- | --- | --- |
+| A17 点一次只出一条结论 | 同一个页面被重新注入时，上一代闭包绑在徽标上的监听必须被换掉（旧闭包指向旧 helper 端口，点下去只会「检查更新失败：Failed to fetch」），并且页面上只留一条提示浮条 | `cargo test -p claude-codex-pro-core --test badge_click_live -- --include-ignored --nocapture` → `{"clicked":true,"count":1,"label":"CCP V1.72","token":"7"}` 与 `["已是最新版本 V1.72"]` |
+| A18 静态门禁 | 注入脚本必须保留「走 postJson」「换新节点重绑」「收掉旧浮条」三处写法，任何回退都会红 | `cargo test -p claude-codex-pro-core --lib assets::tests::the_badge_update_path` |
+
+> 用法：这条活体用例会先读本仓的 `assets/inject/renderer-inject.js` 原样注入，再 `badge.click()`，最后读 `.claude-codex-pro-update-toast` 的文本 ⇒ 它同时覆盖「页面里已经躺着上一代脚本」的场景，不需要重启 Codex。
 ## 已知非目标
 
 - 不验证 GitHub API 的限流与离线分支以外的网络异常。

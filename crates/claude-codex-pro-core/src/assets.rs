@@ -240,6 +240,26 @@ mod tests {
     }
 
     #[test]
+    fn the_badge_update_path_stays_on_the_injected_bridge() {
+        let script = RENDERER_SCRIPT;
+        assert!(
+            script.contains("return await postJson(path, {});"),
+            "the badge has to go through the injected bridge, not HTTP"
+        );
+        assert!(
+            !script.contains("fetch(helperBase + path"),
+            "the helper port is the relay proxy, it has no update route"
+        );
+        assert!(
+            script.contains("const freshTrigger = trigger.cloneNode(true);"),
+            "a reinjection has to rebind the badge so the old closure leaves the page"
+        );
+        assert!(
+            script.contains("if (node !== claudeCodexProUpdateToast) node.remove();"),
+            "a reinjection must not leave two update toasts side by side"
+        );
+    }
+    #[test]
     fn codex_theme_injection_keeps_a_dedicated_mount_point() {
         let script = codex_theme_injection_script(&serde_json::json!({
             "theme_id": "contract-theme",
