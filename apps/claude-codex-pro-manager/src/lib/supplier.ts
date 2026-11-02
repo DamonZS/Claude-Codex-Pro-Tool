@@ -605,9 +605,13 @@ export function withSupplierPreservedImportedFiles(profile: RelayProfile): Relay
       authContents: synchronizeClaudeAuthCredential(current.authContents, apiKey, authKey),
     };
   }
+  // Codex 供应商同一条规矩：托管键（模型、上下文窗口、provider 表里的地址与协议）
+  // 按表单重写，用户自加的行保留 —— 官方登录档案不动，它的配置不归这张表单管。
   return {
     ...current,
-    configContents: current.configContents ?? "",
+    configContents: supplierProfileIsCodexOfficialLogin(current)
+      ? current.configContents ?? ""
+      : supplierEffectiveConfigContents(current),
     authContents: synchronizeCodexAuthCredential(current.authContents, apiKey),
   };
 }
@@ -796,20 +800,124 @@ function mergeClaudeConfigOntoStored(stored: string, generated: string) {
   return `${JSON.stringify({ ...previous, ...next, env: { ...env, ...(asJsonObject(next.env) ?? {}) }, meta }, null, 2)}\n`;
 }
 
-/** 保存与显示共用同一份规则：Claude 类供应商的「配置 JSON」会是什么样。 */
+/** Codex 的 config.toml 里由管理器托管的键：保存时整体按表单重写，其余行原样保留。 */
+const CODEX_MANAGED_TOP_KEYS = ["model", "model_provider", "model_context_window"];
+const CODEX_MANAGED_PROVIDER_KEYS = [
+  "name",
+  "wire_api",
+  "requires_openai_auth",
+  "experimental_bearer_token",
+  "env_key",
+  "base_url",
+];
+
+function tomlSectionHeader(line: string) {
+  const match = /^\s*\[([^\]]+)\]\s*$/.exec(line);
+  return match ? match[1] : "";
+}
+
+function tomlAssignedKey(line: string) {
+  const match = /^\s*([A-Za-z0-9_.\-]+)\s*=/.exec(line);
+  return match ? match[1] : "";
+}
+
+function tomlQuotedValue(line: string) {
+  const match = /^\s*[A-Za-z0-9_.\-]+\s*=\s*"([^"]*)"/.exec(line);
+  return match ? match[1] : "";
+}
+
+/**
+ * 把表单能改的托管键按新值写进存量的 config.toml：模型、上下文窗口、以及该 provider
+ * 表里的名字、协议、鉴权字段与地址。其余行与别的表保留 —— 存量键不再能盖住表单，
+ * 所以「上面改了模型，下面 config 不动」不会再出现。
+ */
+function mergeCodexConfigOntoStored(stored: string, generated: string) {
+  const top = new Map<string, string>();
+  const provider = new Map<string, string>();
+  let section = "";
+  for (const line of generated.split("\n")) {
+    const header = tomlSectionHeader(line);
+    if (header) {
+      section = header;
+      continue;
+    }
+    const key = tomlAssignedKey(line);
+    if (!key) continue;
+    if (!section) top.set(key, line.trimEnd());
+    else if (section.startsWith("model_providers.")) provider.set(key, line.trimEnd());
+  }
+  const providerId = tomlQuotedValue(top.get("model_provider") ?? "");
+  const providerSection = `model_providers.${providerId}`;
+
+  const keptTop: string[] = [];
+  const sections: { name: string; lines: string[] }[] = [];
+  let current: { name: string; lines: string[] } | null = null;
+  for (const line of stored.split(/\r?\n/)) {
+    const header = tomlSectionHeader(line);
+    if (header) {
+      current = { name: header, lines: [] };
+      sections.push(current);
+      continue;
+    }
+    const key = tomlAssignedKey(line);
+    if (!current) {
+      if (key && CODEX_MANAGED_TOP_KEYS.includes(key)) continue;
+      keptTop.push(line);
+      continue;
+    }
+    if (current.name === providerSection && key && CODEX_MANAGED_PROVIDER_KEYS.includes(key)) continue;
+    current.lines.push(line);
+  }
+
+  const out: string[] = [];
+  for (const key of CODEX_MANAGED_TOP_KEYS) {
+    const line = top.get(key);
+    if (line) out.push(line);
+  }
+  out.push(...keptTop);
+  let wroteProvider = false;
+  for (const item of sections) {
+    if (item.name.startsWith("model_providers.") && item.name !== providerSection) continue;
+    if (item.name === providerSection) {
+      out.push(`[${providerSection}]`);
+      for (const key of CODEX_MANAGED_PROVIDER_KEYS) {
+        const line = provider.get(key);
+        if (line) out.push(line);
+      }
+      out.push(...item.lines);
+      wroteProvider = true;
+      continue;
+    }
+    out.push(`[${item.name}]`);
+    out.push(...item.lines);
+  }
+  if (!wroteProvider && providerId) {
+    out.push(`[${providerSection}]`);
+    for (const key of CODEX_MANAGED_PROVIDER_KEYS) {
+      const line = provider.get(key);
+      if (line) out.push(line);
+    }
+  }
+  return `${out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\s+$/, "")}\n`;
+}
+
+/** 保存与显示共用同一份规则：这家供应商写进 agent 的那份文件会是什么样。 */
 export function supplierEffectiveConfigContents(profile: RelayProfile): string {
   const normalized = normalizeSupplierProfile(profile);
   const isClaudeTarget = normalized.targetApp === "claude" || normalized.targetApp === "claude-desktop";
-  if (!isClaudeTarget) return normalized.configContents ?? "";
-  const authKey = preferredClaudeCredentialField(normalized);
+  const authKey = isClaudeTarget ? preferredClaudeCredentialField(normalized) : "";
   const generated = withSupplierGeneratedFiles({
     ...normalized,
     apiKey: supplierProfileResolvedApiKey(normalized),
-    authField: authKey,
+    ...(authKey ? { authField: authKey } : {}),
   });
   const stored = (normalized.configContents ?? "").trim();
-  return stored ? mergeClaudeConfigOntoStored(stored, generated.configContents) : generated.configContents;
+  if (isClaudeTarget) {
+    return stored ? mergeClaudeConfigOntoStored(stored, generated.configContents) : generated.configContents;
+  }
+  return stored ? mergeCodexConfigOntoStored(stored, generated.configContents) : generated.configContents;
 }
+
 
 export function supplierProfileHasApiKey(profile: RelayProfile) {
   return !!supplierProfileResolvedApiKey(profile);
@@ -898,9 +1006,28 @@ export function supplierApiKeyFromConfigContents(contents: string) {
   return authorization?.[1]?.trim() || "";
 }
 
+/** 核心侧 `local_responses_proxy_base_url(57321)`：Codex 走本机代理时 config.toml 里的地址。 */
+const CODEX_LOCAL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
+
+/**
+ * Codex 什么时候要经本机代理：开了路由，或者用户为这家供应商声明了 Codex 说不出的
+ * 上游格式（Chat Completions、Anthropic Messages）—— 与核心侧 `codex_base_url_for_profile`
+ * 同一条规则。
+ */
+function codexRouteGoesThroughLocalProxy(profile: RelayProfile) {
+  if ((profile.targetApp || "codex") !== "codex") return false;
+  const format = String(profile.apiFormat || "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+  if (format === "anthropic" || format === "anthropicmessages") return true;
+  // 原生 Responses 的上游直连：开不开路由都不经过代理 —— 代理只为「格式不一样」而存在。
+  if (format === "openairesponses") return false;
+  return String(profile.protocol || "").trim().toLowerCase() === "chatcompletions";
+}
+
 export function buildSupplierConfigToml(profile: RelayProfile) {
   const model = profile.model.trim();
-  const baseUrl = profile.baseUrl.trim();
+  const baseUrl = codexRouteGoesThroughLocalProxy(profile)
+    ? CODEX_LOCAL_PROXY_BASE_URL
+    : profile.baseUrl.trim();
   const providerId = supplierIdFromName(profile.id || profile.name);
   const apiKey = supplierProfileResolvedApiKey(profile);
   const contextWindow = supplierCodexEffectiveContextWindow(profile) || normalizedContextWindow(profile.contextWindow);

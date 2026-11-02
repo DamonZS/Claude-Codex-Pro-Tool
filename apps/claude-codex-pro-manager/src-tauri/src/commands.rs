@@ -10048,14 +10048,11 @@ fn switch_codex_supplier_blocking(
     }
 }
 
-/// 路由开启的 Claude 供应商：命令行这只 Claude 也该走本机代理，这样 OpenAI 格式的上游也能被
-/// 转换 —— 否则命令行始终拿 Anthropic 协议直连上游，非原生上游就是超时。
+/// 命令行的 Claude 只在「上游说的不是 Anthropic Messages」时才走本机代理 —— 那时候才有
+/// 东西要转换（OpenAI Chat / Responses、Gemini 之外的两条）。原生 Anthropic 的上游直连：
+/// 开不开路由都一样，代理不该插在中间。
 fn claude_profile_wants_local_proxy(profile: &RelayProfile) -> bool {
-    profile.route_enabled
-        && profile
-            .claude_desktop_mode
-            .trim()
-            .eq_ignore_ascii_case("proxy")
+    !claude_codex_pro_core::relay_config::relay_profile_uses_anthropic_messages(profile)
 }
 
 /// 决定这次切换是否把命令行指向本机模型代理。代理起不来就返回 None 退回直连：

@@ -2281,20 +2281,14 @@ fn complete_relay_profile_config(profile: &RelayProfile) -> anyhow::Result<Strin
     {
         provider["requires_openai_auth"] = toml_edit::value(true);
     }
-    let provider_base_url = if profile.route_enabled {
-        crate::protocol_proxy::local_responses_proxy_base_url(
-            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-        )
-    } else {
-        // 用户在这家供应商上声明的「API 格式」也要参与：说 Anthropic Messages 的上游
-        // 同样需要本机代理，因为 Codex 只会说 Responses。
-        codex_base_url_for_profile(
-            base_url.trim(),
-            profile.protocol,
-            crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
-            &profile.api_format,
-        )
-    };
+    // 原生 Responses 的上游直连 —— 开了路由也直连。本机代理只为「格式不一样」而存在：
+    // Chat Completions 与 Anthropic Messages 两种上游都要转换，Codex 只说 Responses。
+    let provider_base_url = codex_base_url_for_profile(
+        base_url.trim(),
+        profile.protocol,
+        crate::protocol_proxy::DEFAULT_PROTOCOL_PROXY_PORT,
+        &profile.api_format,
+    );
     if !provider_base_url.trim().is_empty() {
         provider["base_url"] = toml_edit::value(provider_base_url.trim());
     }
@@ -3185,6 +3179,55 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&home);
     }
+
+    #[test]
+    fn a_native_codex_upstream_is_written_directly_even_with_the_route_on() {
+        // 原生 Responses 的上游直连：本机代理只为「格式不一样」而存在。开了路由也一样，
+        // 因为代理替不了 Responses 说话 —— 插在中间只会多一跳。
+        let home = std::env::temp_dir().join(format!(
+            "ccp-codex-native-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|value| value.as_millis())
+                .unwrap_or_default()
+        ));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).expect("home");
+
+        let native = RelayProfile {
+            id: "gpt".to_string(),
+            name: "GPT".to_string(),
+            target_app: "codex".to_string(),
+            base_url: "https://api.gpt.example/v1".to_string(),
+            upstream_base_url: "https://api.gpt.example/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            api_key_explicit: true,
+            protocol: RelayProtocol::Responses,
+            api_format: "OpenAI Responses API".to_string(),
+            route_enabled: true,
+            relay_mode: crate::settings::RelayMode::PureApi,
+            model: "gpt-6-astra".to_string(),
+            ..RelayProfile::default()
+        };
+        apply_relay_profile_to_home_with_switch_rules(&home, &native, "").expect("apply");
+        let config = std::fs::read_to_string(home.join("config.toml")).expect("config.toml");
+        assert!(config.contains("https://api.gpt.example/v1"), "{config}");
+        assert!(!config.contains("127.0.0.1:57321"), "{config}");
+
+        // 说 Chat Completions 的上游反过来：必须经过本机代理转换。
+        let chat = RelayProfile {
+            protocol: RelayProtocol::ChatCompletions,
+            api_format: "OpenAI Chat Completions".to_string(),
+            ..native.clone()
+        };
+        apply_relay_profile_to_home_with_switch_rules(&home, &chat, "").expect("apply chat");
+        let config = std::fs::read_to_string(home.join("config.toml")).expect("config.toml");
+        assert!(config.contains("http://127.0.0.1:57321/v1"), "{config}");
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn the_api_format_rule_reads_the_users_wording() {
         for value in [

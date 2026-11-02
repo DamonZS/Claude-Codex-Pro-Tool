@@ -91,13 +91,93 @@ describe("supplierEffectiveConfigContents", () => {
       .toBe(withSupplierGeneratedFiles(current).configContents);
   });
 
-  it("leaves a Codex profile's own config alone", () => {
-    const stored = "model = \"gpt-5.4\"\nmodel_provider = \"mine\"\n";
-    expect(supplierEffectiveConfigContents(profile({
+  it("rewrites the managed keys of a Codex profile and keeps the rows the form does not own", () => {
+    const stored = [
+      'model = "gpt-6.1-sol"',
+      'model_provider = "gpt"',
+      'model_reasoning_summary = "auto"',
+      "model_context_window = 400000",
+      "",
+      "[model_providers.gpt]",
+      'name = "GPT"',
+      'base_url = "https://api.old.example/v1"',
+      'wire_api = "responses"',
+      'requires_openai_auth = true',
+      'env_key = "OPENAI_API_KEY"',
+      'http_headers = { "X-Provider" = "your-gateway" }',
+      "",
+      "[mcp_servers.mine]",
+      'command = "mine"',
+      "",
+    ].join("\n");
+
+    const effective = supplierEffectiveConfigContents(profile({
       targetApp: "codex",
       importSource: "",
       userAgent: "",
+      protocol: "responses",
+      apiFormat: "openai_responses",
+      id: "gpt",
+      name: "GPT",
+      model: "gpt-6-astra",
+      baseUrl: "https://api.new.example/v1",
+      contextWindow: "1000000",
       configContents: stored,
-    }))).toBe(stored);
+    }));
+
+    // 表单说的算：模型、上下文窗口、地址都换成新的。
+    expect(effective).toContain('model = "gpt-6-astra"');
+    expect(effective).toContain('model_provider = "gpt"');
+    expect(effective).toContain("model_context_window = 1000000");
+    expect(effective).toContain('base_url = "https://api.new.example/v1"');
+    expect(effective).not.toContain("gpt-6.1-sol");
+    expect(effective).not.toContain("api.old.example");
+    // 不属于表单的行照旧保留（用户自己加的键与表）。
+    expect(effective).toContain('model_reasoning_summary = "auto"');
+    expect(effective).toContain('http_headers = { "X-Provider" = "your-gateway" }');
+    expect(effective).toContain("[mcp_servers.mine]");
+    expect(effective).toContain('command = "mine"');
+  });
+
+  it("writes the local proxy address once the route takes over", () => {
+    const routed = profile({
+      targetApp: "codex",
+      importSource: "",
+      userAgent: "",
+      protocol: "chatCompletions",
+      apiFormat: "openai_chat",
+      id: "gpt",
+      name: "GPT",
+      model: "gpt-6-astra",
+      baseUrl: "https://api.new.example/v1",
+      routeEnabled: true,
+      configContents: "",
+    });
+    expect(supplierEffectiveConfigContents(routed)).toContain('base_url = "http://127.0.0.1:57321/v1"');
+    // 原生 Responses 的上游：开了路由也直连它，代理只为「格式不一样」而存在。
+    for (const routeEnabled of [false, true]) {
+      expect(supplierEffectiveConfigContents(profile({
+        targetApp: "codex",
+        importSource: "",
+        userAgent: "",
+        protocol: "responses",
+        apiFormat: "openai_responses",
+        baseUrl: "https://api.new.example/v1",
+        routeEnabled,
+        configContents: "",
+      }))).toContain('base_url = "https://api.new.example/v1"');
+    }
+  });
+
+  it("builds the same TOML the save path would write when there is nothing stored yet", () => {
+    const current = profile({
+      targetApp: "codex",
+      importSource: "",
+      userAgent: "",
+      protocol: "responses",
+      apiFormat: "openai_responses",
+    });
+    expect(supplierEffectiveConfigContents(current))
+      .toBe(withSupplierGeneratedFiles(current).configContents);
   });
 });

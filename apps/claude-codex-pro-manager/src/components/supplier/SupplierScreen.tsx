@@ -1281,14 +1281,14 @@ export function SupplierScreen({
     }, null, 2);
     // 显示的就是保存时会写进 agent 的那份：Claude 类供应商按表单重算托管键，
     // 导入供应商自带的其它键保留，所以「改了模型配置、下面 JSON 不变」不会再出现。
-    const supplierConfigJson = isClaudeSupplier
-      ? supplierEffectiveConfigContents(generated) || claudeConfigJson
-      : generated.configContents || claudeConfigJson;
+    // 两个目标都走同一条规则：显示的就是保存时会写进去的那份 —— 上方改了模型、映射或
+    // 上下文窗口，下面的 config.toml / 配置 JSON 立刻跟着变。
+    const supplierConfigJson = supplierEffectiveConfigContents(generated) || claudeConfigJson;
     const visibleSupplierConfigJson = showSupplierApiKey
       ? supplierConfigJson
       : redactSupplierConfig(supplierConfigJson);
     const codexAuthJson = generated.authContents || JSON.stringify({ OPENAI_API_KEY: generated.apiKey }, null, 2);
-    const codexConfigToml = generated.configContents || `model = "${generated.model || defaultModel}"
+    const codexConfigToml = supplierEffectiveConfigContents(generated) || `model = "${generated.model || defaultModel}"
 model_provider = "${generated.id || "custom"}"
 
 [model_providers.${generated.id || "custom"}]
