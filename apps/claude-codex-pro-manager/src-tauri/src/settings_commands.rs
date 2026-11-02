@@ -1336,19 +1336,34 @@ fn write_agent_provider(
 ) -> anyhow::Result<()> {
     let dir =
         agent_provider_dir(app_id).ok_or_else(|| anyhow::anyhow!("未找到该 Agent 的配置目录"))?;
-    // 只认 chat 的 agent 选了别的上游格式时，配置文件里写的必须是本机代理的地址 ——
-    // 所以先把那条入口拉起来，并把端口记进状态目录（写文件的那一侧读它）。
-    if agent_providers::agent_chat_needs_proxy(provider.api_format) {
-        let port = ensure_agent_proxy_helper_blocking().map_err(|error| {
-            anyhow::anyhow!("这个 Agent 只会说 chat，需要本机代理替它转，但代理没起来：{error}")
-        })?;
-        claude_codex_pro_core::protocol_proxy::remember_agent_proxy_port(port)?;
-    }
+    ensure_agent_proxy_for(provider)?;
     let writer = agent_providers::writer_for(app_id)
         .ok_or_else(|| anyhow::anyhow!("该 Agent 不支持写入配置文件"))?;
     writer.apply(&dir, provider, api_key)
 }
 
+/// 只认 chat 的 Agent 选了别的上游格式时，先把本机代理拉起来，并把端口记进状态目录
+/// （写文件的那一侧读它）。返回端口，供调用方决定要显示哪一个地址。
+fn ensure_agent_proxy_for(provider: &AgentProvider) -> anyhow::Result<()> {
+    if !agent_providers::agent_chat_needs_proxy(provider.api_format) {
+        return Ok(());
+    }
+    let port = ensure_agent_proxy_helper_blocking().map_err(|error| {
+        anyhow::anyhow!("这个 Agent 只会说 chat，需要本机代理替它转，但代理没起来：{error}")
+    })?;
+    claude_codex_pro_core::protocol_proxy::remember_agent_proxy_port(port)?;
+    Ok(())
+}
+
+/// 这个 Agent 该填哪一个地址：只会说 chat 的 Agent 选了别的格式时，填本机代理的地址；
+/// 其余情况填供应商自己的地址。**手动模式（Cursor）粘贴的也是这一个值**，规则只有一份。
+fn agent_address_for(provider: &AgentProvider) -> String {
+    if agent_providers::agent_chat_needs_proxy(provider.api_format) {
+        claude_codex_pro_core::protocol_proxy::agent_chat_proxy_base_url(&provider.id)
+    } else {
+        provider.base_url.trim().to_string()
+    }
+}
 /// Switch 模式是否把这个供应商写进了当前文件。
 fn agent_provider_is_active(store: &AgentProviderStore, app_id: &str, id: &str) -> bool {
     if !matches!(agent_providers::apply_mode(app_id), Some(ApplyMode::Switch)) {
@@ -1626,6 +1641,12 @@ fn apply_agent_provider_blocking(
         }
         // 手动模式：不写任何文件，只把值返回一次供用户粘贴。
         Some(ApplyMode::Manual) => {
+            if let Err(error) = ensure_agent_proxy_for(&provider) {
+                return failed(
+                    &format!("应用供应商失败：{error}"),
+                    agent_apply_payload(agent_providers_snapshot(&store)),
+                );
+            }
             let model = if provider.default_model.trim().is_empty() {
                 provider.models.first().cloned().unwrap_or_default()
             } else {
@@ -1637,7 +1658,7 @@ fn apply_agent_provider_blocking(
                 AgentApplyPayload {
                     providers: agent_providers_snapshot(&store),
                     reveal: Some(AgentProviderReveal {
-                        base_url: provider.base_url.clone(),
+                        base_url: agent_address_for(&provider),
                         api_key,
                         model,
                     }),
@@ -1938,5 +1959,46 @@ mod agent_provider_command_tests {
             );
         }
         assert_eq!(agent_app_label("mcode"), "MiniMax Code");
+    }
+
+    /// 手动模式（Cursor）粘贴的地址必须和写进配置文件的是同一条规则：只会说 chat 的
+    /// Agent 选了别的格式时给本机代理的地址，其余情况给供应商自己的地址。
+    #[test]
+    fn the_address_a_pasted_manual_setup_gets_follows_the_writers_rule() {
+        let mut provider = AgentProvider {
+            id: "cursor-anthropic".to_string(),
+            app_id: "cursor".to_string(),
+            name: "供应商".to_string(),
+            base_url: "https://api.example.com/v1".to_string(),
+            api_key: None,
+            has_api_key: true,
+            api_format: agent_providers::ApiFormat::Anthropic,
+            models: vec!["model-a".to_string()],
+            default_model: "model-a".to_string(),
+            notes: String::new(),
+            sort_index: 0,
+        };
+        let proxied = agent_address_for(&provider);
+        assert!(
+            proxied.starts_with("http://127.0.0.1:")
+                && proxied.ends_with("/agent/cursor-anthropic"),
+            "选了 Anthropic 的手动 Agent 要粘贴本机代理的地址，实际是 {proxied}"
+        );
+        assert_ne!(proxied, provider.base_url, "不能把上游地址直接粘出去");
+        assert!(agent_providers::agent_chat_needs_proxy(provider.api_format));
+
+        provider.api_format = agent_providers::ApiFormat::OpenaiChat;
+        assert_eq!(agent_address_for(&provider), "https://api.example.com/v1");
+        assert!(!agent_providers::agent_chat_needs_proxy(
+            provider.api_format
+        ));
+
+        provider.api_format = agent_providers::ApiFormat::OpenaiResponses;
+        assert!(agent_address_for(&provider).ends_with("/agent/cursor-anthropic"));
+
+        // 供应商自己的地址两边有空格时，粘出去的也要是干净的地址。
+        provider.api_format = agent_providers::ApiFormat::OpenaiChat;
+        provider.base_url = "  https://api.example.com/v1  ".to_string();
+        assert_eq!(agent_address_for(&provider), "https://api.example.com/v1");
     }
 }
