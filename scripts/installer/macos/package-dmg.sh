@@ -178,5 +178,20 @@ sign_app "$STAGE/Claude Codex Pro.app"
 
 verify_app "$STAGE/Claude Codex Pro.app"
 
-hdiutil create -volname "Claude Codex Pro" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+# hdiutil 偶尔会报 "create failed - Resource busy"（上一次运行残留的挂载点），
+# 所以这里重试，并在重试前把同名卷强制卸载。
+attempt=1
+while true; do
+  if hdiutil create -volname "Claude Codex Pro" -srcfolder "$STAGE" -ov -format UDZO "$DMG"; then
+    break
+  fi
+  if [ "$attempt" -ge 3 ]; then
+    echo "hdiutil create failed after ${attempt} attempts" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  echo "hdiutil create failed; detaching leftovers and retrying (attempt ${attempt})" >&2
+  hdiutil detach "/Volumes/Claude Codex Pro" -force >/dev/null 2>&1 || true
+  sleep 5
+done
 echo "$DMG"
