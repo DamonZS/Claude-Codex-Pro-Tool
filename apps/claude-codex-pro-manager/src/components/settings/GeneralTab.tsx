@@ -14,7 +14,7 @@ export function GeneralTab({
 }: {
   preferences: AppPreferences;
   update: (patch: Partial<AppPreferences>) => Promise<boolean>;
-  /** Codex / Claude path & launch panel moved from the maintenance page. */
+  /** Codex 注入开关：原来在 Codex 窗口里那张控制台页面里。 */
   appPaths: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -135,7 +135,7 @@ export function GeneralTab({
         </select>
       </SettingsField>
 
-      <SettingsField hint={t("settings.appPaths.description")} title={t("settings.appPaths.title")}>
+      <SettingsField hint={t("settings.codexInjection.description")} title={t("settings.codexInjection.title")}>
         {appPaths}
       </SettingsField>
     </div>

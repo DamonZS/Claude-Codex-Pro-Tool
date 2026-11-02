@@ -96,7 +96,9 @@ export const zh = {
   "settings.terminal.powershell": "PowerShell",
   "settings.terminal.wt": "Windows Terminal",
   "settings.appPaths.title": "应用路径",
-  "settings.appPaths.description": "Codex 与 Claude Desktop 的安装位置和启动",
+    "settings.codexInjection.title": "Codex 注入开关",
+  "settings.codexInjection.description": "控制注入到 Codex 窗口里的增强项，改完重启 Codex 生效",
+"settings.appPaths.description": "Codex 与 Claude Desktop 的安装位置和启动",
 
   "settings.routing.local.title": "本地路由",
   "settings.routing.local.description": "控制路由服务开关、查看状态与端口信息",

@@ -36,6 +36,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { AgentOverview } from "@/components/AgentOverview";
 import { AgentBrandIcon } from "@/components/AgentBrandIcon";
+import { Segmented, SettingsField, ToggleRow } from "@/components/settings/SettingsControls";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 export { SupplierScreen } from "@/components/supplier/SupplierScreen";
 import contactWechatQr from "@/assets/contact-wechat-qr.jpg";
@@ -1536,42 +1537,87 @@ export function PluginHubScreen({
 
 export function MaintenanceToolsPanel({
   actions,
-  claudeDesktop,
-  overview,
   settings,
 }: {
   actions: AppActions;
-  claudeDesktop: ClaudeDesktopResult | null;
-  overview: OverviewResult | null;
   settings: SettingsResult | null;
 }) {
-  const savedCodexPath = settings?.settings.codexAppPath?.trim() || "";
-  const detectedCodexPath = overview?.codex_app.path || "";
-  const detectedClaudePath = claudeDesktop?.executablePaths?.[0] || "";
+  const current = settings?.settings ?? null;
+  const [saving, setSaving] = useState(false);
+  // 注入到 Codex 窗口里的控制台页面删掉之后，这几个开关只剩这里能改。
+  // 写的还是同一份 settings.json，注入脚本从 /settings/get 读到它。
+  const apply = async (patch: Partial<BackendSettings>) => {
+    if (!current || saving) return;
+    setSaving(true);
+    try {
+      await actions.saveSettings({ ...current, ...patch });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!current) {
+    return <Empty text="正在读取设置，稍等一下再改开关。" />;
+  }
+
+  const relayMode = current.launchMode === "relay";
   return (
     <div className="stack">
-      <Panel title="Codex 应用路径" detail="免安装版或绿色版只需要选择一次，之后静默启动会自动复用。">
-        <div className="ops-status-list">
-          <StatusRow label="保存路径" status={savedCodexPath ? "ok" : "not_checked"} value={savedCodexPath ? compactDisplayPath(savedCodexPath) : "未记录路径"} />
-          <StatusRow label="当前识别" status={overview?.codex_app.status ?? "not_checked"} value={compactDisplayPath(detectedCodexPath)} />
-        </div>
-        <label className="ops-form-field">
-          <span>保存的应用路径</span>
-          <input readOnly value={savedCodexPath || "选择 Codex.exe、Codex.app、app 目录或绿色目录"} />
-        </label>
-      </Panel>
-
-      <Panel title="Claude 应用路径" detail="用于核对 Claude Desktop 安装位置和开发模式相关操作。">
-        <div className="ops-status-list">
-          <StatusRow label="当前识别" status={detectedClaudePath ? "found" : claudeDesktop?.status ?? "not_checked"} value={detectedClaudePath ? compactDisplayPath(detectedClaudePath) : "未检测到 Claude 路径"} />
-          <StatusRow label="安装类型" status={claudeDesktop?.installKind ? "ok" : "not_checked"} value={claudeDesktop?.installKind ?? "未检测"} />
-          <StatusRow label="CDP 状态" status={claudeDesktop?.cdpStatus === "blocked" || claudeDesktop?.cdpStatus === "failed" ? "failed" : claudeDesktop?.cdpStatus ?? "not_checked"} value={claudeDesktop?.cdpStatus ?? "未检测"} />
-        </div>
-        <div className="action-row">
-          <Button onClick={() => void actions.launchClaudeDesktop()} size="sm" variant="outline">启动/重启Claude</Button>
-          <Button onClick={() => void actions.configureClaudeDesktopDevMode()} size="sm" variant="outline">Claude 一键开发模式</Button>
-        </div>
-      </Panel>
+      <div className="st-rows">
+        <ToggleRow
+          checked={current.enhancementsEnabled}
+          description="会话行、导出与拖拽这些页面增强；关掉只留 Codex 原生行为。"
+          disabled={saving}
+          icon={Sparkles}
+          onChange={(value) => void apply({ enhancementsEnabled: value })}
+          title="页面功能增强"
+          tone="var(--workspace-blue)"
+        />
+        <ToggleRow
+          checked={current.codexAppPluginMarketplaceUnlock}
+          description={relayMode ? "兼容增强模式下不必开；官方登录态本来就保留插件市场。" : "放开第三方插件市场的条目，直接能搜到、能装。"}
+          disabled={saving}
+          icon={Wrench}
+          onChange={(value) => void apply({ codexAppPluginMarketplaceUnlock: value })}
+          title="插件市场解锁"
+          tone="var(--workspace-success)"
+        />
+        <ToggleRow
+          checked={current.codexAppPluginEntryUnlock}
+          description={relayMode ? "兼容增强模式下不必开；官方登录态本来就保留插件入口。" : "恢复旧版被藏起来的插件入口按钮。"}
+          disabled={saving}
+          icon={ShieldCheck}
+          onChange={(value) => void apply({ codexAppPluginEntryUnlock: value })}
+          title="强制解锁入口"
+          tone="var(--workspace-warning)"
+        />
+        <ToggleRow
+          checked={current.codexAppForcePluginInstall}
+          description="让标记为不可用的插件也能落到安装队列里。"
+          disabled={saving}
+          icon={Download}
+          onChange={(value) => void apply({ codexAppForcePluginInstall: value })}
+          title="特殊插件强制安装"
+          tone="oklch(0.68 0.16 300)"
+        />
+        <ToggleRow
+          checked={current.codexAppServiceTierControls}
+          description="在 Codex 里露出 Fast 速度档位的切换按钮。"
+          disabled={saving}
+          icon={Play}
+          onChange={(value) => void apply({ codexAppServiceTierControls: value })}
+          title="Fast 按钮"
+          tone="var(--workspace-blue)"
+        />
+      </div>
+      <SettingsField hint="标准模式在本地打补丁；兼容增强把请求接到本机代理，适合只能用 API Key 的上游。" title="服务模式">
+        <Segmented
+          label="服务模式"
+          onChange={(value) => void apply({ launchMode: value })}
+          options={[{ value: "patch", label: "标准" }, { value: "relay", label: "兼容增强" }]}
+          value={current.launchMode}
+        />
+      </SettingsField>
     </div>
   );
 }
@@ -1611,7 +1657,7 @@ export const SettingsScreen = memo(function SettingsScreen({
     <SettingsPage
       about={<AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} />}
       actions={actions}
-      appPaths={<MaintenanceToolsPanel actions={actions} claudeDesktop={claudeDesktop} overview={overview} settings={settings} />}
+      appPaths={<MaintenanceToolsPanel actions={actions} settings={settings} />}
       logs={<LogsScreen actions={actions} logs={logs} />}
       settings={settings?.settings ?? null}
     />

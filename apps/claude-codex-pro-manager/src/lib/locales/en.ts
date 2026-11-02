@@ -98,7 +98,9 @@ export const en: Record<MessageKey, string> = {
   "settings.terminal.powershell": "PowerShell",
   "settings.terminal.wt": "Windows Terminal",
   "settings.appPaths.title": "App Paths",
-  "settings.appPaths.description": "Install locations and launch for Codex and Claude Desktop",
+    "settings.codexInjection.title": "Codex injection switches",
+  "settings.codexInjection.description": "Toggles the enhancements injected into the Codex window; restart Codex to apply",
+"settings.appPaths.description": "Install locations and launch for Codex and Claude Desktop",
 
   "settings.routing.local.title": "Local Routing",
   "settings.routing.local.description": "Control routing service toggle, view status and port info",
