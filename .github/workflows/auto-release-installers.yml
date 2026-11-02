@@ -13,8 +13,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  changed:
+    name: Decide whether this commit needs a release
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Skip docs-only pushes
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "push" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          before="${{ github.event.before }}"
+          if [ -z "$before" ] || ! git rev-parse --verify --quiet "$before^{commit}" >/dev/null; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$before" HEAD || true)"
+          if [ -z "$changed" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if printf '%s\n' "$changed" | grep -qvE '^(docs/|.*\.md$|\.github/)'; then
+            echo "A code change is included — building installers."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only docs / workflow files changed — skipping this release."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   prepare-release:
     name: Prepare auto release tag
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}
