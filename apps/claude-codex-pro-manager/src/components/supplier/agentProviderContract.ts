@@ -35,8 +35,8 @@ export const AGENT_PROVIDER_APPS: ReadonlyArray<AgentProviderApp> = [
   { id: "hermes", label: "Hermes", mode: "additive", formats: ["openai-chat", "anthropic"], configHint: "~/.hermes/config.yaml" },
   { id: "pi", label: "Pi", mode: "additive", formats: ["openai-chat", "openai-responses", "anthropic"], configHint: "~/.pi/agent/models.json" },
   { id: "mcode", label: "MiniMax Code", mode: "additive", formats: ["anthropic", "openai-chat", "openai-responses"], configHint: "~/.minimax/config.yaml" },
-  { id: "workbuddy", label: "WorkBuddy", mode: "additive", formats: ["openai-chat"], configHint: "~/.workbuddy/models.json" },
-  { id: "cursor", label: "Cursor", mode: "manual", formats: ["openai-chat"], configHint: "Cursor Settings → Models" },
+  { id: "workbuddy", label: "WorkBuddy", mode: "additive", formats: ["openai-chat", "anthropic", "openai-responses"], configHint: "~/.workbuddy/models.json" },
+  { id: "cursor", label: "Cursor", mode: "manual", formats: ["openai-chat", "anthropic", "openai-responses"], configHint: "Cursor Settings → Models" },
 ];
 
 export function agentProviderApp(id: AgentProviderAppId) {

@@ -1352,7 +1352,7 @@ fn ui_information_architecture_refactor_keeps_frontend_source_contracts() {
         "the sidebar must expose exactly ten primary destinations"
     );
     for (id, label) in [
-                ("overview", "概览"),
+        ("overview", "概览"),
         ("supplier", "供应商与路由"),
         ("clients", "蒸馏工作台"),
         ("memory", "记忆库"),
@@ -5250,4 +5250,65 @@ fn credential_environment_ui_describes_platform_scope_and_external_source_bounda
     assert!(screens.contains("不会删除 auth.json 凭据"));
     assert!(screens.contains("用户会话环境暂不可访问"));
     assert!(screens.contains("CCP 外部启动环境，需在原设置来源中清理"));
+}
+
+/// 前端那张「每个 Agent 支持哪些接口格式」的表，必须和后端 `allowed_formats` 一致。
+///
+/// 只认 chat 的 Agent（WorkBuddy、Cursor）这一格尤其要紧：后端已经允许它们选
+/// Anthropic / Responses（选了就由本机代理替它们转），前端要是还只列 `openai-chat`，
+/// 下拉框和那句中转提示就都不会出现——用户在界面上根本选不到那条路。
+#[test]
+fn the_frontend_format_table_matches_the_backend() {
+    let source = read_frontend_file("components/supplier/agentProviderContract.ts");
+    let apps = [
+        "gemini",
+        "grok",
+        "opencode",
+        "openclaw",
+        "hermes",
+        "pi",
+        "mcode",
+        "workbuddy",
+        "cursor",
+    ];
+    for app in apps {
+        let row = source
+            .lines()
+            .find(|line| line.contains(&format!(r#"id: "{app}""#)))
+            .unwrap_or_else(|| panic!("前端表里找不到 {app} 那一行"));
+        let start = row.find("formats: [").expect("每一行都要有 formats") + "formats: [".len();
+        let end = row[start..].find(']').expect("formats 要闭合") + start;
+        let mut frontend: Vec<String> = row[start..end]
+            .split(',')
+            .map(|format| format.trim().trim_matches('"').to_string())
+            .filter(|format| !format.is_empty())
+            .collect();
+        frontend.sort();
+
+        let mut backend: Vec<String> = claude_codex_pro_core::agent_providers::allowed_formats(app)
+            .iter()
+            .map(|format| {
+                serde_json::to_value(format)
+                    .expect("格式名要能序列化")
+                    .as_str()
+                    .expect("格式名是字符串")
+                    .to_string()
+            })
+            .collect();
+        backend.sort();
+
+        assert_eq!(frontend, backend, "{app} 的前端格式表与后端不一致");
+    }
+
+    // 只认 chat 的两个 Agent：这一格要是退回单项，代理那条路就从界面上消失了。
+    for app in ["workbuddy", "cursor"] {
+        let row = source
+            .lines()
+            .find(|line| line.contains(&format!(r#"id: "{app}""#)))
+            .unwrap();
+        assert!(
+            row.contains(r#"formats: ["openai-chat", "anthropic", "openai-responses"]"#),
+            "{app} 必须能选三种格式（选了非 chat 的由本机代理替它转），实际是：{row}"
+        );
+    }
 }
