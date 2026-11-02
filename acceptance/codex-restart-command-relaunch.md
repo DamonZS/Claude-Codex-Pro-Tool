@@ -91,3 +91,19 @@
 22. macOS `.app` 启动显式传递 provider 环境
    - 通过标准：launcher 从实时 `config.toml` / `auth.json` 读取 `env_key` 和凭据，并在 `/usr/bin/open` 命令的 `--args` 前加入 `--env KEY=VALUE`；诊断日志与状态 payload 不包含凭据。
    - 证据：core launcher 单元测试与日志源码检查。
+
+19. 等待阶段有界：进程起来了、调试端口不开时不再干等满 90 秒
+   - 通过标准：`wait_for_codex_launch_ports` 记录重启前已存在的 Codex 进程集合作为 baseline；发现新进程后 `CODEX_STARTUP_DEBUG_PORT_GRACE_MS = 15_000` 内仍未等到调试端口，立即返回 `running_degraded` 状态并写 `manager.restart_injection_ports_stalled` 日志；20 秒内连新进程都没出现（`CODEX_STARTUP_NO_PROCESS_GIVE_UP_MS`）则返回 `None` 并写 `manager.restart_injection_process_missing`。
+   - 证据：`cargo test -p claude-codex-pro-manager --lib restart_wait_tests` 5 条通过（含临界值前后各一毫秒）。
+
+20. 注入没生效不等于重启失败
+   - 通过标准：`restart_claude_codex_pro` 对 `running_degraded` 返回 `status: "needs_review"` 且消息点名调试端口；前端标题显示「Codex 已重启，注入未生效」而不是「重启失败」，并保留 `ok` / `needs_review` 两态配色。
+   - 证据：`windows_subsystem` 契约测试 91 条通过；`restart_wait_tests` 断言降级消息包含端口号。
+
+21. 进度提示说清「会自己收尾」
+   - 通过标准：点击后立刻出现的运行态提示仍是「正在关闭旧进程并重新启动 Codex，请稍候...」，并在其后说明 Codex 弹出后会自己收尾、注入没生效会单独提示。
+   - 证据：`windows_subsystem` 的 `codex_restart_feedback_is_immediate_specific_and_auto_dismissable`。
+
+22. 真机复现与结果一致
+   - 通过标准：在 Codex 桌面端（进程名为 `ChatGPT.exe`，调试端口 9230）点「启动/重启 Codex」，日志里出现 `manager.restart_injection_ports_stalled` 或 15 秒内的 `status: "ok"`，界面不再出现「未能在限定时间内启动」的 90 秒假失败。
+   - 证据：`%USERPROFILE%\.claude-codex-pro\claude-codex-pro.log` 的 `manager.ui.action.result` 行。

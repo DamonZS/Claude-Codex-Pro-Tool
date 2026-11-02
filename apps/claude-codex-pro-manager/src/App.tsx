@@ -1367,7 +1367,7 @@ export function App() {
     const request = { ...codexLaunchRequestFromOverview(overview), skipProviderSync };
     setNotice({
       title: "启动/重启 Codex",
-      message: "正在关闭旧进程并重新启动 Codex，请稍候...",
+      message: "正在关闭旧进程并重新启动 Codex，请稍候... Codex 弹出来后这条会自己收尾，注入没生效会单独告诉你。",
       status: "running",
     });
     await waitForPaint();
@@ -1377,6 +1377,9 @@ export function App() {
         ? result.payload as Record<string, unknown>
         : {};
       const successful = statusOk(result.status);
+      // Codex 起来了但调试端口没开：不算失败，但要让主人知道注入没生效。
+      const partial = result.status === "needs_review";
+      const finalStatus = partial ? "needs_review" : result.status;
       let refreshedOverview = await refreshOverview(true);
       let frontendInjected = payload.frontendRuntimeOnline === true
         || payload.frontend_runtime_online === true;
@@ -1386,13 +1389,13 @@ export function App() {
         frontendInjected = refreshedOverview?.latest_launch?.frontend_runtime_online === true;
       }
       notifyResult({
-        title: successful ? "Codex 重启完成" : "Codex 重启失败",
+        title: successful ? "Codex 重启完成" : partial ? "Codex 已重启，注入未生效" : "Codex 重启失败",
         message: successful
           ? frontendInjected
             ? "Codex 已重启成功，前端注入已确认生效。"
             : "Codex 已重启成功，前端注入正在后台确认；无需重复点击，稍后可在概览查看状态。"
           : result.message,
-        status: successful ? (frontendInjected ? "ok" : "needs_review") : result.status,
+        status: successful ? (frontendInjected ? "ok" : "needs_review") : finalStatus,
       });
     }
   };

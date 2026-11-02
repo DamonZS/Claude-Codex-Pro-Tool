@@ -224,6 +224,11 @@ const CLAUDE_ZH_PATCH_ELEVATED_TIMEOUT: Duration = Duration::from_secs(300);
 const REPAIR_CODEX_FRONTEND_TIMEOUT: Duration = Duration::from_secs(45);
 const REPAIR_CODEX_RESTART_TIMEOUT: Duration = Duration::from_secs(90);
 const REPAIR_CODEX_PORT_RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Codex 进程出现后，再给调试端口多少时间。端口一直不开说明注入没生效，
+/// 不该让界面干等满整个重启超时。
+const CODEX_STARTUP_DEBUG_PORT_GRACE_MS: u64 = 15_000;
+/// 重启之后连 Codex 进程都没出现，到这个时间就提前认输。
+const CODEX_STARTUP_NO_PROCESS_GIVE_UP_MS: u64 = 20_000;
 
 // ============================================================================
 // ✅ 安全日志工具函数 - 清理敏感信息
@@ -3511,6 +3516,13 @@ async fn restart_codex_for_frontend_repair(details: &mut Vec<String>) -> Option<
         wait_for_codex_launch_ports(&request, launch_started_at_ms, REPAIR_CODEX_RESTART_TIMEOUT)
             .await
     {
+        if status.status == "running_degraded" {
+            details.push(format!(
+                "Codex 进程已经起来，但调试端口 {debug_port} 没有开，界面注入没有生效。",
+                debug_port = status.debug_port.unwrap_or(request.debug_port)
+            ));
+            return Some(status);
+        }
         if status.helper_port_online {
             details.push(format!(
                 "Codex 自启完成，CDP 端口 {debug_port} 与后端端口 {helper_port} 已上线。",
@@ -3592,27 +3604,118 @@ fn force_kill_process_tree_for_frontend_repair(_pids: &[u32]) -> usize {
     0
 }
 
+/// 重启后那段等待该怎么收场：CDP 上线 → 成功；进程起来了但端口一直不开 →
+/// 注入没生效（要如实告诉用户，而不是干等 90 秒再说「没启动」）；
+/// 进程都没出现 → 提前失败。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexStartupStall {
+    Waiting,
+    RunningWithoutDebugPort,
+    NeverStarted,
+}
+
+fn codex_startup_stall(
+    launch_started_at_ms: u64,
+    codex_seen_at_ms: Option<u64>,
+    now_ms: u64,
+) -> CodexStartupStall {
+    match codex_seen_at_ms {
+        Some(seen) if now_ms.saturating_sub(seen) >= CODEX_STARTUP_DEBUG_PORT_GRACE_MS => {
+            CodexStartupStall::RunningWithoutDebugPort
+        }
+        Some(_) => CodexStartupStall::Waiting,
+        None if now_ms.saturating_sub(launch_started_at_ms)
+            >= CODEX_STARTUP_NO_PROCESS_GIVE_UP_MS =>
+        {
+            CodexStartupStall::NeverStarted
+        }
+        None => CodexStartupStall::Waiting,
+    }
+}
+
+fn codex_running_without_debug_port(
+    request: &LaunchRequest,
+    codex_seen_at_ms: u64,
+    helper_port_online: bool,
+) -> LaunchStatus {
+    LaunchStatus {
+        status: "running_degraded".to_string(),
+        message: format!(
+            "Codex 已经启动，但调试端口 {} 没有开，界面注入没有生效。",
+            request.debug_port
+        ),
+        started_at_ms: codex_seen_at_ms,
+        codex_app: Some(request.app_path.clone()),
+        debug_port: Some(request.debug_port),
+        helper_port: Some(request.helper_port),
+        debug_port_online: false,
+        helper_port_online,
+        frontend_runtime_online: false,
+        frontend_runtime_seen_at_ms: None,
+    }
+}
+
 async fn wait_for_codex_launch_ports(
     request: &LaunchRequest,
     launch_started_at_ms: u64,
     timeout: Duration,
 ) -> Option<LaunchStatus> {
     let started = Instant::now();
+    // 旧进程的 pid 记下来，只有「重启之后才出现」的进程才算新 Codex。
+    let baseline = claude_codex_pro_core::watcher::find_codex_processes();
+    let mut codex_seen_at_ms: Option<u64> = None;
     while started.elapsed() < timeout {
         let latest = StatusStore::default()
             .load_latest()
             .ok()
             .flatten()
             .map(refresh_launch_port_status);
+        let helper_port_online = helper_backend_online(request.helper_port);
         if let Some(status) = repair_launch_status(
             request,
             latest,
             launch_started_at_ms,
             codex_debug_port_online(request.debug_port),
-            helper_backend_online(request.helper_port),
+            helper_port_online,
             current_time_ms(),
         ) {
             return Some(status);
+        }
+        let now_ms = current_time_ms();
+        if codex_seen_at_ms.is_none() {
+            let running = claude_codex_pro_core::watcher::find_codex_processes();
+            if running.iter().any(|pid| !baseline.contains(pid)) {
+                codex_seen_at_ms = Some(now_ms);
+            }
+        }
+        match codex_startup_stall(launch_started_at_ms, codex_seen_at_ms, now_ms) {
+            CodexStartupStall::Waiting => {}
+            CodexStartupStall::RunningWithoutDebugPort => {
+                let seen = codex_seen_at_ms.unwrap_or(now_ms);
+                let status = codex_running_without_debug_port(request, seen, helper_port_online);
+                log_manager_event(
+                    "manager.restart_injection_ports_stalled",
+                    json!({
+                        "debug_port": request.debug_port,
+                        "helper_port": request.helper_port,
+                        "helper_port_online": helper_port_online,
+                        "waited_ms": now_ms.saturating_sub(launch_started_at_ms),
+                        "codex_seen_ms": now_ms.saturating_sub(seen),
+                    }),
+                );
+                return Some(status);
+            }
+            CodexStartupStall::NeverStarted => {
+                log_manager_event(
+                    "manager.restart_injection_process_missing",
+                    json!({
+                        "debug_port": request.debug_port,
+                        "helper_port": request.helper_port,
+                        "waited_ms": now_ms.saturating_sub(launch_started_at_ms),
+                    }),
+                );
+                return None;
+            }
         }
         tokio::time::sleep(Duration::from_millis(750)).await;
     }
@@ -3875,6 +3978,15 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
                 )
                 .await
                 {
+                    Some(status) if status.status == "running_degraded" => {
+                        return needs_review(
+                            &format!(
+                                "Codex 已经重新启动，但调试端口 {} 没有开：界面注入没有生效。可以点「修复前端连接」再试一次，或查看启动日志。",
+                                monitor_request.debug_port
+                            ),
+                            restart_codex_payload(&status),
+                        );
+                    }
                     Some(status) => {
                         return ok(
                             "Codex 已重新启动，新的启动记录与 CDP/后端端口已确认上线。",
@@ -3883,7 +3995,10 @@ pub async fn restart_claude_codex_pro(request: LaunchRequest) -> CommandResult<V
                     }
                     None => {
                         return failed(
-                            "旧 Codex 已关闭，但新 Codex 未能在限定时间内启动，请检查应用路径和启动日志。",
+                            &format!(
+                                "旧 Codex 已关闭，但新 Codex 未能在限定时间内启动，请检查应用路径和启动日志。（调试端口 {} 一直没有开、Codex 进程也没有出现）",
+                                monitor_request.debug_port
+                            ),
                             json!({
                                 "debugPort": monitor_request.debug_port,
                                 "helperPort": monitor_request.helper_port,
@@ -13571,6 +13686,15 @@ fn imported_supplier_config_toml(profile: &RelayProfile) -> String {
     lines.join("\n")
 }
 
+/// 事情做成了但有一半要用户看一眼（例如 Codex 起来了、注入没生效）。
+fn needs_review<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
+    CommandResult {
+        status: "needs_review".to_string(),
+        message: message.to_string(),
+        payload,
+    }
+}
+
 fn ok<T: Serialize>(message: &str, payload: T) -> CommandResult<T> {
     CommandResult {
         status: "ok".to_string(),
@@ -17002,5 +17126,53 @@ pub async fn ccpbot_install_latest(
                 },
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod restart_wait_tests {
+    use super::*;
+
+    #[test]
+    fn stall_keeps_waiting_while_the_new_codex_is_still_starting() {
+        let verdict = codex_startup_stall(1_000, Some(5_000), 9_000);
+        assert_eq!(verdict, CodexStartupStall::Waiting);
+    }
+
+    #[test]
+    fn stall_reports_a_codex_that_never_opened_its_debug_port() {
+        let verdict = codex_startup_stall(
+            1_000,
+            Some(5_000),
+            5_000 + CODEX_STARTUP_DEBUG_PORT_GRACE_MS,
+        );
+        assert_eq!(verdict, CodexStartupStall::RunningWithoutDebugPort);
+    }
+
+    #[test]
+    fn stall_gives_up_early_when_no_codex_process_shows_up() {
+        let verdict = codex_startup_stall(1_000, None, 1_000 + CODEX_STARTUP_NO_PROCESS_GIVE_UP_MS);
+        assert_eq!(verdict, CodexStartupStall::NeverStarted);
+    }
+
+    #[test]
+    fn stall_still_waits_before_the_give_up_line() {
+        let verdict =
+            codex_startup_stall(1_000, None, 1_000 + CODEX_STARTUP_NO_PROCESS_GIVE_UP_MS - 1);
+        assert_eq!(verdict, CodexStartupStall::Waiting);
+    }
+
+    #[test]
+    fn running_without_debug_port_is_marked_degraded_and_names_the_port() {
+        let request = LaunchRequest {
+            app_path: r"C:\Program Files\WindowsApps\OpenAI.Codex\app".to_string(),
+            debug_port: 9230,
+            helper_port: 57321,
+            skip_provider_sync: true,
+        };
+        let status = codex_running_without_debug_port(&request, 42, false);
+        assert_eq!(status.status, "running_degraded");
+        assert!(!status.debug_port_online);
+        assert!(status.message.contains("9230"));
     }
 }

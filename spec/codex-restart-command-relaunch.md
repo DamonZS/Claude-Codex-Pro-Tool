@@ -83,3 +83,12 @@
 - Windows 将 launcher 单例端口标记为系统保留或禁止绑定、返回 `PermissionDenied` / `os error 10013` 时，launcher 必须复用已有文件锁作为单例守卫并继续启动 Codex。
 - 文件锁冲突仍表示已有 launcher 实例，不得绕过单例约束。
 - 后端和 CDP 继续使用既有动态端口选择逻辑，不固定新的备用端口。
+
+## 等待阶段必须有没有超时的启发式
+
+重启后的等待不能只看调试端口：Codex 桌面端已经启动、但注入没生效时，端口可能长时间不开。实现约定：
+
+- 以重启前的 Codex 进程集合为 baseline，只把新出现的进程当作「本次启动」。
+- 新进程出现后 15 秒仍未开调试端口 ⇒ 返回 `running_degraded`，如实告诉主人注入没生效，而不是继续等。
+- 20 秒内没有任何新 Codex 进程 ⇒ 直接失败，不再等满 90 秒。
+- 三个分支都要写结构化日志（`manager.restart_injection_ports_stalled` / `manager.restart_injection_process_missing`），便于事后对时间线。

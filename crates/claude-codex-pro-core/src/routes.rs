@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::models::{DeleteResult, DeleteStatus, ExportResult, ExportStatus, SessionRef};
 use crate::settings::{BackendSettings, SettingsStore};
@@ -966,10 +966,12 @@ mod tests {
         assert_eq!(value["message"], "已启动 1.68 的安装包");
         assert_eq!(value["payload"]["version"], "1.68");
         assert_eq!(value["payload"]["launched"], true);
-        assert!(value["payload"]["installerPath"]
-            .as_str()
-            .unwrap_or_default()
-            .ends_with("CCP_1.68_x64-setup.exe"));
+        assert!(
+            value["payload"]["installerPath"]
+                .as_str()
+                .unwrap_or_default()
+                .ends_with("CCP_1.68_x64-setup.exe")
+        );
     }
 
     #[test]
