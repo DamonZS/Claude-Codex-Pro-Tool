@@ -10622,6 +10622,13 @@ html.dark > body > .supplier-model-dropdown-menu,
   white-space: nowrap;
 }
 
+.aitracker-session-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
 .aitracker-session-resume {
   flex: 0 0 auto;
   border-color: color-mix(in srgb, var(--workspace-blue) 56%, transparent) !important;

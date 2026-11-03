@@ -198,6 +198,14 @@ pub struct AgentSessionSummary {
     /// layer; empty when unknown.
     #[serde(default)]
     pub title: String,
+    /// Raw client session id accepted by that client's own resume command
+    /// (Codex rollout UUID). Filled by the command layer; empty when the client
+    /// offers no way to reopen the session.
+    #[serde(default)]
+    pub resume_id: String,
+    /// Name the client shows for the resumable session, when it stores one.
+    #[serde(default)]
+    pub resume_name: String,
     pub started_at: String,
     pub ended_at: String,
     pub events: usize,
@@ -572,6 +580,8 @@ pub fn session_summaries(snapshot: &LocalUsageSnapshot) -> Vec<AgentSessionSumma
                 model: first.model.clone(),
                 project: first.project.clone(),
                 title: String::new(),
+                resume_id: String::new(),
+                resume_name: String::new(),
                 started_at: first.timestamp.clone().min(last.timestamp.clone()),
                 ended_at: first.timestamp.clone().max(last.timestamp.clone()),
                 events: events.len(),
@@ -604,6 +614,8 @@ pub fn session_summaries(snapshot: &LocalUsageSnapshot) -> Vec<AgentSessionSumma
                 model: session.model.clone(),
                 project: session.project.clone(),
                 title: String::new(),
+                resume_id: String::new(),
+                resume_name: String::new(),
                 started_at: session.started_at.clone(),
                 ended_at: session.ended_at.clone(),
                 events: 0,
@@ -1053,6 +1065,8 @@ mod tests {
             model: model.into(),
             project: "Repo".into(),
             title: String::new(),
+            resume_id: String::new(),
+            resume_name: String::new(),
             started_at: start.into(),
             ended_at: end.into(),
             events,

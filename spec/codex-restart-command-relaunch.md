@@ -92,3 +92,11 @@
 - 新进程出现后 15 秒仍未开调试端口 ⇒ 返回 `running_degraded`，如实告诉主人注入没生效，而不是继续等。
 - 20 秒内没有任何新 Codex 进程 ⇒ 直接失败，不再等满 90 秒。
 - 三个分支都要写结构化日志（`manager.restart_injection_ports_stalled` / `manager.restart_injection_process_missing`），便于事后对时间线。
+
+## Windows 打包应用激活失败必须回退到可执行文件启动
+
+Windows 上 launcher 优先走打包激活（`IApplicationActivationManager::ActivateApplication`，AUMID + CDP 参数）。实测某台机器上打包激活会返回 `HRESULT 0x80070005`（提示「无法安装，因为在确定需要关闭哪些应用时发生未知错误」），此时旧实现直接冒泡成 `launcher.fatal`，结果是「旧 Codex 已关闭、新 Codex 一个进程都没出现」。
+
+- 打包激活失败时必须写 `launcher.packaged_activation_failed_falling_back_to_executable`（含 `debug_port`、`app_user_model_id`、错误文本），并在同一次启动里继续走可执行文件路径（`build_codex_command` → `ChatGPT.exe --remote-debugging-port=<port> --remote-allow-origins=http://127.0.0.1:<port>`）。
+- 打包激活的调用不得再用 `?` 直接冒泡；只有打包激活与可执行文件启动都失败时才返回失败。
+- 回退路径同样要注入当前供应商凭据，行为与既有可执行文件启动一致。

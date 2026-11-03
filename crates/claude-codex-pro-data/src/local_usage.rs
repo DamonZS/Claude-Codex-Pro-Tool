@@ -6,7 +6,7 @@ use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
@@ -1648,6 +1648,106 @@ fn sqlite_timestamp(value: i64) -> String {
         .to_rfc3339()
 }
 
+/// A Codex session the local client reopens with `codex resume <id>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodexResumeTarget {
+    pub id: String,
+    pub name: String,
+}
+
+/// Maps our AITracker session id to the Codex session UUID that `codex resume`
+/// accepts. Codex names every rollout file after its session UUID, so those file
+/// names are the authoritative list; `session_index.jsonl` only adds the human
+/// name. Read-only: no session file is rewritten.
+pub fn codex_resume_targets(home: &Path) -> BTreeMap<String, CodexResumeTarget> {
+    let codex_home = home.join(".codex");
+    let names = codex_indexed_session_names(&codex_home.join("session_index.jsonl"));
+    let mut targets = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(&codex_home) else {
+        return targets;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name != "sessions" && !name.starts_with("sessions.") {
+            continue;
+        }
+        collect_codex_resume_targets(&path, &names, &mut targets, 0);
+    }
+    targets
+}
+
+fn collect_codex_resume_targets(
+    dir: &Path,
+    names: &BTreeMap<String, String>,
+    targets: &mut BTreeMap<String, CodexResumeTarget>,
+    depth: usize,
+) {
+    if depth > 6 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_codex_resume_targets(&path, names, targets, depth + 1);
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(id) = codex_session_uuid_from_rollout(file_name) else {
+            continue;
+        };
+        let name = names.get(&id).cloned().unwrap_or_default();
+        targets.insert(
+            private_id("codex", "structured", &id),
+            CodexResumeTarget { id, name },
+        );
+    }
+}
+
+/// `rollout-<timestamp>-<session uuid>.jsonl` → the trailing session UUID.
+fn codex_session_uuid_from_rollout(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
+    let candidate = stem.get(stem.len().checked_sub(36)?..)?;
+    is_session_uuid(candidate).then(|| candidate.to_string())
+}
+
+fn is_session_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.char_indices().all(|(index, ch)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                ch == '-'
+            } else {
+                ch.is_ascii_hexdigit()
+            }
+        })
+}
+
+fn codex_indexed_session_names(path: &Path) -> BTreeMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return BTreeMap::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let value: Value = serde_json::from_str(line.trim()).ok()?;
+            let id = value.get("id")?.as_str()?.to_string();
+            let name = value
+                .get("thread_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            Some((id, name))
+        })
+        .collect()
+}
+
 /// Reads only WorkBuddy's session index; message bodies and settings stay untouched.
 /// WorkBuddy's own session names, keyed by the raw session id. The usage
 /// snapshot carries no titles, so the workbench would otherwise label every
@@ -2330,6 +2430,43 @@ mod tests {
             },
             max_file_bytes: MAX_FILE_BYTES,
         }
+    }
+
+    #[test]
+    fn codex_resume_targets_map_rollout_files_and_index_names() {
+        let root = tempdir().unwrap();
+        let home = root.path();
+        let day = home
+            .join(".codex")
+            .join("sessions")
+            .join("2026")
+            .join("11")
+            .join("03");
+        fs::create_dir_all(&day).unwrap();
+        let id = "01a19fa9-7a9c-7793-8506-2c30d71db149";
+        fs::write(
+            day.join(format!("rollout-2026-11-03T12-27-26-{id}.jsonl")),
+            "",
+        )
+        .unwrap();
+        fs::write(day.join("rollout-2026-11-03T12-27-26-unfinished.jsonl"), "").unwrap();
+        fs::write(
+            home.join(".codex").join("session_index.jsonl"),
+            format!("{{\"id\":\"{id}\",\"thread_name\":\"逆向分析\"}}\n"),
+        )
+        .unwrap();
+
+        let targets = codex_resume_targets(home);
+        assert_eq!(
+            targets.len(),
+            1,
+            "only rollout files carrying a session UUID count"
+        );
+        let target = targets
+            .get(&private_id("codex", "structured", id))
+            .expect("the rollout UUID maps back to our session id");
+        assert_eq!(target.id, id);
+        assert_eq!(target.name, "逆向分析");
     }
 
     #[test]

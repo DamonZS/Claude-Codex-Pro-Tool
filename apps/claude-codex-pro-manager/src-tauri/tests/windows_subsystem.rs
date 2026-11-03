@@ -5338,3 +5338,57 @@ fn the_frontend_format_table_matches_the_backend() {
         );
     }
 }
+
+#[test]
+fn resume_session_command_launches_codex_resume() {
+    let commands = include_str!("../src/commands.rs");
+    let lib = include_str!("../src/lib.rs");
+
+    assert!(commands.contains("pub async fn resume_agent_session("));
+    assert!(commands.contains("claude_codex_pro_core::app_paths::find_codex_desktop_cli()"));
+    assert!(commands.contains("fn codex_resume_command_line("));
+    assert!(lib.contains("commands::resume_agent_session,"));
+
+    // 恢复会话不能借道只读详情，也不能把用户带进蒸馏视图。
+    let start = commands.find("pub async fn resume_agent_session(").unwrap();
+    let rest = &commands[start..];
+    let end = rest.find("\n}\n").unwrap_or(rest.len());
+    let body = &rest[..end];
+    assert!(body.contains(r#"mode: "unavailable".into()"#));
+    assert!(!body.contains("read_aitracker_session_detail"));
+    assert!(!body.contains("distillation"));
+}
+
+#[test]
+fn resume_button_invokes_the_real_resume_command() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let screens = read_source_file(&manifest_dir.parent().unwrap().join("src/screens.tsx"));
+    let app_tsx = read_source_file(&manifest_dir.parent().unwrap().join("src/App.tsx"));
+
+    assert!(screens.contains("恢复会话"));
+    assert!(screens.contains("disabled={!session.resumeId}"));
+    assert!(screens.contains("onClick={() => void resumeSession(session)}"));
+    assert!(
+        screens.contains("await actions.resumeAgentSession({ sessionId: session.sessionId });")
+    );
+    assert!(screens.contains("查看会话"));
+    assert!(screens.contains("onClick={() => void openSession(session)}"));
+    assert!(app_tsx.contains(r#"call<ResumeAgentSessionResult>("resume_agent_session", { sessionId: request.sessionId })"#));
+}
+
+#[test]
+fn codex_launch_falls_back_to_the_executable_when_packaged_activation_fails() {
+    let launcher = include_str!("../../../../crates/claude-codex-pro-core/src/launcher.rs");
+
+    assert!(launcher.contains("launcher.packaged_activation_failed_falling_back_to_executable"));
+    assert!(launcher.contains("'packaged: {"));
+    assert!(launcher.contains("break 'packaged;"));
+    assert!(launcher.contains("Ok(process_id) => process_id,"));
+    // 打包激活失败不能直接冒泡：失败分支必须记日志后落到下面的可执行文件启动路径。
+    let fallback = launcher
+        .find("launcher.packaged_activation_failed_falling_back_to_executable")
+        .unwrap();
+    let after = &launcher[fallback..];
+    assert!(after.contains("break 'packaged;"));
+    assert!(launcher.contains("failed to launch Codex executable"));
+}

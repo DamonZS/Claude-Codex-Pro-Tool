@@ -7417,6 +7417,7 @@ fn scan_unified_usage_snapshot() -> UnifiedUsageSnapshot {
     // otherwise every indexed row falls back to its project name.
     let mut snapshot = claude_codex_pro_data::aitracker::project_snapshot(&usage);
     apply_session_titles(&mut snapshot.sessions, &current_session_titles());
+    apply_session_resume_targets(&mut snapshot.sessions, &current_codex_resume_targets());
     let _ = claude_codex_pro_data::usage_index::write_usage(&usage, &snapshot);
     (records, warnings, usage)
 }
@@ -7665,6 +7666,7 @@ pub async fn read_aitracker_capabilities() -> CommandResult<AitrackerCapabilitie
             user_home,
         );
         apply_session_titles(&mut snapshot.sessions, &current_session_titles());
+        apply_session_resume_targets(&mut snapshot.sessions, &current_codex_resume_targets());
         ok(
             "能力数据已加载。",
             AitrackerCapabilitiesPayload {
@@ -8034,6 +8036,147 @@ fn apply_session_titles(
             session.title = title.clone();
         }
     }
+}
+
+/// Codex can reopen a session by the UUID it recorded in the rollout file name,
+/// so the file names are the list of resumable sessions. The 会话 page paginates,
+/// so cache the scan like the title map.
+const RESUME_TARGETS_TTL: Duration = Duration::from_secs(600);
+
+fn current_codex_resume_targets()
+-> BTreeMap<String, claude_codex_pro_data::local_usage::CodexResumeTarget> {
+    static CACHE: OnceLock<
+        Mutex<
+            Option<(
+                Instant,
+                BTreeMap<String, claude_codex_pro_data::local_usage::CodexResumeTarget>,
+            )>,
+        >,
+    > = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut slot = match cache.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some((scanned_at, targets)) = slot.as_ref()
+        && scanned_at.elapsed() < RESUME_TARGETS_TTL
+    {
+        return targets.clone();
+    }
+    let targets = dirs::home_dir()
+        .map(|home| claude_codex_pro_data::local_usage::codex_resume_targets(&home))
+        .unwrap_or_default();
+    *slot = Some((Instant::now(), targets.clone()));
+    targets
+}
+
+/// Marks which listed sessions the local Codex client can reopen. Sessions the
+/// client never recorded keep an empty id, and the page greys the action out.
+fn apply_session_resume_targets(
+    sessions: &mut [claude_codex_pro_data::aitracker::AgentSessionSummary],
+    targets: &BTreeMap<String, claude_codex_pro_data::local_usage::CodexResumeTarget>,
+) {
+    for session in sessions {
+        if let Some(target) = targets.get(&session.session_id) {
+            session.resume_id = target.id.clone();
+            session.resume_name = target.name.clone();
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeAgentSessionOutcome {
+    pub ok: bool,
+    /// `codex-resume` when the client was asked to reopen the session,
+    /// `unavailable` when this machine cannot do it.
+    pub mode: String,
+    pub session_id: String,
+    /// The client session id that was handed over; empty when unavailable.
+    pub resume_id: String,
+}
+
+/// The client command line that reopens a session. On Windows `cmd /C start`
+/// hands the UUID to the desktop app instead of blocking this process.
+fn codex_resume_command_line(cli: &std::path::Path, resume_id: &str) -> Vec<String> {
+    let cli = cli.display().to_string();
+    if cfg!(windows) {
+        vec![
+            "/C".into(),
+            "start".into(),
+            String::new(),
+            cli,
+            "resume".into(),
+            resume_id.into(),
+        ]
+    } else {
+        vec![cli, "resume".into(), resume_id.into()]
+    }
+}
+
+/// Reopens a session in the user's Codex client. Only the session id Codex
+/// itself recorded is used, and anything else is reported as unavailable rather
+/// than guessed at.
+#[tauri::command]
+pub async fn resume_agent_session(
+    session_id: String,
+) -> Result<CommandResult<ResumeAgentSessionOutcome>, String> {
+    let session_id = session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Err("会话 ID 不能为空".into());
+    }
+    let unavailable = |message: &str| {
+        needs_review(
+            message,
+            ResumeAgentSessionOutcome {
+                ok: false,
+                mode: "unavailable".into(),
+                session_id: session_id.clone(),
+                resume_id: String::new(),
+            },
+        )
+    };
+    let Some(target) = current_codex_resume_targets().get(&session_id).cloned() else {
+        return Ok(unavailable(
+            "这次会话没有留下 Codex 可恢复的会话标识，请在 Codex 中打开对应项目后从历史记录进入。",
+        ));
+    };
+    let Some(cli) = claude_codex_pro_core::app_paths::find_codex_desktop_cli() else {
+        return Ok(unavailable(
+            "未找到本地 Codex 客户端，请先启动或安装 Codex 后再试。",
+        ));
+    };
+    #[cfg(windows)]
+    let mut command = {
+        use std::os::windows::process::CommandExt;
+        let mut command = std::process::Command::new("cmd");
+        command.args(codex_resume_command_line(&cli, &target.id));
+        command.creation_flags(claude_codex_pro_core::windows_create_no_window());
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = std::process::Command::new(&cli);
+        command.arg("resume").arg(&target.id);
+        command
+    };
+    if let Err(error) = command.spawn() {
+        return Ok(unavailable(&format!("无法启动 Codex 客户端：{error}")));
+    }
+    let message = if target.name.is_empty() {
+        "已在 Codex 中恢复该会话。".to_string()
+    } else {
+        format!("已在 Codex 中恢复「{}」。", target.name)
+    };
+    Ok(ok(
+        message.as_str(),
+        ResumeAgentSessionOutcome {
+            ok: true,
+            mode: "codex-resume".into(),
+            session_id,
+            resume_id: target.id,
+        },
+    ))
 }
 
 /// The workbench session list scans every distillable agent's usage store plus
@@ -9263,6 +9406,7 @@ pub async fn query_aitracker_sessions(
         // Index titles can be empty (the projection does not carry the title
         // map); reuse the existing title lookup for both paths.
         apply_session_titles(&mut sessions, &current_session_titles());
+        apply_session_resume_targets(&mut sessions, &current_codex_resume_targets());
         ok(
             "会话已加载。",
             AitrackerSessionsPayload {
@@ -14107,6 +14251,8 @@ mod tests {
             model: String::new(),
             project: "Repo".into(),
             title: String::new(),
+            resume_id: String::new(),
+            resume_name: String::new(),
             started_at: String::new(),
             ended_at: String::new(),
             events: 0,
@@ -14121,6 +14267,55 @@ mod tests {
         );
         apply_session_titles(&mut sessions, &titles);
         assert_eq!(sessions[0].title, "继续指定会话任务");
+    }
+
+    #[test]
+    fn resume_targets_mark_only_sessions_codex_recorded() {
+        let target = claude_codex_pro_data::local_usage::CodexResumeTarget {
+            id: "01a19fa9-7a9c-7793-8506-2c30d71db149".into(),
+            name: "逆向分析".into(),
+        };
+        let mut targets = BTreeMap::new();
+        targets.insert("codex:session-1".to_string(), target.clone());
+        let summary = |session_id: &str| claude_codex_pro_data::aitracker::AgentSessionSummary {
+            session_id: session_id.into(),
+            agent: "codex".into(),
+            provider: String::new(),
+            model: String::new(),
+            project: "Repo".into(),
+            title: String::new(),
+            resume_id: String::new(),
+            resume_name: String::new(),
+            started_at: String::new(),
+            ended_at: String::new(),
+            events: 0,
+            tool_calls: 0,
+            status: String::new(),
+            totals: Default::default(),
+        };
+        let mut sessions = vec![summary("codex:session-1"), summary("codex:session-2")];
+
+        apply_session_resume_targets(&mut sessions, &targets);
+
+        assert_eq!(sessions[0].resume_id, target.id);
+        assert_eq!(sessions[0].resume_name, "逆向分析");
+        assert!(
+            sessions[1].resume_id.is_empty(),
+            "sessions Codex never recorded stay unavailable"
+        );
+    }
+
+    #[test]
+    fn resume_command_line_hands_the_recorded_uuid_to_the_client() {
+        let line = codex_resume_command_line(
+            std::path::Path::new("C:/Users/Damon/codex.exe"),
+            "01a19fa9-7a9c-7793-8506-2c30d71db149",
+        );
+        assert!(line.contains(&"resume".to_string()));
+        assert_eq!(
+            line.last().map(String::as_str),
+            Some("01a19fa9-7a9c-7793-8506-2c30d71db149")
+        );
     }
 
     #[test]
@@ -14277,6 +14472,8 @@ mod tests {
                 model: String::new(),
                 project: String::new(),
                 title: String::new(),
+                resume_id: String::new(),
+                resume_name: String::new(),
                 started_at: String::new(),
                 ended_at: String::new(),
                 events: 0,

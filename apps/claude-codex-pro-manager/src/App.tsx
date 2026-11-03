@@ -210,6 +210,7 @@ import type {
   AdsResult,
   AitrackerCapabilitiesResult,
   AitrackerSessionDetailResult,
+  ResumeAgentSessionResult,
   DistillationCandidatesResult,
   DistillationWorkbenchResult,
   DistillationRunResult,
@@ -791,6 +792,15 @@ export function App() {
       () => call<AitrackerSessionDetailResult>("read_aitracker_session_detail", { request }),
       "会话详情",
       { trackBusy: false, notify: false },
+    );
+    return result;
+  };
+
+  /// 恢复会话：只把 Codex 自己记录的会话 id 交给本地客户端，拿不到就如实说明。
+  const resumeAgentSession = async (request: { sessionId: string }) => {
+    const result = await run(
+      () => call<ResumeAgentSessionResult>("resume_agent_session", { sessionId: request.sessionId }),
+      "恢复会话",
     );
     return result;
   };
@@ -2776,6 +2786,7 @@ export function App() {
       deleteClaudeSession,
       refreshAitrackerCapabilities,
       readAitrackerSessionDetail,
+      resumeAgentSession,
       listDistillationCandidates,
       createDistillationCandidate,
       updateDistillationCandidate,
@@ -2922,6 +2933,7 @@ export function App() {
       deleteClaudeSession: (...args) => actionsRef.current!.deleteClaudeSession(...args),
       refreshAitrackerCapabilities: (...args) => actionsRef.current!.refreshAitrackerCapabilities(...args),
       readAitrackerSessionDetail: (...args) => actionsRef.current!.readAitrackerSessionDetail(...args),
+      resumeAgentSession: (...args) => actionsRef.current!.resumeAgentSession(...args),
       listDistillationCandidates: (...args) => actionsRef.current!.listDistillationCandidates(...args),
       createDistillationCandidate: (...args) => actionsRef.current!.createDistillationCandidate(...args),
       updateDistillationCandidate: (...args) => actionsRef.current!.updateDistillationCandidate(...args),

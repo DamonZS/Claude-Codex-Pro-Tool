@@ -1227,6 +1227,10 @@ function AitrackerSessionPanel({
       setDetailLoading(false);
     }
   };
+  /// 真恢复：只把 Codex 自己记录的会话 id 交出去，这里不会打开只读详情。
+  const resumeSession = async (session: AitrackerSessionSummary) => {
+    await actions.resumeAgentSession({ sessionId: session.sessionId });
+  };
   const selectedCandidate = selected
     ? candidates.find((item) => item.agent === selected.agent && item.sessionId === selected.sessionId && item.status === "pending")
     : null;
@@ -1323,10 +1327,22 @@ function AitrackerSessionPanel({
                         <strong>{session.title || session.project || "未采集会话"}</strong>
                         <small>{session.project || "项目未采集"} · {session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
                       </button>
-                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm" title="打开只读详情，不会启动或继续该会话">
-                        <MessageCircle className="h-3.5 w-3.5" />
-                        查看会话
-                      </Button>
+                      <div className="aitracker-session-card-actions">
+                        <Button
+                          className="aitracker-session-resume"
+                          disabled={!session.resumeId}
+                          onClick={() => void resumeSession(session)}
+                          size="sm"
+                          title={session.resumeId ? `在 Codex 中恢复该会话（${session.resumeId}）` : "该会话没有留下 Codex 可恢复的会话标识"}
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          恢复会话
+                        </Button>
+                        <Button onClick={() => void openSession(session)} size="sm" title="打开只读详情，不会启动或继续该会话" variant="outline">
+                          <MessageCircle className="h-3.5 w-3.5" />
+                          查看会话
+                        </Button>
+                      </div>
                     </article>
                   ))}
                 </div>

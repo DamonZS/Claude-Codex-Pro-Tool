@@ -20,7 +20,7 @@ use std::time::Duration as StdDuration;
 #[cfg(test)]
 use std::sync::{Mutex, OnceLock};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const DB_FILE_NAME: &str = "usage-index-v1.db";
 const CONNECTION_BUSY_TIMEOUT: StdDuration = StdDuration::from_millis(5_000);
 
@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS sessions(
   input_tokens INTEGER NOT NULL DEFAULT 0, cached_input_tokens INTEGER NOT NULL DEFAULT 0,
   cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+  resume_id TEXT NOT NULL DEFAULT '', resume_name TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(source, session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at_ms DESC);
@@ -86,13 +87,14 @@ const SESSION_INSERT_SQL: &str = "INSERT OR REPLACE INTO sessions(\
      source, session_id, title, project, model, provider, started_at, ended_at, \
      started_at_ms, ended_at_ms, events, tool_calls, status, total_tokens, \
      input_tokens, cached_input_tokens, cache_creation_input_tokens, output_tokens, \
-     reasoning_output_tokens\
-     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)";
+     reasoning_output_tokens, resume_id, resume_name\
+     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)";
 
 /// Column order shared by the query and `session_from_row`.
 const SESSION_COLUMNS: &str = "session_id, source, provider, model, project, title, \
      started_at, ended_at, events, tool_calls, status, total_tokens, input_tokens, \
-     cached_input_tokens, cache_creation_input_tokens, output_tokens, reasoning_output_tokens";
+     cached_input_tokens, cache_creation_input_tokens, output_tokens, reasoning_output_tokens, \
+     resume_id, resume_name";
 
 const WORKBENCH_INSERT_SQL: &str = "INSERT OR REPLACE INTO workbench(\
      agent, session_id, title, project, project_key, is_git_project, model, started_at, \
@@ -346,6 +348,8 @@ fn session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentSessionSum
         model: row.get(3)?,
         project: row.get(4)?,
         title: row.get(5)?,
+        resume_id: row.get(17)?,
+        resume_name: row.get(18)?,
         started_at: row.get(6)?,
         ended_at: row.get(7)?,
         events: read_usize(row.get(8)?),
@@ -426,6 +430,8 @@ fn write_usage_once(usage: &LocalUsageSnapshot, snapshot: &AitrackerSnapshot) ->
                 sql_u64(session.totals.cache_creation_input_tokens),
                 sql_u64(session.totals.output_tokens),
                 sql_u64(session.totals.reasoning_output_tokens),
+                session.resume_id,
+                session.resume_name,
             ])?;
         }
     }
@@ -630,6 +636,8 @@ mod tests {
             model: format!("{agent}-model"),
             project: project.into(),
             title: title.into(),
+            resume_id: String::new(),
+            resume_name: String::new(),
             started_at: started_at.into(),
             ended_at: started_at.into(),
             events: 3,
@@ -660,6 +668,54 @@ mod tests {
             .iter()
             .map(|session| session.session_id.as_str())
             .collect()
+    }
+
+    #[test]
+    fn usage_index_round_trips_codex_resume_targets() {
+        let _guard = test_guard();
+        let _directory = install_temp_db();
+        let mut codex = summary(
+            "codex",
+            "session_5f1c",
+            "逆向分析",
+            "CCP",
+            "completed",
+            "2026-11-03T12:00:00Z",
+            42,
+        );
+        codex.resume_id = "019e39e8-2895-7e91-a5a7-6dd623d64b8f".into();
+        codex.resume_name = "逆向分析".into();
+        let mut other = summary(
+            "workbuddy",
+            "session_9a",
+            "WorkBuddy session",
+            "WB",
+            "completed",
+            "2026-11-03T11:00:00Z",
+            7,
+        );
+        other.resume_id = "not-a-codex-id".into();
+
+        write_usage(
+            &aggregate(Vec::new(), Vec::new()),
+            &snapshot(vec![codex, other]),
+        )
+        .expect("write usage index");
+
+        let (page, total) = query_sessions(None, None, None, None, 1, 20);
+        assert_eq!(total, 2);
+        let codex_row = page
+            .iter()
+            .find(|session| session.agent == "codex")
+            .unwrap();
+        assert_eq!(codex_row.resume_id, "019e39e8-2895-7e91-a5a7-6dd623d64b8f");
+        assert_eq!(codex_row.resume_name, "逆向分析");
+        let other_row = page
+            .iter()
+            .find(|session| session.agent == "workbuddy")
+            .unwrap();
+        assert_eq!(other_row.resume_id, "not-a-codex-id");
+        assert_eq!(other_row.resume_name, "");
     }
 
     #[test]
@@ -716,7 +772,7 @@ mod tests {
         let version: i64 = raw
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user version");
-        assert_eq!(version, 1);
+        assert_eq!(version, SCHEMA_VERSION);
         drop(raw);
         assert_eq!(
             index_metadata(),

@@ -1242,6 +1242,10 @@ export type AitrackerCapabilitiesResult = CommandResult<{
       model: string;
       project: string;
       title: string;
+      /** Client session id accepted by that client's resume command; empty when unavailable. */
+      resumeId: string;
+      /** Client-side name of the resumable session, when the client stores one. */
+      resumeName: string;
       startedAt: string;
       endedAt: string;
       events: number;
@@ -1264,6 +1268,15 @@ export type AitrackerSessionQueryResult = CommandResult<{
   generatedAt: string;
   mode: string;
 }>;
+export type ResumeAgentSessionResult = CommandResult<{
+  ok: boolean;
+  /** `codex-resume` when the client was asked to reopen the session, `unavailable` when it cannot. */
+  mode: string;
+  sessionId: string;
+  /** The client session id handed to the client; empty when unavailable. */
+  resumeId: string;
+}>;
+
 export type AitrackerSessionRange = "7d" | "30d" | "90d" | "all";
 export type AitrackerSessionDetailResult = CommandResult<{
   detail: {

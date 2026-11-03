@@ -894,44 +894,65 @@ impl LaunchHooks for DefaultLaunchHooks {
                         process_id: None,
                     });
                 }
-                let process_id = activate_packaged_app_with_provider_environment(
-                    app_user_model_id,
-                    arguments,
-                    crate::relay_config::default_codex_home_dir(),
-                )
-                .await?;
-                let packaged_launch = match activation {
-                    CodexLaunch::PackagedActivation {
+                'packaged: {
+                    let process_id = match activate_packaged_app_with_provider_environment(
                         app_user_model_id,
                         arguments,
-                        ..
-                    } => CodexLaunch::PackagedActivation {
-                        app_user_model_id,
-                        arguments,
-                        process_id: Some(process_id),
-                    },
-                    CodexLaunch::Process { .. } => unreachable!(),
-                };
-                if cdp_json_ready(
-                    debug_port,
-                    PACKAGED_CDP_READY_ATTEMPTS,
-                    PACKAGED_CDP_READY_DELAY,
-                    &preexisting_cdp_target_ids,
-                )
-                .await
-                {
+                        crate::relay_config::default_codex_home_dir(),
+                    )
+                    .await
+                    {
+                        Ok(process_id) => process_id,
+                        Err(error) => {
+                            // Windows can refuse packaged activation (observed on a machine whose
+                            // deployment engine answers HRESULT 0x80070005 while deciding which apps
+                            // must be shut down). The executable path below starts the same app with
+                            // the same CDP arguments, so fall back to it instead of failing the whole
+                            // launch.
+                            let _ = crate::diagnostic_log::append_diagnostic_log(
+                                "launcher.packaged_activation_failed_falling_back_to_executable",
+                                serde_json::json!({
+                                    "debug_port": debug_port,
+                                    "app_user_model_id": app_user_model_id_for_log,
+                                    "error": error.to_string()
+                                }),
+                            );
+                            break 'packaged;
+                        }
+                    };
+                    let packaged_launch = match activation {
+                        CodexLaunch::PackagedActivation {
+                            app_user_model_id,
+                            arguments,
+                            ..
+                        } => CodexLaunch::PackagedActivation {
+                            app_user_model_id,
+                            arguments,
+                            process_id: Some(process_id),
+                        },
+                        CodexLaunch::Process { .. } => unreachable!(),
+                    };
+                    if cdp_json_ready(
+                        debug_port,
+                        PACKAGED_CDP_READY_ATTEMPTS,
+                        PACKAGED_CDP_READY_DELAY,
+                        &preexisting_cdp_target_ids,
+                    )
+                    .await
+                    {
+                        return Ok(packaged_launch);
+                    }
+                    let _ = crate::diagnostic_log::append_diagnostic_log(
+                        "launcher.packaged_activation_cdp_unready_degraded",
+                        serde_json::json!({
+                            "debug_port": debug_port,
+                            "app_user_model_id": app_user_model_id_for_log,
+                            "process_id": process_id,
+                            "preexisting_cdp_target_count": preexisting_cdp_targets.len()
+                        }),
+                    );
                     return Ok(packaged_launch);
                 }
-                let _ = crate::diagnostic_log::append_diagnostic_log(
-                    "launcher.packaged_activation_cdp_unready_degraded",
-                    serde_json::json!({
-                        "debug_port": debug_port,
-                        "app_user_model_id": app_user_model_id_for_log,
-                        "process_id": process_id,
-                        "preexisting_cdp_target_count": preexisting_cdp_targets.len()
-                    }),
-                );
-                return Ok(packaged_launch);
             }
         }
 

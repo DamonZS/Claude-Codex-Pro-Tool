@@ -217,6 +217,7 @@ pub fn run() {
             commands::read_request_timeline,
             commands::read_aitracker_capabilities,
             commands::query_aitracker_sessions,
+            commands::resume_agent_session,
             commands::read_aitracker_session_detail,
             commands::list_distillation_candidates,
             commands::create_distillation_candidate,
