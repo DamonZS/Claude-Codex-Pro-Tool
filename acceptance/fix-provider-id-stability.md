@@ -28,6 +28,20 @@
   旧会话的 `model_provider = "gpt"` 仍可解析；重新打开旧会话不再报
   `Model provider 'gpt' not found`。
 
+## 执行记录（2026-11-03 23:57，真机双向往返）
+
+- 动作：在 CCP「供应商与路由」页依次点「使用」完成 `gpt → lnnom`、`lnnom → gpt` 两次真实切换（切换流程会连带重启 Codex）。
+- 日志证据（`~/.claude-codex-pro/claude-codex-pro.log`，无 `alias_failed`）：
+  - `manager.switch_relay_profile.session_sync {"previousProviderId":"gpt","providerId":"lnnom","status":"synced","changedSessionFiles":11,"skippedLockedFiles":0}`
+  - `manager.switch_relay_profile.session_sync {"previousProviderId":"lnnom","providerId":"gpt","status":"synced","changedSessionFiles":31,"skippedLockedFiles":0}`
+- `~/.codex/config.toml`：两次切换后 `[model_providers.gpt]` 与 `[model_providers.lnnom]`
+  同时存在，非活动 id 的那张表是活动表的副本（别名）→ 两个时期的旧会话都能解析到 provider。
+- 回切后与切换前快照逐行 diff：只有两处差异——新增别名表 `[model_providers.lnnom]`（预期），
+  以及 `SKY_CUA_NATIVE_PIPE_DIRECTORY` 的随机管道名（Codex 启动时生成）。
+- 用户设置键齐全：`sandbox_mode`、`approval_policy`、`model_context_window`、
+  `model_catalog_json`、`model_verbosity`、`model_reasoning_summary`、`notify` 均在。
+- 结论：通过标准 5 的现场路径成立——切换供应商不再让旧会话失去 provider 落点。
+
 ## 非目标
 
 - 不覆盖「恢复会话」按钮真的拉起 Codex（另开 spec），本次只把文案改成「查看会话」。
