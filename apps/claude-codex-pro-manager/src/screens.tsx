@@ -1048,7 +1048,7 @@ function aitrackerStatusLabel(value: string) {
     case "success":
     case "completed":
     case "observed":
-      return "可恢复";
+      return "已结束";
     case "running":
       return "运行中";
     case "failed":
@@ -1323,9 +1323,9 @@ function AitrackerSessionPanel({
                         <strong>{session.title || session.project || "未采集会话"}</strong>
                         <small>{session.project || "项目未采集"} · {session.provider || "Provider 未采集"} · {session.model || "模型未采集"} · {session.events} 轮 · {session.toolCalls} 次工具调用 · {formatAitrackerTokens(session.totals.totalTokens)} tokens</small>
                       </button>
-                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm">
+                      <Button className="aitracker-session-resume" onClick={() => void openSession(session)} size="sm" title="打开只读详情，不会启动或继续该会话">
                         <MessageCircle className="h-3.5 w-3.5" />
-                        {aitrackerStatusLabel(session.status) === "可恢复" ? "恢复会话" : "查看会话"}
+                        查看会话
                       </Button>
                     </article>
                   ))}

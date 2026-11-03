@@ -100,13 +100,36 @@ fn codex_supplier_switch_starts_route_proxy_before_writing_config() {
     assert!(switch[..ready].contains("relay.official_mix_api_key"));
     assert!(switch[ready..write].contains("return failed("));
     let codex = commands.find("fn switch_codex_supplier_blocking(").unwrap();
-    assert!(
-        commands[codex..]
-            .split("#[tauri::command]")
-            .next()
-            .unwrap()
-            .contains("switch_relay_profile_blocking(RelayProfileSwitchRequest")
+    let codex_body = commands[codex..].split("#[tauri::command]").next().unwrap();
+    assert!(codex_body.contains("switch_relay_profile_blocking(RelayProfileSwitchRequest"));
+    // 切换可能换掉 provider id：先补旧 id 别名、迁移历史会话，再同步凭据环境。
+    let migrate = codex_body
+        .find("migrate_sessions_after_provider_id_change(")
+        .unwrap();
+    let credentials = codex_body
+        .find("sync_codex_credential_environment(")
+        .unwrap();
+    assert!(migrate < credentials);
+}
+
+#[test]
+fn switching_a_supplier_keeps_the_previous_provider_id_usable_for_old_sessions() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let migration = source_section(
+        &commands,
+        "fn migrate_sessions_after_provider_id_change(",
+        "fn claude_profile_wants_local_proxy(",
     );
+    let alias = migration
+        .find("keep_provider_alias_in_home(")
+        .expect("alias step");
+    let rewrite = migration
+        .find("run_provider_sync_with_target_waiting(")
+        .expect("session rewrite step");
+    assert!(alias < rewrite);
+    assert!(migration.contains("active_provider_id_from_home(home)"));
+    assert!(migration.contains("\"changedSessionFiles\""));
 }
 
 #[test]
@@ -3122,8 +3145,10 @@ fn supplier_editor_generates_config_from_editable_supplier_id() {
         .and_then(|rest| rest.split("function tomlString").next())
         .expect("supplier config helper source");
 
+    // provider id 跟中转地址走：地址不变就不换 id，历史会话才不会成孤儿。
+    assert!(supplier_config_helper.contains("supplierIdForBaseUrl(providerSource)"));
     assert!(
-        supplier_config_helper
+        !supplier_config_helper
             .contains("const providerId = supplierIdFromName(profile.id || profile.name);")
     );
     assert!(supplier_config_helper.contains("`model_provider = ${tomlString(providerId)}`"));

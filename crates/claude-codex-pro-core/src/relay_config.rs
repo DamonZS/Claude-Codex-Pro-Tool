@@ -1164,6 +1164,51 @@ fn write_codex_live_atomic(
     Ok(backup_path)
 }
 
+/// 线上 config.toml 当前指向的 provider id —— 切换前后各读一次，用来判断 id 有没有变。
+pub fn active_provider_id_from_home(home: &Path) -> Option<String> {
+    let config = std::fs::read_to_string(home.join("config.toml")).ok()?;
+    let doc = parse_toml_document(&config).ok()?;
+    active_provider_id(&doc)
+}
+
+/// 给旧 provider id 复制一张指向同一中转的表：历史会话迁移到新 id 之前（或迁移因文件
+/// 被占用而跳过时）仍能打开。指向已存在的表时什么都不做。
+pub fn keep_provider_alias_in_home(
+    home: &Path,
+    alias: &str,
+    source: &str,
+    preserve_computer_use_guard: bool,
+) -> anyhow::Result<bool> {
+    if !is_custom_provider_id(alias) || !is_custom_provider_id(source) || alias == source {
+        return Ok(false);
+    }
+    let config_path = home.join("config.toml");
+    let config = std::fs::read_to_string(&config_path).context("读取 config.toml 失败")?;
+    let mut doc = parse_toml_document(&config)?;
+    if provider_table_exists(&doc, alias) {
+        return Ok(false);
+    }
+    let Some(source_table) = doc
+        .get("model_providers")
+        .and_then(Item::as_table_like)
+        .and_then(|providers| providers.get(source))
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    doc.get_mut("model_providers")
+        .and_then(Item::as_table_like_mut)
+        .context("config.toml 缺少 model_providers 表")?
+        .insert(alias, source_table);
+    write_codex_live_atomic(
+        home,
+        Some(&ensure_trailing_newline(doc.to_string())),
+        None,
+        preserve_computer_use_guard,
+    )?;
+    Ok(true)
+}
+
 fn active_provider_id(doc: &DocumentMut) -> Option<String> {
     doc.get("model_provider")
         .and_then(Item::as_str)
@@ -1209,6 +1254,32 @@ fn profile_or_active_provider_id(profile: &RelayProfile, doc: &DocumentMut) -> S
 
 fn is_custom_provider_id(provider: &str) -> bool {
     !provider.is_empty() && !RESERVED_MODEL_PROVIDER_IDS.contains(&provider)
+}
+
+/// Provider id 是历史会话里记录的持久标识。它只由中转地址（host[:port]）派生：同一家中转换
+/// 个 key、或重新建一条指向它的供应商条目，id 都不变，旧会话才不会指向一个已被删掉的
+/// provider 表。前端 `supplierProviderId` 必须与本函数给出同样的结果。
+pub fn provider_id_for_base_url(base_url: &str) -> Option<String> {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let authority = trimmed
+        .split_once("://")
+        .map_or(trimmed, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .rsplit('@')
+        .next()
+        .unwrap_or_default();
+    let slug: String = authority
+        .to_ascii_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let slug = slug.trim_matches('-');
+    (!slug.is_empty()).then(|| format!("relay-{slug}"))
 }
 
 fn provider_table_exists(doc: &DocumentMut, provider_id: &str) -> bool {
@@ -3058,6 +3129,63 @@ fn account_label_from_jwt(token: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
+
+    #[test]
+    fn provider_id_only_depends_on_the_relay_address() {
+        // 与前端 `supplierIdForBaseUrl` 跑同一张表：改任一侧都要同时改另一侧。
+        let cases = [
+            ("https://api.toporeduce.cn", Some("relay-api-toporeduce-cn")),
+            (
+                "https://api.toporeduce.cn/v1",
+                Some("relay-api-toporeduce-cn"),
+            ),
+            ("http://127.0.0.1:57321/v1", Some("relay-127-0-0-1-57321")),
+            (
+                "https://user@Img.PQAai.cc:443/v1",
+                Some("relay-img-pqaai-cc-443"),
+            ),
+            ("", None),
+        ];
+        for (base_url, expected) in cases {
+            assert_eq!(
+                provider_id_for_base_url(base_url).as_deref(),
+                expected,
+                "{base_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_previous_provider_id_stays_usable_as_an_alias_after_a_switch() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        std::fs::write(
+            home.join("config.toml"),
+            r#"model_provider = "relay-img-pqaai-cc"
+
+[model_providers.relay-img-pqaai-cc]
+name = "供应商"
+base_url = "https://img.pqaai.cc/v1"
+wire_api = "responses"
+requires_openai_auth = true
+env_key = "OPENAI_API_KEY"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            active_provider_id_from_home(home).as_deref(),
+            Some("relay-img-pqaai-cc")
+        );
+
+        assert!(keep_provider_alias_in_home(home, "gpt", "relay-img-pqaai-cc", false).unwrap());
+        let updated = std::fs::read_to_string(home.join("config.toml")).unwrap();
+        // 根键仍指向新 id，旧 id 变成一张指向同一中转的表。
+        assert!(updated.contains(r#"model_provider = "relay-img-pqaai-cc""#));
+        assert!(updated.contains("[model_providers.gpt]"));
+        assert!(updated.contains(r#"base_url = "https://img.pqaai.cc/v1""#));
+        // 已经有这张表就不再写第二次。
+        assert!(!keep_provider_alias_in_home(home, "gpt", "relay-img-pqaai-cc", false).unwrap());
+    }
 
     #[test]
     fn a_codex_supplier_that_speaks_anthropic_goes_through_our_proxy() {

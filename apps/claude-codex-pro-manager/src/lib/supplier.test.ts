@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { supplierEffectiveConfigContents, withSupplierGeneratedFiles } from "@/lib/supplier";
+import { supplierEffectiveConfigContents, supplierIdForBaseUrl, withSupplierGeneratedFiles } from "@/lib/supplier";
 import type { RelayProfile } from "@/types";
 
 function profile(overrides: Partial<RelayProfile> = {}): RelayProfile {
@@ -125,9 +125,10 @@ describe("supplierEffectiveConfigContents", () => {
       configContents: stored,
     }));
 
-    // 表单说的算：模型、上下文窗口、地址都换成新的。
+    // 表单说的算：模型、上下文窗口、地址都换成新的；provider id 跟着新地址走，
+    // 不再沿用存量配置里那个按 UI 编号取的名字（旧 id 会变成历史会话的孤儿）。
     expect(effective).toContain('model = "gpt-6-astra"');
-    expect(effective).toContain('model_provider = "gpt"');
+    expect(effective).toContain('model_provider = "relay-api-new-example"');
     expect(effective).toContain("model_context_window = 1000000");
     expect(effective).toContain('base_url = "https://api.new.example/v1"');
     expect(effective).not.toContain("gpt-6.1-sol");
@@ -179,5 +180,20 @@ describe("supplierEffectiveConfigContents", () => {
     });
     expect(supplierEffectiveConfigContents(current))
       .toBe(withSupplierGeneratedFiles(current).configContents);
+  });
+
+  it("derives the same provider id from the relay address as the core side", () => {
+    // 与 `crates/claude-codex-pro-core/src/relay_config.rs` 的
+    // `provider_id_for_base_url` 用同一组用例，两边跑同一张表。
+    const cases: Array<[string, string]> = [
+      ["https://api.toporeduce.cn", "relay-api-toporeduce-cn"],
+      ["https://api.toporeduce.cn/v1", "relay-api-toporeduce-cn"],
+      ["http://127.0.0.1:57321/v1", "relay-127-0-0-1-57321"],
+      ["https://user@Img.PQAai.cc:443/v1", "relay-img-pqaai-cc-443"],
+      ["", ""],
+    ];
+    for (const [baseUrl, expected] of cases) {
+      expect(supplierIdForBaseUrl(baseUrl)).toBe(expected);
+    }
   });
 });

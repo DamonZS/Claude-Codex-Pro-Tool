@@ -10127,11 +10127,19 @@ fn switch_codex_supplier_blocking(
     {
         return failed(&error.to_string(), fallback_settings_payload());
     }
+    let home = claude_codex_pro_core::relay_config::default_codex_home_dir();
+    let previous_provider_id =
+        claude_codex_pro_core::relay_config::active_provider_id_from_home(&home);
     let result = switch_relay_profile_blocking(RelayProfileSwitchRequest {
         settings: request.settings,
         previous_active_relay_id: request.previous_active_relay_id,
     });
     if result.status == "ok" {
+        migrate_sessions_after_provider_id_change(
+            &home,
+            previous_provider_id.as_deref(),
+            result.payload.settings.computer_use_guard_enabled,
+        );
         let profile = result.payload.settings.active_relay_profile();
         if let Err(error) =
             claude_codex_pro_core::credential_environment::sync_codex_credential_environment(
@@ -10161,6 +10169,56 @@ fn switch_codex_supplier_blocking(
             user_scripts: result.payload.user_scripts,
         },
     }
+}
+
+/// 切换可能换掉活动 provider id。会话里记的是旧 id，不迁移的话 Codex 一打开旧聊天就报
+/// `Model provider '...' not found`：先把旧 id 留成指向新表的别名，再把历史会话
+/// （rollout / sqlite / 全局状态）改写到新 id。
+fn migrate_sessions_after_provider_id_change(
+    home: &std::path::Path,
+    previous_provider_id: Option<&str>,
+    preserve_computer_use_guard: bool,
+) {
+    let Some(next_provider_id) =
+        claude_codex_pro_core::relay_config::active_provider_id_from_home(home)
+    else {
+        return;
+    };
+    let Some(previous_provider_id) =
+        previous_provider_id.filter(|provider| *provider != next_provider_id)
+    else {
+        return;
+    };
+    if let Err(error) = claude_codex_pro_core::relay_config::keep_provider_alias_in_home(
+        home,
+        previous_provider_id,
+        &next_provider_id,
+        preserve_computer_use_guard,
+    ) {
+        log_manager_event(
+            "manager.switch_relay_profile.alias_failed",
+            json!({
+                "previousProviderId": previous_provider_id,
+                "providerId": next_provider_id,
+                "error": format!("{error:#}")
+            }),
+        );
+    }
+    let sync = claude_codex_pro_data::run_provider_sync_with_target_waiting(
+        Some(home),
+        Some(&next_provider_id),
+        Duration::from_secs(10),
+    );
+    log_manager_event(
+        "manager.switch_relay_profile.session_sync",
+        json!({
+            "previousProviderId": previous_provider_id,
+            "providerId": next_provider_id,
+            "status": sync.status,
+            "changedSessionFiles": sync.changed_session_files,
+            "skippedLockedFiles": sync.skipped_locked_rollout_files.len()
+        }),
+    );
 }
 
 /// 命令行的 Claude 只在「上游说的不是 Anthropic Messages」时才走本机代理 —— 那时候才有
@@ -13656,7 +13714,17 @@ fn supplier_id_from_import(value: &str) -> String {
 }
 
 fn imported_supplier_config_toml(profile: &RelayProfile) -> String {
-    let provider_id = supplier_id_from_import(&profile.id);
+    // provider id 只由中转地址派生：同一家中转换 key、再导入一次，id 都不变，历史会话才有落点。
+    let relay_address = if profile.protocol
+        == claude_codex_pro_core::settings::RelayProtocol::ChatCompletions
+        && !profile.upstream_base_url.trim().is_empty()
+    {
+        profile.upstream_base_url.trim()
+    } else {
+        profile.base_url.trim()
+    };
+    let provider_id = claude_codex_pro_core::relay_config::provider_id_for_base_url(relay_address)
+        .unwrap_or_else(|| supplier_id_from_import(&profile.id));
     let mut lines = Vec::new();
     if !profile.model.trim().is_empty() {
         lines.push(format!(

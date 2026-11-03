@@ -24,6 +24,23 @@ export function uniqueSupplierProfileId(profiles: RelayProfile[], base: string) 
   return `${root}-${Date.now().toString(36)}`;
 }
 
+/**
+ * Provider id 是会话里记录的持久标识，与核心侧 `provider_id_for_base_url` 同一条规则：
+ * 只取中转地址的 host[:port]。同一家中转换 key、或重建一条指向它的供应商条目，id 都不变，
+ * 旧会话才不会指向一个已被删掉的 provider 表。
+ */
+export function supplierIdForBaseUrl(baseUrl: string) {
+  const trimmed = String(baseUrl || "").trim();
+  if (!trimmed) return "";
+  const authority = trimmed
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, "")
+    .split(/[/?#]/)[0]
+    .split("@")
+    .pop() || "";
+  const slug = authority.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug ? `relay-${slug}` : "";
+}
+
 export function createSupplierProfile(settings: BackendSettings): RelayProfile {
   return normalizeSupplierProfile(withSupplierGeneratedFiles({
     id: uniqueSupplierProfileId(settings.relayProfiles, "provider"),
@@ -851,6 +868,7 @@ function mergeCodexConfigOntoStored(stored: string, generated: string) {
 
   const keptTop: string[] = [];
   const sections: { name: string; lines: string[] }[] = [];
+  let storedProviderId = "";
   let current: { name: string; lines: string[] } | null = null;
   for (const line of stored.split(/\r?\n/)) {
     const header = tomlSectionHeader(line);
@@ -861,6 +879,7 @@ function mergeCodexConfigOntoStored(stored: string, generated: string) {
     }
     const key = tomlAssignedKey(line);
     if (!current) {
+      if (key === "model_provider") storedProviderId = tomlQuotedValue(line);
       if (key && CODEX_MANAGED_TOP_KEYS.includes(key)) continue;
       keptTop.push(line);
       continue;
@@ -869,6 +888,9 @@ function mergeCodexConfigOntoStored(stored: string, generated: string) {
     current.lines.push(line);
   }
 
+  // 存量配置指向另一个 provider id（旧 id 是按 UI 编号取的）：把旧表里不属于托管键的
+  // 行（http_headers、自定义字段、上游私有参数）搬到新表，别在换 id 时悄悄丢掉。
+  let carriedProviderLines: string[] = [];
   const out: string[] = [];
   for (const key of CODEX_MANAGED_TOP_KEYS) {
     const line = top.get(key);
@@ -877,7 +899,18 @@ function mergeCodexConfigOntoStored(stored: string, generated: string) {
   out.push(...keptTop);
   let wroteProvider = false;
   for (const item of sections) {
-    if (item.name.startsWith("model_providers.") && item.name !== providerSection) continue;
+    if (item.name.startsWith("model_providers.") && item.name !== providerSection) {
+      if (
+        storedProviderId
+        && storedProviderId !== providerId
+        && item.name === `model_providers.${storedProviderId}`
+      ) {
+        carriedProviderLines = item.lines.filter(
+          (line) => line.trim() && !CODEX_MANAGED_PROVIDER_KEYS.includes(tomlAssignedKey(line)),
+        );
+      }
+      continue;
+    }
     if (item.name === providerSection) {
       out.push(`[${providerSection}]`);
       for (const key of CODEX_MANAGED_PROVIDER_KEYS) {
@@ -897,6 +930,7 @@ function mergeCodexConfigOntoStored(stored: string, generated: string) {
       const line = provider.get(key);
       if (line) out.push(line);
     }
+    out.push(...carriedProviderLines);
   }
   return `${out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\s+$/, "")}\n`;
 }
@@ -1028,7 +1062,13 @@ export function buildSupplierConfigToml(profile: RelayProfile) {
   const baseUrl = codexRouteGoesThroughLocalProxy(profile)
     ? CODEX_LOCAL_PROXY_BASE_URL
     : profile.baseUrl.trim();
-  const providerId = supplierIdFromName(profile.id || profile.name);
+  const providerSource = profile.protocol === "chatCompletions" && profile.upstreamBaseUrl
+    ? profile.upstreamBaseUrl
+    : profile.baseUrl;
+  // 只由真实上游地址派生：走本机代理时 config 里写的是 127.0.0.1，那不是中转身份。
+  const providerId =
+    supplierIdForBaseUrl(providerSource) ||
+    supplierIdFromName(profile.id || profile.name);
   const apiKey = supplierProfileResolvedApiKey(profile);
   const contextWindow = supplierCodexEffectiveContextWindow(profile) || normalizedContextWindow(profile.contextWindow);
   return [
