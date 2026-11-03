@@ -95,9 +95,9 @@ mustContain(windowsInstaller, '!define VI_VERSION "${VERSION}.0.0"', "Windows in
 for (const key of ["ProductName", "FileDescription", "CompanyName", "LegalCopyright", "FileVersion", "ProductVersion"]) {
   mustContain(windowsInstaller, `VIAddVersionKey "${key}"`, `Windows installer version key ${key}`);
 }
-mustContain(windowsInstaller, 'VIAddVersionKey "CompanyName" "杭州拓扑熵减科技有限公司"', "Windows installer company name");
-assert.equal(tauri.bundle.publisher, "杭州拓扑熵减科技有限公司", "Manager bundle publisher is the legal company name");
-assert.equal(tauri.bundle.copyright, "Copyright © 2026 杭州拓扑熵减科技有限公司", "Manager bundle copyright is the legal company name");
+mustContain(windowsInstaller, 'VIAddVersionKey "CompanyName" "TopoReduce"', "Windows installer company name");
+assert.equal(tauri.bundle.publisher, "TopoReduce", "Manager bundle publisher must stay ASCII: the MSI is en-US/codepage 1252 and light.exe rejects non-ASCII strings (LGHT0311)");
+assert.equal(tauri.bundle.copyright, "© 2026 TopoReduce", "Manager bundle copyright is the TopoReduce brand");
 const retiredMcp = "claude-codex-pro-mcp";
 const retiredMcpCleanup = `Delete /REBOOTOK "$INSTDIR\\${retiredMcp}.exe"`;
 assert.equal(windowsInstaller.split(retiredMcpCleanup).length - 1, 2, "Windows upgrade and uninstall must remove the retired MCP executable");

@@ -31,8 +31,8 @@
   "bundle": {
     "active": false,
     "targets": "all",
-    "publisher": "杭州拓扑熵减科技有限公司",
-    "copyright": "Copyright © 2026 杭州拓扑熵减科技有限公司",
+    "publisher": "TopoReduce",
+    "copyright": "© 2026 TopoReduce",
     "resources": [
       "resources/leila/assets/**/*"
     ],

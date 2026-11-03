@@ -11,8 +11,8 @@ Unicode true
 VIProductVersion "${VI_VERSION}"
 VIAddVersionKey "ProductName" "Claude Codex Pro"
 VIAddVersionKey "FileDescription" "Claude Codex Pro 安装程序"
-VIAddVersionKey "CompanyName" "杭州拓扑熵减科技有限公司"
-VIAddVersionKey "LegalCopyright" "Copyright © 2026 杭州拓扑熵减科技有限公司"
+VIAddVersionKey "CompanyName" "TopoReduce"
+VIAddVersionKey "LegalCopyright" "© 2026 TopoReduce"
 VIAddVersionKey "FileVersion" "${VI_VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 
