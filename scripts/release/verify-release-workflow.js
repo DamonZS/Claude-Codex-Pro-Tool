@@ -90,6 +90,14 @@ for (const forbidden of ["settings.json", "relayProfiles", "memory_assist.sqlite
 
 mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro.exe"', "Windows installer app source");
 mustNotContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-manager.exe"', "Windows installer legacy manager source");
+mustContain(windowsInstaller, 'VIProductVersion "${VI_VERSION}"', "Windows installer PE version info");
+mustContain(windowsInstaller, '!define VI_VERSION "${VERSION}.0.0"', "Windows installer 4-part file version");
+for (const key of ["ProductName", "FileDescription", "CompanyName", "LegalCopyright", "FileVersion", "ProductVersion"]) {
+  mustContain(windowsInstaller, `VIAddVersionKey "${key}"`, `Windows installer version key ${key}`);
+}
+mustContain(windowsInstaller, 'VIAddVersionKey "CompanyName" "杭州拓扑熵减科技有限公司"', "Windows installer company name");
+assert.equal(tauri.bundle.publisher, "杭州拓扑熵减科技有限公司", "Manager bundle publisher is the legal company name");
+assert.equal(tauri.bundle.copyright, "Copyright © 2026 杭州拓扑熵减科技有限公司", "Manager bundle copyright is the legal company name");
 const retiredMcp = "claude-codex-pro-mcp";
 const retiredMcpCleanup = `Delete /REBOOTOK "$INSTDIR\\${retiredMcp}.exe"`;
 assert.equal(windowsInstaller.split(retiredMcpCleanup).length - 1, 2, "Windows upgrade and uninstall must remove the retired MCP executable");

@@ -6,6 +6,16 @@ Unicode true
 !endif
 !define ROOT "..\..\.."
 
+; 不写这段，setup.exe / uninstall.exe 的「属性-详细信息」里 ProductName、FileVersion 全是空的。
+!define VI_VERSION "${VERSION}.0.0"
+VIProductVersion "${VI_VERSION}"
+VIAddVersionKey "ProductName" "Claude Codex Pro"
+VIAddVersionKey "FileDescription" "Claude Codex Pro 安装程序"
+VIAddVersionKey "CompanyName" "杭州拓扑熵减科技有限公司"
+VIAddVersionKey "LegalCopyright" "Copyright © 2026 杭州拓扑熵减科技有限公司"
+VIAddVersionKey "FileVersion" "${VI_VERSION}"
+VIAddVersionKey "ProductVersion" "${VERSION}"
+
 Name "Claude Codex Pro"
 OutFile "${ROOT}\dist\windows\claude-codex-pro-${VERSION}-windows-x64-setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Claude Codex Pro"

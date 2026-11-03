@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/demo.gif" alt="CCP 30 秒演示：Token 用量看板、第三方 API 切换、会话蒸馏、Agent 客户端接入、工具与 Skills" width="860">
+  <a href="docs/screenshots/demo.gif"><img src="docs/screenshots/demo-poster.webp" alt="CCP 30 秒演示封面：Token 用量看板、分模型、趋势一屏看清（点击看完整演示）" width="860"></a>
 </p>
 
 > **CCP** = **C**laude + **C**odex **P**ro Tool（全称 **Claude-Codex-Pro-Tool**）。它是给本机 AI 编程工具用的**运维控制台**：面向 Codex App、Claude Desktop、Claude Code，内置 36 种主流 Agent 工具的识别清单。Rust + Tauri 实现，数据只在本机，不装服务、不连云端。
@@ -60,8 +60,6 @@
 </p>
 
 <p align="center"><sub><b>English?</b> CCP is a local Rust + Tauri control panel for Codex App / Claude Desktop / Claude Code on Windows & macOS. <a href="README_EN.md">Read the English README →</a></sub></p>
->
-> English: a local Rust + Tauri control panel for **Codex App**, **Claude Desktop** and **Claude Code**: a token-usage dashboard across AI coding agents, a cc-switch-style third-party API provider switcher, a session-to-Skill distillation workbench, and a built-in **Computer Use MCP** for Claude Desktop.
 
 <table>
   <tr>

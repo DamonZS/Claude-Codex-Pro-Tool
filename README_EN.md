@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/demo.gif" alt="CCP in 30 seconds: token dashboard, third-party API switching, session distillation, agent clients, tools and skills" width="860">
+  <a href="docs/screenshots/demo.gif"><img src="docs/screenshots/demo-poster.webp" alt="CCP in 30 seconds: token dashboard across models and trends (click for the full demo)" width="860"></a>
 </p>
 
 > **CCP** = **C**laude + **C**odex **P**ro Tool — full name **Claude-Codex-Pro-Tool**: a local operations console for **Codex App**, **Claude Desktop** and **Claude Code** on Windows and macOS, with a built-in detection list of 36 popular agent tools. Built with Rust + Tauri; your data never leaves the machine.
