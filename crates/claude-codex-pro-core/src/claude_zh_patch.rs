@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PATCH_MARKER: &str = "claude-codex-pro-zh-cn-patch";
 const LANGUAGE_MARKER: &str = "claude-codex-pro-zh-cn-language";
@@ -54,6 +54,22 @@ pub struct ClaudeZhPatchOutcome {
     pub status: ClaudeZhPatchStatus,
     pub changed_files: Vec<String>,
     pub backup_dir: String,
+    #[serde(default)]
+    pub timings: ClaudeZhPatchTimings,
+}
+
+/// Stage timings for one install/restore pass. Logged by the manager so a slow
+/// or broken run can be diagnosed from `claude-codex-pro.log` alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeZhPatchTimings {
+    pub scanned_chunks: usize,
+    pub patched_chunks: usize,
+    pub pruned_backups: usize,
+    pub scan_ms: u64,
+    pub patch_ms: u64,
+    pub validate_ms: u64,
+    pub prune_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,6 +347,7 @@ fn install_patch_at_with_resources_impl(
     elevated_target_user_sid: Option<&str>,
 ) -> anyhow::Result<ClaudeZhPatchOutcome> {
     let mut changed_files = Vec::new();
+    let mut timings = ClaudeZhPatchTimings::default();
     if check_writable {
         ensure_patch_writable(paths)?;
     }
@@ -340,6 +357,9 @@ fn install_patch_at_with_resources_impl(
             paths.backup_dir.display()
         )
     })?;
+    let prune_started = Instant::now();
+    timings.pruned_backups = prune_stale_backups(paths);
+    timings.prune_ms = prune_started.elapsed().as_millis() as u64;
 
     let root_i18n = paths.resource_root.join("zh-CN.json");
     backup_file(&root_i18n, paths)?;
@@ -389,12 +409,21 @@ fn install_patch_at_with_resources_impl(
     )?;
     changed_files.push(statsig_i18n.to_string_lossy().to_string());
 
+    let scan_started = Instant::now();
     let chunks = find_patchable_chunks(&paths.resource_root)?;
+    timings.scanned_chunks = chunks.len();
+    timings.scan_ms = scan_started.elapsed().as_millis() as u64;
     let runtime_patch_chunk = select_runtime_patch_chunk(&chunks);
+    let patch_started = Instant::now();
     let patched_chunks = patch_chunks_in_parallel(&chunks, runtime_patch_chunk.as_deref(), paths)?;
+    timings.patch_ms = patch_started.elapsed().as_millis() as u64;
+    timings.patched_chunks = patched_chunks.len();
     // One `node --check` process per batch instead of one per chunk (a recent
     // Claude build ships ~3,000 chunks, several hundred of which get patched).
-    if let Err((chunk, error)) = validate_patched_javascript_chunks(&patched_chunks) {
+    let validate_started = Instant::now();
+    let validation = validate_patched_javascript_chunks(&patched_chunks);
+    timings.validate_ms = validate_started.elapsed().as_millis() as u64;
+    if let Err((chunk, error)) = validation {
         for patched in &patched_chunks {
             restore_official_backup_file(patched, paths).with_context(|| {
                 format!(
@@ -434,13 +463,23 @@ fn install_patch_at_with_resources_impl(
         status: status_for_paths(paths),
         backup_dir: paths.backup_dir.to_string_lossy().to_string(),
         changed_files,
+        timings,
     };
-    ensure_install_complete(&outcome)?;
+    if let Err(error) = ensure_install_complete(&outcome) {
+        // A half patched install is what leaves Claude unable to open; put every
+        // file we touched back before reporting the failure.
+        for changed in &outcome.changed_files {
+            let _ = restore_official_backup_file(Path::new(changed), paths);
+        }
+        clear_claude_renderer_cache(paths, &mut Vec::<String>::new());
+        return Err(anyhow::anyhow!("{error}（未完成的改动已回滚到官方文件）"));
+    }
     Ok(outcome)
 }
 
 pub fn restore_patch_at(paths: &ClaudeZhPatchPaths) -> anyhow::Result<ClaudeZhPatchOutcome> {
     let mut changed_files = Vec::new();
+    let mut timings = ClaudeZhPatchTimings::default();
     if paths.backup_dir.exists() {
         for entry in std::fs::read_dir(&paths.backup_dir)? {
             let entry = entry?;
@@ -452,6 +491,12 @@ pub fn restore_patch_at(paths: &ClaudeZhPatchPaths) -> anyhow::Result<ClaudeZhPa
                 continue;
             };
             let to = decode_backup_name(paths, name);
+            // A backup left over from an older Claude build must not be written
+            // into the current install: that mixes chunk versions and is one of
+            // the ways a "restore" can leave Claude unable to open.
+            if !to.exists() {
+                continue;
+            }
             let bytes = std::fs::read(&from)
                 .with_context(|| format!("读取 Claude 汉化备份失败：{}", from.display()))?;
             write_patch_file(&to, &bytes)
@@ -462,10 +507,15 @@ pub fn restore_patch_at(paths: &ClaudeZhPatchPaths) -> anyhow::Result<ClaudeZhPa
     remove_zh_cn_artifacts(paths, &mut changed_files)?;
     remove_locale_config(paths, &mut changed_files)?;
     scrub_zh_cn_from_chunks(paths, &mut changed_files)?;
+    // Cached renderer code keeps running the patched chunks even after the files
+    // are restored, which is one reason a restored install can still fail to open.
+    clear_claude_renderer_cache(paths, &mut changed_files);
+    timings.pruned_backups = prune_stale_backups(paths);
     let outcome = ClaudeZhPatchOutcome {
         status: status_for_paths(paths),
         backup_dir: paths.backup_dir.to_string_lossy().to_string(),
         changed_files,
+        timings,
     };
     ensure_restore_complete(&outcome)?;
     Ok(outcome)
@@ -1319,8 +1369,8 @@ fn collect_patchable_chunks_recursive(dir: &Path, chunks: &mut Vec<PathBuf>) -> 
     Ok(())
 }
 
-fn patch_chunk(path: &Path, include_runtime_patch: bool) -> anyhow::Result<()> {
-    let mut text = std::fs::read_to_string(path)?;
+fn patch_chunk_text(text: String, include_runtime_patch: bool) -> Option<String> {
+    let mut text = text;
     if has_unsafe_window_runtime_patch(&text)
         || (!include_runtime_patch && text.contains(PATCH_MARKER))
         || text.contains(LANGUAGE_MARKER)
@@ -1332,11 +1382,11 @@ fn patch_chunk(path: &Path, include_runtime_patch: bool) -> anyhow::Result<()> {
         && text.contains(TEXT_MARKER)
         && !has_unsafe_window_runtime_patch(&text)
     {
-        return Ok(());
+        return None;
     }
     let mut patched = ensure_language_support(text);
     patched = replace_hardcoded_text(patched);
-    write_patch_file(path, patched.as_bytes())
+    Some(patched)
 }
 
 fn select_runtime_patch_chunk(chunks: &[PathBuf]) -> Option<PathBuf> {
@@ -1407,16 +1457,20 @@ fn patch_chunks_in_parallel(
                 scope.spawn(move || -> anyhow::Result<Vec<PathBuf>> {
                     let mut changed = Vec::new();
                     for chunk in group {
-                        let before = std::fs::read_to_string(chunk).unwrap_or_default();
+                        let Ok(before) = std::fs::read_to_string(chunk) else {
+                            continue;
+                        };
                         if !chunk_path_needs_or_has_ui_patch(chunk, &before) {
                             continue;
                         }
                         backup_file(chunk, paths)?;
-                        patch_chunk(chunk, runtime_patch_chunk == Some(chunk.as_path()))?;
-                        let after = std::fs::read_to_string(chunk).unwrap_or_default();
-                        if before != after {
-                            changed.push(chunk.clone());
-                        }
+                        let Some(patched) =
+                            patch_chunk_text(before, runtime_patch_chunk == Some(chunk.as_path()))
+                        else {
+                            continue;
+                        };
+                        write_patch_file(chunk, patched.as_bytes())?;
+                        changed.push(chunk.clone());
                     }
                     Ok(changed)
                 })
@@ -1740,6 +1794,30 @@ fn ensure_language_support(text: String) -> String {
     patched
 }
 
+/// Cheap necessary condition for `patch_locale_arrays`: some string array in
+/// the chunk starts with `"en-US"`. Detecting that walks the text once without
+/// allocating a patched copy (the old gate rebuilt the whole chunk string just
+/// to learn whether it changed).
+fn text_has_patchable_locale_array(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(offset) = text[cursor..].find('[') else {
+            return false;
+        };
+        let mut index = cursor + offset + 1;
+        skip_ascii_whitespace(bytes, &mut index);
+        if text
+            .get(index..)
+            .is_some_and(|rest| rest.starts_with("\"en-US\""))
+        {
+            return true;
+        }
+        cursor = cursor + offset + 1;
+    }
+    false
+}
+
 fn patch_locale_arrays(text: &str) -> (String, bool) {
     let bytes = text.as_bytes();
     let mut output = String::with_capacity(text.len() + 16);
@@ -1913,16 +1991,8 @@ fn chunk_needs_or_has_ui_patch(text: &str) -> bool {
         || LEGACY_TEXT_MARKERS
             .iter()
             .any(|marker| text.contains(marker))
-        || patch_locale_arrays(text).1
-        || embedded_chunk_patch_pairs()
-            .iter()
-            .any(|(needle, _)| text.contains(needle.as_str()))
-        || zh_text_pairs().iter().any(|(english, _)| {
-            text.contains(&format!("\"{english}\"")) || text.contains(&format!("'{english}'"))
-        })
-        || zh_raw_patch_pairs()
-            .iter()
-            .any(|(needle, _)| text.contains(needle))
+        || text_has_patchable_locale_array(text)
+        || patch_needle_matcher().contains_any(text)
 }
 
 fn replace_hardcoded_text(mut text: String) -> String {
@@ -2091,6 +2161,54 @@ fn zh_raw_patch_pairs() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
+/// One-pass multi-needle search over the patch vocabulary.
+///
+/// The old gate ran ~460 `str::contains` calls per chunk (about 3,000 chunks and
+/// 116 MB of JavaScript on a current Claude build), i.e. tens of gigabytes of
+/// redundant scanning per install. A single Aho-Corasick pass decides whether any
+/// needle occurs; the quote-heavy JavaScript that defeated a first-byte bucket
+/// table (`"` matches ~230 candidates at every quote) sails through it.
+struct NeedleMatcher {
+    automaton: aho_corasick::AhoCorasick,
+}
+
+impl NeedleMatcher {
+    fn new(needles: impl IntoIterator<Item = String>) -> Self {
+        let stored: Vec<Vec<u8>> = needles
+            .into_iter()
+            .filter(|needle| !needle.is_empty())
+            .map(String::into_bytes)
+            .collect();
+        let automaton = aho_corasick::AhoCorasick::builder()
+            .match_kind(aho_corasick::MatchKind::LeftmostFirst)
+            .build(&stored)
+            .expect("build Claude zh patch needle automaton");
+        Self { automaton }
+    }
+
+    fn contains_any(&self, text: &str) -> bool {
+        self.automaton.is_match(text)
+    }
+}
+
+fn patch_needle_matcher() -> &'static NeedleMatcher {
+    static MATCHER: std::sync::OnceLock<NeedleMatcher> = std::sync::OnceLock::new();
+    MATCHER.get_or_init(|| {
+        let mut needles: Vec<String> = Vec::new();
+        for (english, _) in zh_text_pairs() {
+            needles.push(format!("\"{english}\""));
+            needles.push(format!("'{english}'"));
+        }
+        for (needle, _) in embedded_chunk_patch_pairs() {
+            needles.push(needle.clone());
+        }
+        for (needle, _) in zh_raw_patch_pairs() {
+            needles.push((*needle).to_string());
+        }
+        NeedleMatcher::new(needles)
+    })
+}
+
 fn desktop_i18n_json() -> String {
     EMBEDDED_DESKTOP_I18N.to_string()
 }
@@ -2116,6 +2234,32 @@ fn backup_file(path: &Path, paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
     }
     std::fs::copy(path, backup)?;
     Ok(())
+}
+
+fn prune_stale_backups(paths: &ClaudeZhPatchPaths) -> usize {
+    if !paths.backup_dir.exists() {
+        return 0;
+    }
+    let Ok(entries) = std::fs::read_dir(&paths.backup_dir) else {
+        return 0;
+    };
+    let mut pruned = 0;
+    for entry in entries.flatten() {
+        let backup = entry.path();
+        if !backup.is_file() {
+            continue;
+        }
+        let Some(name) = backup.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if decode_backup_name(paths, name).exists() {
+            continue;
+        }
+        if std::fs::remove_file(&backup).is_ok() {
+            pruned += 1;
+        }
+    }
+    pruned
 }
 
 fn restore_official_backup_file(path: &Path, paths: &ClaudeZhPatchPaths) -> anyhow::Result<()> {
@@ -2999,7 +3143,9 @@ mod tests {
         )
         .unwrap();
 
-        patch_chunk(&chunk, true).unwrap();
+        let text = std::fs::read_to_string(&chunk).unwrap();
+        let patched_text = patch_chunk_text(text, true).expect("runtime chunk should change");
+        write_patch_file(&chunk, patched_text.as_bytes()).unwrap();
 
         let patched = std::fs::read_to_string(&chunk).unwrap();
         assert!(!patched.contains("typeof window === \"undefined\""));
@@ -3021,7 +3167,9 @@ mod tests {
         )
         .unwrap();
 
-        patch_chunk(&chunk, false).unwrap();
+        let text = std::fs::read_to_string(&chunk).unwrap();
+        let patched_text = patch_chunk_text(text, false).expect("chunk should change");
+        write_patch_file(&chunk, patched_text.as_bytes()).unwrap();
 
         let patched = std::fs::read_to_string(&chunk).unwrap();
         assert!(patched.contains("console.log(\"Settings\")"));
@@ -3393,5 +3541,320 @@ mod tests {
 
         std::fs::write(&path, EMBEDDED_FRONTEND_I18N).unwrap();
         assert!(valid_i18n_resource_with_min_keys(&path, 1_000));
+    }
+
+    /// The pre-optimization gate, kept only as the reference for equivalence.
+    fn legacy_chunk_needs_or_has_ui_patch(text: &str) -> bool {
+        text.contains(PATCH_MARKER)
+            || text.contains(TEXT_MARKER)
+            || LEGACY_TEXT_MARKERS
+                .iter()
+                .any(|marker| text.contains(marker))
+            || patch_locale_arrays(text).1
+            || embedded_chunk_patch_pairs()
+                .iter()
+                .any(|(needle, _)| text.contains(needle.as_str()))
+            || zh_text_pairs().iter().any(|(english, _)| {
+                text.contains(&format!("\"{english}\"")) || text.contains(&format!("'{english}'"))
+            })
+            || zh_raw_patch_pairs()
+                .iter()
+                .any(|(needle, _)| text.contains(needle))
+    }
+
+    fn patch_needles_for_test() -> Vec<String> {
+        let mut needles: Vec<String> = Vec::new();
+        for (english, _) in zh_text_pairs() {
+            needles.push(format!("\"{english}\""));
+            needles.push(format!("'{english}'"));
+        }
+        for (needle, _) in embedded_chunk_patch_pairs() {
+            needles.push(needle.clone());
+        }
+        for (needle, _) in zh_raw_patch_pairs() {
+            needles.push((*needle).to_string());
+        }
+        needles
+    }
+
+    #[test]
+    fn needle_matcher_matches_every_needle_without_false_positives() {
+        let needles = patch_needles_for_test();
+        let matcher = NeedleMatcher::new(needles.iter().cloned());
+        for needle in &needles {
+            let haystack = format!("const before = 1;\n{needle}\nconst after = 2;");
+            assert!(
+                matcher.contains_any(&haystack),
+                "matcher missed needle {needle:?}"
+            );
+        }
+        for needle in needles.iter().take(64) {
+            let first_byte_only = format!("{}zzzz", &needle[..1]);
+            assert!(
+                !matcher.contains_any(&first_byte_only),
+                "matcher produced a false positive for {:?}",
+                first_byte_only
+            );
+        }
+        assert!(!matcher.contains_any("const unrelated = true;"));
+    }
+
+    #[test]
+    fn patch_gate_matches_the_legacy_scan() {
+        let fixtures = [
+            "const a = \"Settings\";",
+            "const b = 'New chat';",
+            "const c = { label: \"Cowork\" };",
+            "const d = { defaultMessage: \"配置第三方推理\" };",
+            "const e = [\"en-US\",\"de-DE\",\"fr-FR\"];",
+            "const f = [ \"en-US\" , \"ja-JP\" ];",
+            "const g = \"en-US\";",
+            "const h = 42;",
+            "/* claude-codex-pro-zh-cn-text-v4 */ console.log(1);",
+            "window.__CLAUDE_CODEX_PRO_ZH_CN_PATCH__ = 1;",
+        ];
+        for fixture in fixtures {
+            assert_eq!(
+                chunk_needs_or_has_ui_patch(fixture),
+                legacy_chunk_needs_or_has_ui_patch(fixture),
+                "gate disagreed with the legacy scan for {fixture:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn install_prunes_backups_whose_target_is_gone() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = sample_paths(temp.path());
+        create_sample_install(&paths);
+        std::fs::create_dir_all(&paths.backup_dir).unwrap();
+        let living = paths.app_root.join("resources").join("zh-CN.json");
+        let living_backup = paths.backup_dir.join(encode_backup_name(&paths, &living));
+        std::fs::copy(&living, &living_backup).unwrap();
+        let dead = paths
+            .app_root
+            .join("resources")
+            .join("old-version-chunk.js");
+        let dead_backup = paths.backup_dir.join(encode_backup_name(&paths, &dead));
+        std::fs::write(&dead_backup, "stale").unwrap();
+
+        let pruned = prune_stale_backups(&paths);
+
+        assert_eq!(pruned, 1);
+        assert!(
+            living_backup.exists(),
+            "backup with a live target was pruned"
+        );
+        assert!(!dead_backup.exists(), "stale backup was not pruned");
+    }
+
+    #[test]
+    fn restore_skips_backups_for_missing_targets() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = sample_paths(temp.path());
+        create_sample_install(&paths);
+        std::fs::create_dir_all(&paths.backup_dir).unwrap();
+        let dead = paths.app_root.join("resources").join("gone-chunk.js");
+        let dead_backup = paths.backup_dir.join(encode_backup_name(&paths, &dead));
+        std::fs::write(&dead_backup, "official-old").unwrap();
+
+        restore_patch_at(&paths).unwrap();
+
+        assert!(
+            !dead.exists(),
+            "restore recreated a chunk from an older build"
+        );
+        assert!(!dead_backup.exists(), "stale backup should be pruned");
+    }
+
+    #[test]
+    fn patch_install_records_stage_timings() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("Claude");
+        let paths = ClaudeZhPatchPaths {
+            install_root: root.clone(),
+            app_root: root.clone(),
+            resource_root: root.join("resources"),
+            locale_config_path: temp.path().join("Claude-3p").join("config.json"),
+            backup_dir: temp.path().join("backup"),
+            install_kind: "desktop".to_string(),
+        };
+        create_sample_install(&paths);
+
+        let outcome = install_patch_at(&paths).unwrap();
+
+        assert!(outcome.timings.scanned_chunks > 0);
+        assert!(outcome.timings.patched_chunks > 0);
+        let value = serde_json::to_value(&outcome).unwrap();
+        for key in [
+            "scannedChunks",
+            "patchedChunks",
+            "prunedBackups",
+            "scanMs",
+            "patchMs",
+            "validateMs",
+            "pruneMs",
+        ] {
+            assert!(
+                value
+                    .get("timings")
+                    .and_then(|timings| timings.get(key))
+                    .is_some(),
+                "timings are missing {key}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual benchmark: run with --ignored --nocapture"]
+    fn bench_patch_gate_scan_cost() {
+        let chunk_body =
+            "const x = \"render\"; function f(){ return x.length + 42; }\n".repeat(4096);
+        let chunks: Vec<String> = (0..40).map(|_| chunk_body.clone()).collect();
+        let total_bytes: usize = chunks.iter().map(|chunk| chunk.len()).sum();
+
+        let legacy_started = Instant::now();
+        let legacy_hits = chunks
+            .iter()
+            .filter(|chunk| legacy_chunk_needs_or_has_ui_patch(chunk))
+            .count();
+        let legacy = legacy_started.elapsed();
+
+        let optimized_started = Instant::now();
+        let optimized_hits = chunks
+            .iter()
+            .filter(|chunk| chunk_needs_or_has_ui_patch(chunk))
+            .count();
+        let optimized = optimized_started.elapsed();
+
+        println!(
+            "bench_patch_gate_scan_cost: bytes={total_bytes} chunks={} legacy={:?} ({legacy_hits} hits) optimized={:?} ({optimized_hits} hits) speedup={:.1}x",
+            chunks.len(),
+            legacy,
+            optimized,
+            legacy.as_secs_f64() / optimized.as_secs_f64().max(f64::MIN_POSITIVE)
+        );
+        assert_eq!(legacy_hits, optimized_hits, "gate decisions changed");
+    }
+
+    #[test]
+    #[ignore = "manual benchmark: run with --ignored --nocapture"]
+    fn bench_real_install_scan_cost() {
+        let Some(paths) = detect_paths().or_else(|| {
+            std::env::var("CLAUDE_ZH_BENCH_ROOT")
+                .ok()
+                .map(PathBuf::from)
+                .and_then(|root| paths_from_install_root(PathBuf::from(root)))
+        }) else {
+            println!("bench_real_install_scan_cost: no Claude install detected");
+            return;
+        };
+        let chunks = find_patchable_chunks(&paths.resource_root).expect("chunk list");
+        let mut texts = Vec::with_capacity(chunks.len());
+        let mut bytes = 0usize;
+        let read_started = Instant::now();
+        for path in &chunks {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            bytes += text.len();
+            texts.push(text);
+        }
+        let read = read_started.elapsed();
+
+        let legacy_started = Instant::now();
+        let legacy_hits = texts
+            .iter()
+            .filter(|text| legacy_chunk_needs_or_has_ui_patch(text))
+            .count();
+        let legacy = legacy_started.elapsed();
+
+        let optimized_started = Instant::now();
+        let optimized_hits = texts
+            .iter()
+            .filter(|text| chunk_needs_or_has_ui_patch(text))
+            .count();
+        let optimized = optimized_started.elapsed();
+
+        println!(
+            "bench_real_install_scan_cost: chunks={} bytes={bytes} read={read:?} legacy={legacy:?} ({legacy_hits} hits) optimized={optimized:?} ({optimized_hits} hits) speedup={:.1}x",
+            texts.len(),
+            legacy.as_secs_f64() / optimized.as_secs_f64().max(f64::MIN_POSITIVE)
+        );
+        assert_eq!(
+            legacy_hits, optimized_hits,
+            "gate decisions changed on the real install"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual benchmark: run with --ignored --nocapture"]
+    fn bench_patch_phase_cost() {
+        let Some(paths) = detect_paths().or_else(|| {
+            std::env::var("CLAUDE_ZH_BENCH_ROOT")
+                .ok()
+                .map(PathBuf::from)
+                .and_then(|root| paths_from_install_root(PathBuf::from(root)))
+        }) else {
+            println!("bench_patch_phase_cost: no Claude install detected");
+            return;
+        };
+        let chunks = find_patchable_chunks(&paths.resource_root).expect("chunk list");
+        let sample = std::env::var("CLAUDE_ZH_BENCH_SAMPLE")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(20);
+        let mut hits = Vec::new();
+        for path in &chunks {
+            let Ok(text) = std::fs::read_to_string(path) else {
+                continue;
+            };
+            if chunk_path_needs_or_has_ui_patch(path, &text) {
+                hits.push((path.clone(), text));
+                if hits.len() >= sample {
+                    break;
+                }
+            }
+        }
+        if hits.is_empty() {
+            println!("bench_patch_phase_cost: no chunks need patching");
+            return;
+        }
+
+        let patch_started = Instant::now();
+        let mut patched = Vec::new();
+        for (path, text) in &hits {
+            if let Some(output) = patch_chunk_text(text.clone(), false) {
+                patched.push((path.clone(), output));
+            }
+        }
+        let patch = patch_started.elapsed();
+
+        let temp_root =
+            std::env::temp_dir().join(format!("claude-zh-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let write_started = Instant::now();
+        let mut written = Vec::new();
+        for (index, (_, output)) in patched.iter().enumerate() {
+            let target = temp_root.join(format!("chunk-{index}.js"));
+            std::fs::write(&target, output).unwrap();
+            written.push(target);
+        }
+        let write = write_started.elapsed();
+
+        let validate_sample = written.len().min(8);
+        let validate_started = Instant::now();
+        for target in written.iter().take(validate_sample) {
+            let _ = validate_patched_javascript_chunk(target);
+        }
+        let validate = validate_started.elapsed();
+        let _ = std::fs::remove_dir_all(&temp_root);
+
+        println!(
+            "bench_patch_phase_cost: sample={} patch={patch:?} ({:.1}ms/chunk) write={write:?} node_check_{validate_sample}={validate:?} ({:.1}ms/chunk)",
+            patched.len(),
+            patch.as_secs_f64() * 1000.0 / patched.len().max(1) as f64,
+            validate.as_secs_f64() * 1000.0 / validate_sample.max(1) as f64
+        );
     }
 }

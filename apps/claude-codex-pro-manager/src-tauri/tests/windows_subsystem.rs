@@ -4282,6 +4282,43 @@ fn claude_zh_patch_primary_action_does_not_prompt_for_directory() {
 }
 
 #[test]
+fn claude_zh_patch_install_logs_stage_timings_and_rolls_back_when_claude_will_not_start() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let commands_rs = read_source_file(&manifest_dir.join("src/commands.rs"));
+    let patch_rs = read_source_file(
+        &manifest_dir.join("../../../crates/claude-codex-pro-core/src/claude_zh_patch.rs"),
+    );
+
+    for needle in [
+        "manager.claude_zh_patch.install.finish",
+        "\"scanMs\": timings.scan_ms",
+        "\"patchedChunks\": timings.patched_chunks",
+        "manager.claude_zh_patch.install.rollback",
+        "claude_codex_pro_core::claude_zh_patch::restore_patch()",
+        "已自动回滚到官方文件",
+    ] {
+        assert!(
+            commands_rs.contains(needle),
+            "missing zh patch install contract: {needle}"
+        );
+    }
+
+    for needle in [
+        "struct NeedleMatcher",
+        "fn text_has_patchable_locale_array",
+        "pub struct ClaudeZhPatchTimings",
+        "fn prune_stale_backups",
+        "未完成的改动已回滚到官方文件",
+        "clear_claude_renderer_cache(paths, &mut changed_files);",
+    ] {
+        assert!(
+            patch_rs.contains(needle),
+            "missing zh patch core contract: {needle}"
+        );
+    }
+}
+
+#[test]
 fn diagnostics_include_running_exe_identity_for_zh_patch_debugging() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let lib_rs = manifest_dir.join("src/lib.rs");

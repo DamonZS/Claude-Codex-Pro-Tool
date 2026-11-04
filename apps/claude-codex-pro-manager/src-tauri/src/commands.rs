@@ -568,7 +568,26 @@ fn complete_claude_zh_patch_install(
     message: String,
     status: claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchStatus,
     changed_files: Vec<String>,
+    timings: Option<claude_codex_pro_core::claude_zh_patch::ClaudeZhPatchTimings>,
 ) -> CommandResult<ClaudeZhPatchPayload> {
+    let timings = timings.unwrap_or_default();
+    log_manager_event(
+        "manager.claude_zh_patch.install.finish",
+        json!({
+            "status": status.status,
+            "message": message,
+            "changedFileCount": changed_files.len(),
+            "timings": {
+                "scannedChunks": timings.scanned_chunks,
+                "patchedChunks": timings.patched_chunks,
+                "prunedBackups": timings.pruned_backups,
+                "scanMs": timings.scan_ms,
+                "patchMs": timings.patch_ms,
+                "validateMs": timings.validate_ms,
+                "pruneMs": timings.prune_ms,
+            },
+        }),
+    );
     let launch = claude_codex_pro_core::claude_desktop::open_claude_desktop();
     log_manager_event(
         "manager.claude_zh_patch.launch_after_install",
@@ -584,21 +603,41 @@ fn complete_claude_zh_patch_install(
         }),
     );
 
-    let payload = claude_zh_patch_payload(status, changed_files);
     if matches!(launch.status.as_str(), "ok" | "accepted") {
-        ok(
+        let payload = claude_zh_patch_payload(status, changed_files);
+        return ok(
             &format!("{message} 已自动启动/重启 Claude Desktop，请验证界面语言。"),
             payload,
-        )
-    } else {
-        failed(
-            &format!(
-                "{message} 汉化已写入，但自动启动 Claude Desktop 失败：{}",
-                launch.message
-            ),
-            payload,
-        )
+        );
     }
+
+    // A Claude Desktop that will not start after patching is the failure the user
+    // actually feels, so put the official files back instead of leaving it broken.
+    let rollback = claude_codex_pro_core::claude_zh_patch::restore_patch();
+    let (rollback_status, rollback_message) = match &rollback {
+        Ok(_) => ("restored", "已自动回滚到官方文件".to_string()),
+        Err(error) => ("failed", error.to_string()),
+    };
+    log_manager_event(
+        "manager.claude_zh_patch.install.rollback",
+        json!({
+            "launchStatus": &launch.status,
+            "launchMessage": &launch.message,
+            "rollbackStatus": rollback_status,
+            "rollbackMessage": rollback_message,
+        }),
+    );
+    let status = rollback
+        .map(|outcome| outcome.status)
+        .unwrap_or_else(|_| claude_codex_pro_core::claude_zh_patch::detect_status());
+    let payload = claude_zh_patch_payload(status, changed_files);
+    failed(
+        &format!(
+            "{message} 汉化写入后 Claude Desktop 无法启动：{}（{rollback_message}）。",
+            launch.message
+        ),
+        payload,
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2253,7 +2292,7 @@ pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
                         claude_zh_patch_payload(status, Vec::new()),
                     );
                 }
-                return complete_claude_zh_patch_install(result.message, status, Vec::new());
+                return complete_claude_zh_patch_install(result.message, status, Vec::new(), None);
             }
             Ok(result) => {
                 let status = claude_codex_pro_core::claude_zh_patch::detect_status();
@@ -2280,11 +2319,15 @@ pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
     }
     log_manager_event("manager.claude_zh_patch.install.direct.start", json!({}));
     match claude_codex_pro_core::claude_zh_patch::install_patch_with_remote_resources().await {
-        Ok(outcome) => complete_claude_zh_patch_install(
-            outcome.status.message.clone(),
-            outcome.status,
-            outcome.changed_files,
-        ),
+        Ok(outcome) => {
+            let timings = outcome.timings;
+            complete_claude_zh_patch_install(
+                outcome.status.message.clone(),
+                outcome.status,
+                outcome.changed_files,
+                Some(timings),
+            )
+        }
         Err(error) => {
             log_manager_event(
                 "manager.claude_zh_patch.direct.failed",
@@ -2306,6 +2349,7 @@ pub async fn install_claude_zh_patch() -> CommandResult<ClaudeZhPatchPayload> {
                             result.message,
                             status,
                             Vec::new(),
+                            None,
                         );
                     }
                     Ok(result) => {
@@ -2983,7 +3027,7 @@ pub async fn install_claude_zh_patch_at_install_root(
                         claude_zh_patch_payload(status, Vec::new()),
                     );
                 }
-                return complete_claude_zh_patch_install(result.message, status, Vec::new());
+                return complete_claude_zh_patch_install(result.message, status, Vec::new(), None);
             }
             Ok(result) => {
                 let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(
@@ -3012,11 +3056,15 @@ pub async fn install_claude_zh_patch_at_install_root(
         }),
     );
     match claude_codex_pro_core::claude_zh_patch::install_patch_at_install_root_with_remote_resources(&validated_root).await {
-        Ok(outcome) => complete_claude_zh_patch_install(
-            outcome.status.message.clone(),
-            outcome.status,
-            outcome.changed_files,
-        ),
+        Ok(outcome) => {
+            let timings = outcome.timings;
+            complete_claude_zh_patch_install(
+                outcome.status.message.clone(),
+                outcome.status,
+                outcome.changed_files,
+                Some(timings),
+            )
+        }
         Err(error) => {
             log_manager_event(
                 "manager.claude_zh_patch.manual_direct.failed",
@@ -3035,7 +3083,7 @@ pub async fn install_claude_zh_patch_at_install_root(
                                 claude_zh_patch_payload(status, Vec::new()),
                             );
                         }
-                        return complete_claude_zh_patch_install(result.message, status, Vec::new());
+                        return complete_claude_zh_patch_install(result.message, status, Vec::new(), None);
                     }
                     Ok(result) => {
                         let status = claude_codex_pro_core::claude_zh_patch::status_for_install_root(&validated_root);
