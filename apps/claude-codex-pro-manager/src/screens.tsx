@@ -668,6 +668,15 @@ function UnifiedToolInventoryPanel({
       setPending(null);
     }
   };
+  const copySkill = async (asset: UnifiedToolAsset, target: string) => {
+    const key = `${asset.kind}:${asset.id}:${target}`;
+    setPending(key);
+    try {
+      await actions.copyUnifiedSkillToApp(asset.id, target);
+    } finally {
+      setPending(null);
+    }
+  };
   const resetMcpDraft = () => {
     setCreatingMcp(false);
     setMcpTarget("codex");
@@ -887,16 +896,17 @@ function UnifiedToolInventoryPanel({
                 const appName = agent.nameZh || agent.name;
                 const key = `${asset.kind}:${asset.id}:${app}`;
                 const isPending = pending === key;
+                const canCopy = asset.kind === "skill" && !state.available && (app === "claude" || app === "codex");
                 return (
                   <button
-                    aria-label={`${state.enabled ? "关闭" : "启用"} ${appName}：${asset.title}`}
+                    aria-label={canCopy ? `复制 ${asset.title} 到 ${appName}` : `${state.enabled ? "关闭" : "启用"} ${appName}：${asset.title}`}
                     aria-pressed={state.enabled}
                     className={`agent-toggle ${app} ${state.enabled ? "enabled" : "disabled"}${isPending ? " pending" : ""}`}
-                    disabled={!state.toggleSupported || pending !== null}
+                    disabled={(canCopy ? false : !state.toggleSupported) || pending !== null}
                     key={agent.id}
-                    onClick={() => void toggle(asset, app, !state.enabled)}
+                    onClick={() => (canCopy ? void copySkill(asset, app) : void toggle(asset, app, !state.enabled))}
                     style={agent.id === "claude-code" || agent.id === "codex" ? undefined : { color: agent.color }}
-                    title={`${appName}${state.enabled ? " ✓（点击关闭）" : state.available ? "（点击启用）" : "（未发现可用来源）"}`}
+                    title={`${appName}${state.enabled ? " ✓（点击关闭）" : canCopy ? "（未安装，点击复制过去）" : state.available ? "（点击启用）" : "（未发现可用来源）"}`}
                     type="button"
                   >
                     <AgentInventoryIcon agent={agent} />

@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, fs};
 
 use claude_codex_pro_core::unified_tool_inventory::{
-    UnifiedToolInventoryRoots, UnifiedToolToggleRequest, scan_unified_tool_inventory,
-    set_unified_tool_asset_enabled,
+    UnifiedToolInventoryRoots, UnifiedToolToggleRequest, copy_skill_to_app,
+    scan_unified_tool_inventory, set_unified_tool_asset_enabled,
 };
 use tempfile::tempdir;
 
@@ -940,4 +940,54 @@ fn unified_tool_inventory_can_install_a_skill_for_agent_without_existing_skill_r
             .join(".ccp-disabled/review-helper/SKILL.md")
             .exists()
     );
+}
+
+#[test]
+fn copy_skill_to_app_copies_directory_and_refuses_existing_target() {
+    let temp = tempdir().unwrap();
+    let codex_home = temp.path().join("codex");
+    let claude_home = temp.path().join("claude");
+    let source_skill = codex_home.join("skills/demo-skill/SKILL.md");
+    write(
+        &source_skill,
+        "---\nname: demo-skill\ndescription: 演示\n---\n正文\n",
+    );
+    write(
+        &codex_home.join("skills/demo-skill/reference/notes.md"),
+        "参考",
+    );
+    let roots = UnifiedToolInventoryRoots {
+        codex_home: codex_home.clone(),
+        claude_home: claude_home.clone(),
+        claude_config_paths: Vec::new(),
+        agent_skill_roots: BTreeMap::new(),
+    };
+
+    let inventory = copy_skill_to_app(&roots, "demo-skill", "claude").unwrap();
+    let copied = claude_home.join("skills/demo-skill/SKILL.md");
+    assert_eq!(
+        fs::read_to_string(&copied).unwrap(),
+        fs::read_to_string(&source_skill).unwrap()
+    );
+    assert!(
+        claude_home
+            .join("skills/demo-skill/reference/notes.md")
+            .exists()
+    );
+    let asset = inventory
+        .assets
+        .iter()
+        .find(|asset| asset.kind == "skill" && asset.id == "demo-skill")
+        .unwrap();
+    assert!(asset.claude.available);
+    assert!(asset.codex.available);
+
+    let error = copy_skill_to_app(&roots, "demo-skill", "claude").unwrap_err();
+    assert!(error.to_string().contains("同名 Skill"));
+
+    let unknown = copy_skill_to_app(&roots, "demo-skill", "workbuddy").unwrap_err();
+    assert!(unknown.to_string().contains("workbuddy"));
+
+    let missing = copy_skill_to_app(&roots, "not-exists", "claude").unwrap_err();
+    assert!(missing.to_string().contains("not-exists"));
 }

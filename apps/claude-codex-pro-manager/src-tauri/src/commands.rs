@@ -1015,6 +1015,13 @@ pub struct CreateSkillRequest {
     pub body: String,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyUnifiedSkillRequest {
+    pub id: String,
+    pub target: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSkillPayload {
@@ -11228,6 +11235,61 @@ fn toggle_unified_tool_asset_blocking(
                     .unwrap_or_default();
             failed(
                 &format!("切换工具或插件失败：{error}"),
+                UnifiedToolInventoryPayload { inventory },
+            )
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn copy_unified_skill_to_app(
+    request: CopyUnifiedSkillRequest,
+) -> CommandResult<UnifiedToolInventoryPayload> {
+    tauri::async_runtime::spawn_blocking(move || copy_unified_skill_to_app_blocking(request))
+        .await
+        .unwrap_or_else(|join_error| {
+            failed(
+                &format!("复制 Skill 任务失败：{join_error}"),
+                UnifiedToolInventoryPayload {
+                    inventory: Default::default(),
+                },
+            )
+        })
+}
+
+fn copy_unified_skill_to_app_blocking(
+    request: CopyUnifiedSkillRequest,
+) -> CommandResult<UnifiedToolInventoryPayload> {
+    let roots = unified_inventory_roots();
+    match claude_codex_pro_core::unified_tool_inventory::copy_skill_to_app(
+        &roots,
+        &request.id,
+        &request.target,
+    ) {
+        Ok(inventory) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.skill.copy.ok",
+                json!({ "assetId": request.id, "target": request.target }),
+            );
+            ok(
+                "已把该 Skill 复制到目标应用。",
+                UnifiedToolInventoryPayload { inventory },
+            )
+        }
+        Err(error) => {
+            log_manager_event(
+                "manager.unified_tool_inventory.skill.copy.failed",
+                json!({
+                    "assetId": request.id,
+                    "target": request.target,
+                    "error": error.to_string()
+                }),
+            );
+            let inventory =
+                claude_codex_pro_core::unified_tool_inventory::scan_unified_tool_inventory(&roots)
+                    .unwrap_or_default();
+            failed(
+                &format!("复制 Skill 失败：{error}"),
                 UnifiedToolInventoryPayload { inventory },
             )
         }

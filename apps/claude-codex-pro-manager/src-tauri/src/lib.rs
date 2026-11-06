@@ -280,6 +280,7 @@ pub fn run() {
             commands::scan_unified_tool_inventory,
             commands::toggle_unified_tool_asset,
             commands::create_skill,
+            commands::copy_unified_skill_to_app,
             commands::sync_live_context_entries,
             commands::upsert_context_entry,
             commands::delete_context_entry,

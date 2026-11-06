@@ -222,6 +222,7 @@ export function createActionsShape() {
     setClaudeDesktopComputerUse: async (_enabled: boolean) => null as ClaudeDesktopComputerUseStatusResult | null,
     refreshUnifiedToolInventory: async (_silent?: boolean) => null as UnifiedToolInventoryResult | null,
     toggleUnifiedToolAsset: async (_id: string, _kind: ContextKind, _app: string, _enabled: boolean) => null as UnifiedToolInventoryResult | null,
+  copyUnifiedSkillToApp: async (_id: string, _target: string) => null as UnifiedToolInventoryResult | null,
     createSkill: async (_target: "claude" | "codex", _id: string, _body: string) => null as CreateSkillResult | null,
   };
 }

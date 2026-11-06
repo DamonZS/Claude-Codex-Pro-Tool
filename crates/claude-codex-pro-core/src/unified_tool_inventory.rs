@@ -434,6 +434,71 @@ pub fn create_skill(
     Ok(skill_path)
 }
 
+/// 把某个 Skill 的本地目录一次性复制到另一个应用的 skills 根目录。
+/// 不建立 SSOT、不删除源目录、不改动源应用的启用状态。
+pub fn copy_skill_to_app(
+    roots: &UnifiedToolInventoryRoots,
+    id: &str,
+    target: &str,
+) -> anyhow::Result<UnifiedToolInventory> {
+    let current = scan_unified_tool_inventory(roots)?;
+    let asset = current
+        .assets
+        .iter()
+        .find(|asset| asset.kind == "skill" && asset.id == id)
+        .ok_or_else(|| anyhow::anyhow!("未找到 Skill：{id}"))?;
+    let source = skill_source_dir(asset)
+        .ok_or_else(|| anyhow::anyhow!("该 Skill 没有可复制的本地目录：{id}"))?;
+    let target_root = match target {
+        "codex" => roots.codex_home.join("skills"),
+        "claude" => roots.claude_home.join("skills"),
+        other => anyhow::bail!("暂不支持复制到应用：{other}"),
+    };
+    let name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Skill 目录名无效：{}", display_path(&source)))?;
+    let destination = target_root.join(name);
+    if destination.exists() {
+        anyhow::bail!("目标应用已存在同名 Skill：{}", display_path(&destination));
+    }
+    std::fs::create_dir_all(&target_root)
+        .with_context(|| format!("创建 Skill 目录失败：{}", display_path(&target_root)))?;
+    copy_skill_dir(&source, &destination).with_context(|| {
+        format!(
+            "复制 Skill 失败：{} → {}",
+            display_path(&source),
+            display_path(&destination)
+        )
+    })?;
+    scan_unified_tool_inventory(roots)
+}
+
+fn skill_source_dir(asset: &UnifiedToolAsset) -> Option<PathBuf> {
+    let mut candidates = vec![&asset.claude, &asset.codex];
+    candidates.extend(asset.agents.values());
+    candidates
+        .into_iter()
+        .filter(|state| state.available && !state.source_path.trim().is_empty())
+        .map(|state| PathBuf::from(state.source_path.trim()))
+        .find(|path| path.join("SKILL.md").exists())
+}
+
+fn copy_skill_dir(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_skill_dir(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy)]
 enum AppTarget {
     Claude,
