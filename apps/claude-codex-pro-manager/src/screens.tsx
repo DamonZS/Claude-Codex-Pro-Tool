@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useEffect,
   useMemo,
@@ -36,6 +37,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { AgentOverview } from "@/components/AgentOverview";
 import { AgentBrandIcon } from "@/components/AgentBrandIcon";
+import { SkillStorePanel } from "@/components/SkillStorePanel";
+import { WebdavSyncPanel } from "@/components/WebdavSyncPanel";
 import { Segmented, SettingsField, ToggleRow } from "@/components/settings/SettingsControls";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 export { SupplierScreen } from "@/components/supplier/SupplierScreen";
@@ -577,6 +580,7 @@ export const ToolsAndPluginsScreen = memo(function ToolsAndPluginsScreen({
 }) {
   return (
     <div className="stack">
+      <SkillStorePanel actions={actions} />
       <UnifiedToolInventoryPanel
         actions={actions}
         aitrackerCapabilities={aitrackerCapabilities}
@@ -673,6 +677,18 @@ function UnifiedToolInventoryPanel({
     setPending(key);
     try {
       await actions.copyUnifiedSkillToApp(asset.id, target);
+    } finally {
+      setPending(null);
+    }
+  };
+  const importSkillToStore = async (asset: UnifiedToolAsset, app: string, sourcePath: string) => {
+    setPending(`store:${asset.kind}:${asset.id}:${app}`);
+    try {
+      const result = await actions.importSkillIntoStore(sourcePath, app);
+      if (result) {
+        await actions.refreshSkillStore();
+        await actions.refreshUnifiedToolInventory(true);
+      }
     } finally {
       setPending(null);
     }
@@ -897,20 +913,35 @@ function UnifiedToolInventoryPanel({
                 const key = `${asset.kind}:${asset.id}:${app}`;
                 const isPending = pending === key;
                 const canCopy = asset.kind === "skill" && !state.available && (app === "claude" || app === "codex");
+                const canImportToStore = asset.kind === "skill" && state.available && Boolean(state.sourcePath);
+                const storeKey = `store:${asset.kind}:${asset.id}:${app}`;
                 return (
-                  <button
-                    aria-label={canCopy ? `复制 ${asset.title} 到 ${appName}` : `${state.enabled ? "关闭" : "启用"} ${appName}：${asset.title}`}
-                    aria-pressed={state.enabled}
-                    className={`agent-toggle ${app} ${state.enabled ? "enabled" : "disabled"}${isPending ? " pending" : ""}`}
-                    disabled={(canCopy ? false : !state.toggleSupported) || pending !== null}
-                    key={agent.id}
-                    onClick={() => (canCopy ? void copySkill(asset, app) : void toggle(asset, app, !state.enabled))}
-                    style={agent.id === "claude-code" || agent.id === "codex" ? undefined : { color: agent.color }}
-                    title={`${appName}${state.enabled ? " ✓（点击关闭）" : canCopy ? "（未安装，点击复制过去）" : state.available ? "（点击启用）" : "（未发现可用来源）"}`}
-                    type="button"
-                  >
-                    <AgentInventoryIcon agent={agent} />
-                  </button>
+                  <Fragment key={agent.id}>
+                    <button
+                      aria-label={canCopy ? `复制 ${asset.title} 到 ${appName}` : `${state.enabled ? "关闭" : "启用"} ${appName}：${asset.title}`}
+                      aria-pressed={state.enabled}
+                      className={`agent-toggle ${app} ${state.enabled ? "enabled" : "disabled"}${isPending ? " pending" : ""}`}
+                      disabled={(canCopy ? false : !state.toggleSupported) || pending !== null}
+                      onClick={() => (canCopy ? void copySkill(asset, app) : void toggle(asset, app, !state.enabled))}
+                      style={agent.id === "claude-code" || agent.id === "codex" ? undefined : { color: agent.color }}
+                      title={`${appName}${state.enabled ? " ✓（点击关闭）" : canCopy ? "（未安装，点击复制过去）" : state.available ? "（点击启用）" : "（未发现可用来源）"}`}
+                      type="button"
+                    >
+                      <AgentInventoryIcon agent={agent} />
+                    </button>
+                    {canImportToStore ? (
+                      <Button
+                        disabled={pending !== null}
+                        onClick={() => void importSkillToStore(asset, app, state.sourcePath)}
+                        size="sm"
+                        title={`把 ${appName} 的 ${asset.title} 收进 Skills 真源库`}
+                        type="button"
+                        variant="outline"
+                      >
+                        {pending === storeKey ? "收进中…" : "收进真源"}
+                      </Button>
+                    ) : null}
+                  </Fragment>
                 );
               })}
             </div>
@@ -1683,7 +1714,12 @@ export const SettingsScreen = memo(function SettingsScreen({
     <SettingsPage
       about={<AboutScreen actions={actions} claudeDesktop={claudeDesktop} overview={overview} updateInfo={updateInfo} />}
       actions={actions}
-      appPaths={<MaintenanceToolsPanel actions={actions} settings={settings} />}
+      appPaths={
+        <>
+          <MaintenanceToolsPanel actions={actions} settings={settings} />
+          <WebdavSyncPanel actions={actions} />
+        </>
+      }
       logs={<LogsScreen actions={actions} logs={logs} />}
       settings={settings?.settings ?? null}
     />

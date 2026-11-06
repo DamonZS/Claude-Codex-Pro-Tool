@@ -255,6 +255,7 @@ import type {
   Route,
   ScriptMarketResult,
   SettingsResult,
+  SkillStorePayload,
   Status,
   StatusChip,
   SupplierPreset,
@@ -266,6 +267,7 @@ import type {
   UnifiedToolInventoryResult,
   UserScriptInventory,
   WatcherResult,
+  WebdavSyncPayload,
 } from "@/types";
 
 export function App() {
@@ -1165,6 +1167,84 @@ export function App() {
       notifyResult({ title: "新增 Skill", message: result.message, status: result.status });
     }
     return result;
+  };
+
+  const refreshSkillStore = async () => {
+    const result = await run(
+      () => call<CommandResult<SkillStorePayload>>("list_skill_store_entries"),
+      "Skills 真源库",
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: "Skills 真源库", message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
+  };
+
+  const importSkillIntoStore = async (sourcePath: string, sourceApp: string) => {
+    const result = await run(
+      () => call<CommandResult<SkillStorePayload>>("import_skill_into_store", { request: { sourcePath, sourceApp } }),
+      "收进 Skills 真源库",
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: "收进 Skills 真源库", message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
+  };
+
+  const syncStoreSkill = async (id: string, app: string) => {
+    const appLabel = app === "claude" ? "Claude" : app === "codex" ? "Codex" : app;
+    const result = await run(
+      () => call<CommandResult<SkillStorePayload>>("sync_store_skill", { request: { id, app } }),
+      `分发 Skill 到 ${appLabel}`,
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: `分发到 ${appLabel}`, message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
+  };
+
+  const loadWebdavSync = async () => {
+    const result = await run(
+      () => call<CommandResult<WebdavSyncPayload>>("load_webdav_sync"),
+      "WebDAV 配置备份",
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: "WebDAV 配置备份", message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
+  };
+
+  const saveWebdavSync = async (baseUrl: string, username: string, password: string) => {
+    const result = await run(
+      () => call<CommandResult<WebdavSyncPayload>>("save_webdav_sync", { request: { baseUrl, username, password } }),
+      "保存 WebDAV 配置",
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: "保存 WebDAV 配置", message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
+  };
+
+  const uploadWebdavBackup = async () => {
+    const result = await run(
+      () => call<CommandResult<WebdavSyncPayload>>("upload_webdav_backup"),
+      "上传 WebDAV 备份",
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: "上传 WebDAV 备份", message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
+  };
+
+  const downloadWebdavBackup = async (fileName?: string | null) => {
+    const result = await run(
+      () => call<CommandResult<WebdavSyncPayload>>("download_webdav_backup", { request: fileName ? { fileName } : null }),
+      "从 WebDAV 拉取备份",
+      { notify: false },
+    );
+    if (!result) return null;
+    notifyResult({ title: "从 WebDAV 拉取备份", message: result.message, status: result.status });
+    return statusOk(result.status) ? result : null;
   };
 
   const saveClaudeContextEntry = async (kind: ContextKind, id: string, body: string) => {
@@ -2861,6 +2941,13 @@ export function App() {
       toggleUnifiedToolAsset,
       copyUnifiedSkillToApp,
       createSkill,
+      refreshSkillStore,
+      importSkillIntoStore,
+      syncStoreSkill,
+      loadWebdavSync,
+      saveWebdavSync,
+      uploadWebdavBackup,
+      downloadWebdavBackup,
   };
 
   const actions = useMemo<AppActions>(() => ({
@@ -3009,6 +3096,13 @@ export function App() {
       toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
       copyUnifiedSkillToApp: (...args) => actionsRef.current!.copyUnifiedSkillToApp(...args),
       createSkill: (...args) => actionsRef.current!.createSkill(...args),
+      refreshSkillStore: (...args) => actionsRef.current!.refreshSkillStore(...args),
+      importSkillIntoStore: (...args) => actionsRef.current!.importSkillIntoStore(...args),
+      syncStoreSkill: (...args) => actionsRef.current!.syncStoreSkill(...args),
+      loadWebdavSync: (...args) => actionsRef.current!.loadWebdavSync(...args),
+      saveWebdavSync: (...args) => actionsRef.current!.saveWebdavSync(...args),
+      uploadWebdavBackup: (...args) => actionsRef.current!.uploadWebdavBackup(...args),
+      downloadWebdavBackup: (...args) => actionsRef.current!.downloadWebdavBackup(...args),
   }), []);
 
   useEffect(() => {

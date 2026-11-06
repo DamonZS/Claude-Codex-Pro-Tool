@@ -1828,6 +1828,348 @@ pub async fn reorder_agent_providers(
     })
 }
 
+// ============================================================================
+// Skills 单一真源（skill_store）
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillStorePayload {
+    pub root: String,
+    pub entries: Vec<claude_codex_pro_core::skill_store::SkillStoreEntry>,
+}
+
+fn skill_store_payload() -> SkillStorePayload {
+    let home = claude_codex_pro_core::paths::default_app_state_dir();
+    let root = claude_codex_pro_core::skill_store::skill_store_root(&home)
+        .to_string_lossy()
+        .to_string();
+    let entries = claude_codex_pro_core::skill_store::list_store_skills(&home).unwrap_or_default();
+    SkillStorePayload { root, entries }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoreSkillRequest {
+    pub source_path: String,
+    pub source_app: String,
+}
+
+#[tauri::command]
+pub async fn list_skill_store_entries() -> CommandResult<SkillStorePayload> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let payload = skill_store_payload();
+        let message = format!("真源库共 {} 个 Skill。", payload.entries.len());
+        ok(&message, payload)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("读取真源库失败：{join_error}"),
+            skill_store_payload(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn import_skill_into_store(
+    request: StoreSkillRequest,
+) -> CommandResult<SkillStorePayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = claude_codex_pro_core::paths::default_app_state_dir();
+        let source = std::path::Path::new(&request.source_path);
+        match claude_codex_pro_core::skill_store::import_skill_to_store(
+            &home,
+            source,
+            &request.source_app,
+        ) {
+            Ok(entry) => {
+                let message = format!("已收进真源库：{}。", entry.id);
+                ok(&message, skill_store_payload())
+            }
+            Err(error) => failed(&format!("收进真源库失败：{error}"), skill_store_payload()),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("收进真源库失败：{join_error}"),
+            skill_store_payload(),
+        )
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStoreSkillRequest {
+    pub id: String,
+    pub app: String,
+}
+
+#[tauri::command]
+pub async fn sync_store_skill(request: SyncStoreSkillRequest) -> CommandResult<SkillStorePayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = claude_codex_pro_core::paths::default_app_state_dir();
+        match claude_codex_pro_core::skill_store::sync_skill_to_app(
+            &home,
+            &request.id,
+            &request.app,
+        ) {
+            Ok(path) => {
+                let message = format!("已分发到 {}：{}。", request.app, path.to_string_lossy());
+                ok(&message, skill_store_payload())
+            }
+            Err(error) => failed(&format!("分发 Skill 失败：{error}"), skill_store_payload()),
+        }
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        failed(
+            &format!("分发 Skill 失败：{join_error}"),
+            skill_store_payload(),
+        )
+    })
+}
+
+// ============================================================================
+// WebDAV 配置备份同步（webdav_sync）
+// ============================================================================
+
+const WEBDAV_CONFIG_KEY: &str = "webdav.sync.config";
+const WEBDAV_LAST_FILE_KEY: &str = "webdav.sync.lastFile";
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavSyncConfig {
+    pub base_url: String,
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebdavSyncPayload {
+    pub base_url: String,
+    pub username: String,
+    pub password: String,
+    pub last_file: Option<String>,
+    pub remote_url: Option<String>,
+}
+
+fn webdav_payload(remote_url: Option<String>) -> WebdavSyncPayload {
+    let (config, last_file) = load_webdav_state().unwrap_or_default();
+    WebdavSyncPayload {
+        base_url: config.base_url,
+        username: config.username,
+        password: config.password,
+        last_file,
+        remote_url,
+    }
+}
+
+fn load_webdav_state() -> anyhow::Result<(WebdavSyncConfig, Option<String>)> {
+    let conn =
+        claude_codex_pro_core::ccp_db::open(&claude_codex_pro_core::ccp_db::default_db_path())?;
+    let config = match claude_codex_pro_core::ccp_db::kv_get(&conn, WEBDAV_CONFIG_KEY)? {
+        Some(raw) => serde_json::from_str(&raw).unwrap_or_default(),
+        None => WebdavSyncConfig::default(),
+    };
+    let last_file = claude_codex_pro_core::ccp_db::kv_get(&conn, WEBDAV_LAST_FILE_KEY)?;
+    Ok((config, last_file))
+}
+
+fn save_webdav_state(config: &WebdavSyncConfig, last_file: Option<&str>) -> anyhow::Result<()> {
+    let conn =
+        claude_codex_pro_core::ccp_db::open(&claude_codex_pro_core::ccp_db::default_db_path())?;
+    claude_codex_pro_core::ccp_db::kv_set(
+        &conn,
+        WEBDAV_CONFIG_KEY,
+        &serde_json::to_string(config)?,
+    )?;
+    if let Some(file_name) = last_file {
+        claude_codex_pro_core::ccp_db::kv_set(&conn, WEBDAV_LAST_FILE_KEY, file_name)?;
+    }
+    Ok(())
+}
+
+fn webdav_client_config(
+    config: &WebdavSyncConfig,
+) -> claude_codex_pro_core::webdav_sync::WebdavConfig {
+    claude_codex_pro_core::webdav_sync::WebdavConfig {
+        base_url: config.base_url.clone(),
+        username: config.username.clone(),
+        password: config.password.clone(),
+    }
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 生成一份新备份并读出字节，供上传。
+fn create_backup_bytes() -> anyhow::Result<Vec<u8>> {
+    let paths = backup_paths();
+    let entry = claude_codex_pro_core::ccp_backup::create_backup(&paths, None)?;
+    let retain = app_preferences_store().load().backup_retain_count as usize;
+    let _ = claude_codex_pro_core::ccp_backup::prune_backups(&paths, retain);
+    let bundle = paths.backup_dir.join(format!("{}.ccpbak", entry.id));
+    std::fs::read(&bundle).with_context(|| format!("读取备份失败：{}", bundle.display()))
+}
+
+#[tauri::command]
+pub async fn load_webdav_sync() -> CommandResult<WebdavSyncPayload> {
+    match load_webdav_state() {
+        Ok((config, last_file)) => {
+            let message = if config.base_url.trim().is_empty() {
+                "还没有配置 WebDAV。".to_string()
+            } else {
+                format!("已读取 WebDAV 配置：{}。", config.base_url)
+            };
+            ok(
+                &message,
+                WebdavSyncPayload {
+                    base_url: config.base_url,
+                    username: config.username,
+                    password: config.password,
+                    last_file,
+                    remote_url: None,
+                },
+            )
+        }
+        Err(error) => failed(
+            &format!("读取 WebDAV 配置失败：{error}"),
+            webdav_payload(None),
+        ),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveWebdavSyncRequest {
+    pub base_url: String,
+    pub username: String,
+    pub password: String,
+}
+
+#[tauri::command]
+pub async fn save_webdav_sync(request: SaveWebdavSyncRequest) -> CommandResult<WebdavSyncPayload> {
+    let config = WebdavSyncConfig {
+        base_url: request.base_url.trim().to_string(),
+        username: request.username.trim().to_string(),
+        password: request.password,
+    };
+    match save_webdav_state(&config, None) {
+        Ok(()) => ok("已保存 WebDAV 配置。", webdav_payload(None)),
+        Err(error) => failed(
+            &format!("保存 WebDAV 配置失败：{error}"),
+            webdav_payload(None),
+        ),
+    }
+}
+
+#[tauri::command]
+pub async fn upload_webdav_backup() -> CommandResult<WebdavSyncPayload> {
+    let (config, _) = match load_webdav_state() {
+        Ok(state) => state,
+        Err(error) => {
+            return failed(
+                &format!("读取 WebDAV 配置失败：{error}"),
+                webdav_payload(None),
+            );
+        }
+    };
+    if config.base_url.trim().is_empty() {
+        return failed("还没有填写 WebDAV 地址。", webdav_payload(None));
+    }
+    let bytes = match tauri::async_runtime::spawn_blocking(create_backup_bytes).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) => {
+            return failed(&format!("创建备份失败：{error}"), webdav_payload(None));
+        }
+        Err(join_error) => {
+            return failed(&format!("创建备份失败：{join_error}"), webdav_payload(None));
+        }
+    };
+    let file_name = claude_codex_pro_core::webdav_sync::backup_file_name(now_millis());
+    let client = webdav_client_config(&config);
+    match claude_codex_pro_core::webdav_sync::upload_backup(&client, &file_name, &bytes).await {
+        Ok(remote_url) => {
+            let _ = save_webdav_state(&config, Some(&file_name));
+            let message = format!("已上传备份：{file_name}。");
+            ok(&message, webdav_payload(Some(remote_url)))
+        }
+        Err(error) => failed(&format!("上传备份失败：{error:#}"), webdav_payload(None)),
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadWebdavSyncRequest {
+    pub file_name: Option<String>,
+}
+
+#[tauri::command]
+pub async fn download_webdav_backup(
+    request: Option<DownloadWebdavSyncRequest>,
+) -> CommandResult<WebdavSyncPayload> {
+    let (config, last_file) = match load_webdav_state() {
+        Ok(state) => state,
+        Err(error) => {
+            return failed(
+                &format!("读取 WebDAV 配置失败：{error}"),
+                webdav_payload(None),
+            );
+        }
+    };
+    if config.base_url.trim().is_empty() {
+        return failed("还没有填写 WebDAV 地址。", webdav_payload(None));
+    }
+    let requested = request.and_then(|request| request.file_name);
+    let file_name = match requested.filter(|name| !name.trim().is_empty()) {
+        Some(name) => name.trim().to_string(),
+        None => match last_file {
+            Some(name) => name,
+            None => {
+                return failed(
+                    "本机还没有上传过备份，请填写远端文件名再拉取。",
+                    webdav_payload(None),
+                );
+            }
+        },
+    };
+    let client = webdav_client_config(&config);
+    let bytes = match claude_codex_pro_core::webdav_sync::download_backup(&client, &file_name).await
+    {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return failed(&format!("下载备份失败：{error:#}"), webdav_payload(None));
+        }
+    };
+    let paths = backup_paths();
+    let bundle_path = paths.backup_dir.join(format!("{file_name}.ccpbak"));
+    if let Err(error) = std::fs::create_dir_all(&paths.backup_dir) {
+        return failed(&format!("创建备份目录失败：{error}"), webdav_payload(None));
+    }
+    if let Err(error) = std::fs::write(&bundle_path, &bytes) {
+        return failed(&format!("写入下载文件失败：{error}"), webdav_payload(None));
+    }
+    match tauri::async_runtime::spawn_blocking(move || {
+        claude_codex_pro_core::ccp_backup::import_bundle(&paths, &bundle_path)
+    })
+    .await
+    {
+        Ok(Ok(safety)) => {
+            let message = format!("已从远端恢复备份，安全副本：{}。", safety.id);
+            ok(&message, webdav_payload(None))
+        }
+        Ok(Err(error)) => failed(&format!("恢复备份失败：{error}"), webdav_payload(None)),
+        Err(join_error) => failed(&format!("恢复备份失败：{join_error}"), webdav_payload(None)),
+    }
+}
+
 #[cfg(test)]
 mod agent_provider_command_tests {
     use super::*;

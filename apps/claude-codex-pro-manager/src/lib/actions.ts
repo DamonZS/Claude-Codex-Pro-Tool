@@ -53,6 +53,7 @@ import type {
   Route,
   ScriptMarketResult,
   SettingsResult,
+  SkillStorePayload,
   Status,
   SupplierTargetApp,
   UpdateReleasePayload,
@@ -67,6 +68,7 @@ import type {
   DistillationSessionSelection,
   DistillationSaveResult,
   WatcherResult,
+  WebdavSyncPayload,
 } from "@/types";
 
 /// 动作对象的形状（仅用于类型推断）。App() 里的真实 `actions` 对象结构必须与此保持一致，
@@ -224,6 +226,13 @@ export function createActionsShape() {
     toggleUnifiedToolAsset: async (_id: string, _kind: ContextKind, _app: string, _enabled: boolean) => null as UnifiedToolInventoryResult | null,
   copyUnifiedSkillToApp: async (_id: string, _target: string) => null as UnifiedToolInventoryResult | null,
     createSkill: async (_target: "claude" | "codex", _id: string, _body: string) => null as CreateSkillResult | null,
+    refreshSkillStore: async () => null as SkillStorePayload | null,
+    importSkillIntoStore: async (_sourcePath: string, _sourceApp: string) => null as SkillStorePayload | null,
+    syncStoreSkill: async (_id: string, _app: string) => null as SkillStorePayload | null,
+    loadWebdavSync: async () => null as WebdavSyncPayload | null,
+    saveWebdavSync: async (_baseUrl: string, _username: string, _password: string) => null as WebdavSyncPayload | null,
+    uploadWebdavBackup: async () => null as WebdavSyncPayload | null,
+    downloadWebdavBackup: async (_fileName?: string | null) => null as WebdavSyncPayload | null,
   };
 }
 

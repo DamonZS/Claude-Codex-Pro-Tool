@@ -1496,6 +1496,29 @@ export type InstallEntrypointsResult = CommandResult<{
   };
 }>;
 
+/** 真源库中的一个 Skill（后端 `SkillStoreEntry`，字段 camelCase）。 */
+export interface SkillStoreEntry {
+  id: string;
+  name: string;
+  sourceApp: string;
+  importedAt: string;
+}
+
+/** `list_skill_store_entries` / `import_skill_into_store` / `sync_store_skill` 的共享载荷。 */
+export interface SkillStorePayload {
+  root: string;
+  entries: SkillStoreEntry[];
+}
+
+/** WebDAV 配置备份命令的共享载荷。 */
+export interface WebdavSyncPayload {
+  baseUrl: string;
+  username: string;
+  password: string;
+  lastFile: string | null;
+  remoteUrl: string | null;
+}
+
 
 
 

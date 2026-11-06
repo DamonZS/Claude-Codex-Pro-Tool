@@ -46,6 +46,7 @@ pub mod routing_config;
 pub mod routing_failover;
 pub mod script_market;
 pub mod settings;
+pub mod skill_store;
 pub mod status;
 pub mod system_prompt;
 pub mod unified_tool_inventory;
@@ -54,6 +55,7 @@ pub mod upstream_worktree;
 pub mod user_scripts;
 pub mod version;
 pub mod watcher;
+pub mod webdav_sync;
 #[cfg(windows)]
 mod windows_integration;
 pub mod zed_remote;

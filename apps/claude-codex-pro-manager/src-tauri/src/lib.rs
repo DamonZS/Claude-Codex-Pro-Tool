@@ -1,10 +1,9 @@
 pub mod commands;
 pub mod install;
+pub mod tray_menu;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Manager, WindowEvent};
 
 static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -40,7 +39,7 @@ pub fn run() {
             // the overview page, so 会话 / 蒸馏工作台 open without waiting for
             // the multi-GB rescan.
             commands::warm_snapshots_in_background();
-            match setup_tray(app) {
+            match tray_menu::setup(app) {
                 Ok(()) => TRAY_AVAILABLE.store(true, Ordering::Relaxed),
                 Err(error) => {
                     TRAY_AVAILABLE.store(false, Ordering::Relaxed);
@@ -244,6 +243,13 @@ pub fn run() {
             commands::restore_database_backup,
             commands::rename_database_backup,
             commands::delete_database_backup,
+            commands::list_skill_store_entries,
+            commands::import_skill_into_store,
+            commands::sync_store_skill,
+            commands::load_webdav_sync,
+            commands::save_webdav_sync,
+            commands::upload_webdav_backup,
+            commands::download_webdav_backup,
             commands::export_ccp_data,
             commands::import_ccp_data,
             commands::list_agent_providers,
@@ -322,46 +328,6 @@ pub fn run() {
                 }),
             );
         }
-    }
-}
-
-fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "显示管理工具", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-    let mut builder = TrayIconBuilder::with_id("main")
-        .tooltip("CCP 管理工具")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => show_main_window(app),
-            "quit" => {
-                app.exit(0);
-            }
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                show_main_window(tray.app_handle());
-            }
-        });
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
-    builder.build(app)?;
-    Ok(())
-}
-
-fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
     }
 }
 
