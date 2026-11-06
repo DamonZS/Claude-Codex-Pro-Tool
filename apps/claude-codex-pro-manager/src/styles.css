@@ -4351,6 +4351,18 @@ body {
   font-size: 14px;
 }
 
+.supplier-drop-popover .supplier-share-form {
+  display: grid;
+  gap: 8px;
+  width: 320px;
+}
+
+.supplier-drop-popover .supplier-share-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .supplier-card-list {
   display: grid;
   gap: 12px;
