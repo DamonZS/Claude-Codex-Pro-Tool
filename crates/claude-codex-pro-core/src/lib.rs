@@ -28,6 +28,7 @@ pub mod install;
 pub mod install_registration;
 pub mod launcher;
 pub mod leila_deploy;
+pub mod live_write;
 pub mod model_catalog;
 pub mod models;
 pub mod paths;

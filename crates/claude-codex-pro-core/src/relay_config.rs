@@ -135,13 +135,18 @@ pub fn set_codex_goals_feature_in_home(home: &Path, enabled: bool) -> anyhow::Re
     // config: doing so would let the atomic_write below replace the user's whole
     // Codex config with a file containing only [features]. Missing file → empty
     // is the only safe fallback.
-    let existing = match std::fs::read_to_string(&config_path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+    let existing_bytes = match std::fs::read(&config_path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("read Codex config {}", config_path.display()));
         }
+    };
+    let existing = match existing_bytes.as_deref() {
+        Some(bytes) => String::from_utf8(bytes.to_vec())
+            .with_context(|| format!("Codex config 不是 UTF-8：{}", config_path.display()))?,
+        None => String::new(),
     };
     let updated = match parse_toml_document(&existing) {
         Ok(mut doc) => {
@@ -158,7 +163,11 @@ pub fn set_codex_goals_feature_in_home(home: &Path, enabled: bool) -> anyhow::Re
         }
         Err(_) => set_codex_goals_feature_text_fallback(&existing, enabled),
     };
-    crate::settings::atomic_write(&config_path, updated.as_bytes())
+    crate::live_write::write_bytes_if_unchanged(
+        &config_path,
+        updated.as_bytes(),
+        existing_bytes.as_deref(),
+    )
 }
 
 fn set_codex_goals_feature_text_fallback(existing: &str, enabled: bool) -> String {
@@ -1145,18 +1154,27 @@ fn write_codex_live_atomic(
     let mut auth_written = false;
 
     if let Some(auth_bytes) = auth_bytes {
-        if let Err(error) = crate::settings::atomic_write(&auth_path, auth_bytes) {
+        if let Err(error) =
+            crate::live_write::write_bytes_if_unchanged(&auth_path, auth_bytes, old_auth.as_deref())
+        {
             return Err(error.context("写入 auth.json 失败"));
         }
         auth_written = true;
     }
 
     if let Some(config_text) = config_text {
-        if let Err(error) = crate::settings::atomic_write(&config_path, config_text.as_bytes()) {
+        if let Err(error) = crate::live_write::write_bytes_if_unchanged(
+            &config_path,
+            config_text.as_bytes(),
+            old_config.as_deref(),
+        ) {
             if auth_written {
                 let _ = restore_optional_file(&auth_path, old_auth.as_deref());
             }
-            let _ = restore_optional_file(&config_path, old_config.as_deref());
+            // 冲突意味着磁盘现在的内容不是我们读到的那份，拿旧字节盖回去会抹掉别人的改动。
+            if !crate::live_write::is_conflict(&error) {
+                let _ = restore_optional_file(&config_path, old_config.as_deref());
+            }
             return Err(error.context("写入 config.toml 失败"));
         }
     }
