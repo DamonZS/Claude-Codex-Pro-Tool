@@ -30,6 +30,7 @@ import {
   RefreshCw,
   Save,
   ShieldCheck,
+  Share2,
   Trash2,
   Wrench,
 } from "lucide-react";
@@ -38,6 +39,7 @@ import { AGGREGATE_STRATEGIES, SUPPLIER_PRESETS } from "@/constants";
 import type { AppActions } from "@/lib/actions";
 import { Empty, InfoRow, Panel, ToggleSwitch } from "@/components/ui/ops";
 import { statusFailed, statusOk } from "@/lib/helpers";
+import { decodeSupplierShareLink, encodeSupplierShareLink } from "@/lib/supplier-share";
 import {
   aggregateStrategyLabel,
   createAggregateSupplierProfile,
@@ -335,6 +337,8 @@ export function SupplierScreen({
   const [supplierRefreshBusy, setSupplierRefreshBusy] = useState(false);
   const [credentialEnvironmentBusy, setCredentialEnvironmentBusy] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [shareImportOpen, setShareImportOpen] = useState(false);
+  const [shareImportText, setShareImportText] = useState("");
   const [showSupplierApiKey, setShowSupplierApiKey] = useState(false);
   const [supplierDirectModels, setSupplierDirectModels] = useState<SupplierDirectModelDraftRow[]>([]);
   const [supplierCodexCatalogModels, setSupplierCodexCatalogModels] = useState<SupplierCodexCatalogDraftRow[]>([]);
@@ -449,6 +453,48 @@ export function SupplierScreen({
     const targetApp = supplierTargetForProfile(profile);
     setDraft(withSupplierRoutingState(profile, targetApp, !!profile.routeEnabled));
   };
+  const copySupplierShareLink = async (profile: RelayProfile) => {
+    const link = encodeSupplierShareLink(profile);
+    try {
+      await navigator.clipboard.writeText(link);
+      actions.showNotice({
+        title: "分享链接已复制",
+        message: "链接只含名称、接口地址与模型，不含 API Key；对方在 CCP 里粘贴导入后自行填写 Key。",
+        status: "ok",
+      });
+    } catch {
+      actions.showNotice({ title: "复制失败，请手动复制", message: link, status: "error" });
+    }
+  };
+
+  const importSupplierShareLink = () => {
+    if (!appSettings) return;
+    const payload = decodeSupplierShareLink(shareImportText);
+    if (!payload) {
+      actions.showNotice({
+        title: "导入分享链接",
+        message: "链接无法解析：需要 CCP 生成的 ccp://supplier?d=… 链接。",
+        status: "error",
+      });
+      return;
+    }
+    const targetApp: SupplierTargetApp = payload.targetApp === "claude" ? "claude" : "codex";
+    const profile = withSupplierRoutingState({
+      ...createSupplierProfile(appSettings),
+      id: uniqueSupplierProfileId(appSettings.relayProfiles, "provider"),
+      name: payload.name || "导入的供应商",
+      baseUrl: payload.baseUrl,
+      upstreamBaseUrl: payload.upstreamBaseUrl || payload.baseUrl,
+      model: payload.model,
+      targetApp,
+    }, targetApp, supplierRoutingEnabledForTarget(targetApp));
+    setShareImportText("");
+    setShareImportOpen(false);
+    setImportOpen(false);
+    openProfileEditor(profile);
+    actions.showNotice({ title: "已导入分享的供应商", message: "请补全 API Key 并确认模型，然后保存。", status: "ok" });
+  };
+
   useEffect(() => {
     if (!focusProfileId || lastFocusedProfileIdRef.current === focusProfileId) return;
     const profile = profiles.find((item) => item.id === focusProfileId);
@@ -1154,6 +1200,7 @@ export function SupplierScreen({
           </button>
           <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => openProfileEditor(profile)} title="编辑" type="button"><Edit className="h-4 w-4" /></button>
           <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => duplicateProfile(profile)} title="复制" type="button"><Copy className="h-4 w-4" /></button>
+          <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => void copySupplierShareLink(profile)} title="复制分享链接（不含 API Key）" type="button"><Share2 className="h-4 w-4" /></button>
           <button className="supplier-card-action-button" disabled title="检测连通" type="button"><Activity className="h-4 w-4" /></button>
           <button className="supplier-card-action-button" disabled title="用量配置" type="button"><BarChart3 className="h-4 w-4" /></button>
           <button className="supplier-card-action-button" disabled={options.overlay} onClick={() => void removeProfile(profile)} title="删除供应商" type="button"><Trash2 className="h-4 w-4" /></button>
@@ -1537,7 +1584,7 @@ env_key = "OPENAI_API_KEY"
         ))}
       </div>
       {agentProviderApp ? <AgentProviderPanel appId={agentProviderApp} key={agentProviderApp} /> : <>
-      <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button></div> : null}</div></div></div>
+      <div className="supplier-control-row"><div className="supplier-route-master-toggle"><Network className="h-4 w-4" /><span>开启路由</span><ToggleSwitch checked={supplierRouteSwitchEnabled} disabled={supplierRouteSwitchDisabled} onChange={(value) => void toggleVisibleSupplierRouting(value)} /></div><div className="supplier-toolbar right"><Button disabled={!appSettings} onClick={createProfile}><Plus className="h-4 w-4" />添加供应商</Button><Button disabled={!appSettings} onClick={createAggregateProfile} variant="outline"><Plus className="h-4 w-4" />添加聚合供应商</Button><div className="supplier-import-wrap"><Button onClick={() => setImportOpen((value) => !value)} variant="outline"><Download className="h-4 w-4" />从第三方导入</Button>{importOpen ? <div className="supplier-drop-popover"><button onClick={() => void importFromCcswitch()} type="button"><strong>ccswitch</strong><span>发现并导入 Codex / Claude / Claude Desktop 配置</span></button><button className={`supplier-menu-action ${supplierRefreshBusy ? "busy" : ""}`} disabled={supplierRefreshBusy} onClick={() => void refreshSupplierList()} type="button"><RefreshCw className={`h-4 w-4 ${supplierRefreshBusy ? "spin" : ""}`} />{supplierRefreshBusy ? "刷新中..." : "刷新列表"}</button><button onClick={() => setShareImportOpen((value) => !value)} type="button"><strong>分享链接</strong><span>粘贴 CCP 生成的 ccp://supplier 链接导入</span></button></div> : null}{shareImportOpen ? <div style={{ display: "grid", gap: "8px", padding: "10px" }}><textarea aria-label="分享链接" className="ops-textarea mono" onChange={(event) => setShareImportText(event.currentTarget.value)} placeholder="粘贴 ccp://supplier?d=… 链接" value={shareImportText} /><Button disabled={!shareImportText.trim()} onClick={importSupplierShareLink} size="sm">导入</Button></div> : null}</div></div></div>
       <div className="supplier-card-list">
         {filteredOrderedProfiles.length ? filteredOrderedProfiles.map((profile) => renderSupplierCard(profile)) : <Empty text="暂无供应商配置，点击“添加供应商”创建一个真实可切换的 Codex API 配置。" />}
       </div>
