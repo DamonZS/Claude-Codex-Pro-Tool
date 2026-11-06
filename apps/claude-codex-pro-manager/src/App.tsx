@@ -1141,6 +1141,20 @@ export function App() {
     return result;
   };
 
+  const copyUnifiedSkillToApp = async (id: string, target: string) => {
+    const appLabel = target === "claude" ? "Claude" : target === "codex" ? "Codex" : target;
+    const result = await run(
+      () => call<UnifiedToolInventoryResult>("copy_unified_skill_to_app", { request: { id, target } }),
+      `复制 Skill 到 ${appLabel}`,
+    );
+    if (result) {
+      setUnifiedToolInventory(result);
+      notifyResult({ title: `复制到 ${appLabel}`, message: result.message, status: result.status });
+      if (!statusOk(result.status)) await refreshUnifiedToolInventory(true);
+    }
+    return result;
+  };
+
   const createSkill = async (target: "claude" | "codex", id: string, body: string) => {
     const result = await run(
       () => call<CreateSkillResult>("create_skill", { request: { target, id, body } }),
@@ -2845,6 +2859,7 @@ export function App() {
       setClaudeDesktopComputerUse,
       refreshUnifiedToolInventory,
       toggleUnifiedToolAsset,
+      copyUnifiedSkillToApp,
       createSkill,
   };
 
@@ -2992,6 +3007,7 @@ export function App() {
       setClaudeDesktopComputerUse: (...args) => actionsRef.current!.setClaudeDesktopComputerUse(...args),
       refreshUnifiedToolInventory: (...args) => actionsRef.current!.refreshUnifiedToolInventory(...args),
       toggleUnifiedToolAsset: (...args) => actionsRef.current!.toggleUnifiedToolAsset(...args),
+      copyUnifiedSkillToApp: (...args) => actionsRef.current!.copyUnifiedSkillToApp(...args),
       createSkill: (...args) => actionsRef.current!.createSkill(...args),
   }), []);
 
@@ -3057,6 +3073,7 @@ export function App() {
           // Compatibility aliases (about / maintenance) open their host page.
           setRoute(primaryRoute(nextRoute));
         }}
+        onOpenGithub={() => void openExternalUrl("https://github.com/DamonZS/Claude-Codex-Pro-Tool")}
         onRestartCodex={() => void actions.restartCodex()}
         onSelectSupplier={(profileId) => {
           const profile = shellSettings?.relayProfiles.find((item) => item.id === profileId);

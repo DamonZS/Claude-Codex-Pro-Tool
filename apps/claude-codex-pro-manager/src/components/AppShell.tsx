@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   Rocket,
   Search,
+  Star,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -61,6 +62,7 @@ type AppShellProps = {
   onInstallClaudeZhPatch: () => void;
   onLaunchClaude: () => void;
   onNavigate: (route: Route) => void;
+  onOpenGithub: () => void;
   onRestartCodex: () => void;
   onSelectSupplier: (profileId: string) => void;
   proxyHealth: ProxyHealth;
@@ -103,6 +105,7 @@ export function AppShell({
   onInstallClaudeZhPatch,
   onLaunchClaude,
   onNavigate,
+  onOpenGithub,
   onRestartCodex,
   onSelectSupplier,
   proxyHealth,
@@ -506,6 +509,10 @@ export function AppShell({
                 </div>
               </div>
               ) : null}
+              <button className="ops-icon-command ops-action-command" onClick={onOpenGithub} title="在 GitHub 上给 CCP 点个 Star" type="button">
+                <Star aria-hidden="true" className="h-4 w-4" />
+                <span>点个 Star</span>
+              </button>
               <button className="ops-icon-command ops-action-command" disabled={busy} onClick={onRestartCodex} title="启动或重启 Codex" type="button">
                 <Rocket aria-hidden="true" className="h-4 w-4" />
                 <span>启动/重启 Codex</span>
