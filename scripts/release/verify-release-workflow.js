@@ -88,7 +88,9 @@ for (const forbidden of ["settings.json", "relayProfiles", "memory_assist.sqlite
   mustNotContain(macosPackager, forbidden, "macOS packager");
 }
 
-mustContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro.exe"', "Windows installer app source");
+// 过渡版安装包不再打包 CCP 本体，只携带迁移脚本，下载 Jianmu 并在成功后卸载 CCP
+mustContain(windowsInstaller, '"migrate-to-jianmu.ps1"', "Windows installer migration script");
+mustContain(windowsInstaller, 'https://github.com/DamonZS/Jianmu/releases', "Windows installer Jianmu fallback download page");
 mustNotContain(windowsInstaller, 'File "${ROOT}\\dist\\windows\\app\\claude-codex-pro-manager.exe"', "Windows installer legacy manager source");
 mustContain(windowsInstaller, 'VIProductVersion "${VI_VERSION}"', "Windows installer PE version info");
 mustContain(windowsInstaller, '!define VI_VERSION "${VERSION}.0.0"', "Windows installer 4-part file version");

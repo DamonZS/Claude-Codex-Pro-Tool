@@ -9,12 +9,13 @@ Unicode true
 
 ; 过渡版：不再安装 CCP，而是下载并安装 Jianmu，成功后静默卸载旧 CCP。
 ; 文件名保持 claude-codex-pro-${VERSION}-windows-x64-setup.exe，旧 CCP 的更新器才会接受。
-VIProductVersion "${VERSION}.0.0"
+!define VI_VERSION "${VERSION}.0.0"
+VIProductVersion "${VI_VERSION}"
 VIAddVersionKey "ProductName" "Claude Codex Pro"
 VIAddVersionKey "FileDescription" "Claude Codex Pro 迁移到 Jianmu"
 VIAddVersionKey "CompanyName" "TopoReduce"
 VIAddVersionKey "LegalCopyright" "© 2026 TopoReduce"
-VIAddVersionKey "FileVersion" "${VERSION}.0.0"
+VIAddVersionKey "FileVersion" "${VI_VERSION}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 
 Name "Claude Codex Pro → Jianmu"
@@ -32,6 +33,7 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "English"
 
 Section "Migrate"
+  Delete /REBOOTOK "$INSTDIR\claude-codex-pro-mcp.exe"
   InitPluginsDir
   File "/oname=$PLUGINSDIR\migrate.ps1" "migrate-to-jianmu.ps1"
 
@@ -55,6 +57,7 @@ Section "Migrate"
     RMDir "$R1"
   done_uninstall:
   DeleteRegKey HKCU "${UNKEY}"
+  Delete /REBOOTOK "$INSTDIR\claude-codex-pro-mcp.exe"
 
   Exec '"$LOCALAPPDATA\Programs\jianmu\jianmu.exe"'
 SectionEnd
